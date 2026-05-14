@@ -1,0 +1,75 @@
+version: "1"
+name: test-failure-debugging
+description: "Reproduz falha de teste, pede diagnóstico e tenta correção com Codex."
+
+inputs:
+  test_command:
+    type: string
+    required: true
+  failure_context:
+    type: string
+    default: "Sem contexto adicional."
+
+defaults:
+  timeout: 600
+  retries: 0
+  working_dir: "."
+
+execution:
+  max_concurrency: 2
+  fail_fast: true
+
+nodes:
+  - id: reproduce
+    kind: bash
+    command: |
+      ${inputs.test_command}
+    capture:
+      stdout: true
+      stderr: true
+      exit_code: true
+    continue_on_error: true
+
+  - id: diagnose
+    kind: agent
+    provider: codex
+    depends_on: [reproduce]
+    when: "${nodes.reproduce.exit_code} != 0"
+    prompt: |
+      Diagnostique a falha abaixo e proponha a menor correção segura.
+
+      Contexto:
+      ${inputs.failure_context}
+
+      stdout:
+      ${nodes.reproduce.stdout}
+
+      stderr:
+      ${nodes.reproduce.stderr}
+
+  - id: apply_fix
+    kind: agent
+    provider: codex
+    depends_on: [diagnose]
+    when: "success('diagnose')"
+    retries: 1
+    prompt: |
+      Aplique a correção recomendada neste diagnóstico:
+
+      ${nodes.diagnose.output}
+
+  - id: verify
+    kind: bash
+    depends_on: [apply_fix]
+    when: "success('apply_fix')"
+    command: |
+      ${inputs.test_command}
+    capture:
+      stdout: true
+      stderr: true
+      exit_code: true
+
+  - id: no_failure
+    kind: noop
+    depends_on: [reproduce]
+    when: "${nodes.reproduce.exit_code} == 0"

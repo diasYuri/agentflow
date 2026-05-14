@@ -1,0 +1,10 @@
+{
+  "areas": [
+    "CLI flags and input parsing",
+    "YAML expression interpolation",
+    "secret masking and event persistence",
+    "bash command execution",
+    "Codex provider adapter"
+  ]
+}
+

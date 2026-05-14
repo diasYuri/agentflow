@@ -1,0 +1,8 @@
+{
+  "run_id": "2026-05-14T204028Z-release-notes",
+  "node_id": "draft_release_notes",
+  "status": "failed",
+  "error": "codex exec exited with code 1: Reading additional input from stdin...\n",
+  "duration": 8346206666,
+  "attempts": 1
+}

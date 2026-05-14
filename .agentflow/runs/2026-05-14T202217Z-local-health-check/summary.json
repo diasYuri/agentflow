@@ -1,0 +1,57 @@
+{
+  "run_id": "2026-05-14T202217Z-local-health-check",
+  "workflow": "local-health-check",
+  "status": "success",
+  "started_at": "2026-05-14T17:22:17.979086-03:00",
+  "finished_at": "2026-05-14T17:22:20.876513-03:00",
+  "duration_ms": 2897,
+  "agent_calls": 0,
+  "bash_calls": 2,
+  "failed_nodes": 0,
+  "retries": 0,
+  "nodes": {
+    "done": {
+      "run_id": "2026-05-14T202217Z-local-health-check",
+      "node_id": "done",
+      "status": "success",
+      "output": {
+        "status": "ok"
+      },
+      "duration": 8500,
+      "attempts": 1
+    },
+    "list_module": {
+      "run_id": "2026-05-14T202217Z-local-health-check",
+      "node_id": "list_module",
+      "status": "success",
+      "output": {
+        "exit_code": 0,
+        "stderr": "",
+        "stdout": "github.com/diasYuri/agentflow/cmd/agentflowflow\ngithub.com/diasYuri/agentflow/internal/adapters/agent/codex\ngithub.com/diasYuri/agentflow/internal/adapters/agent/fake\ngithub.com/diasYuri/agentflow/internal/adapters/events/jsonl\ngithub.com/diasYuri/agentflow/internal/adapters/events/memory\ngithub.com/diasYuri/agentflow/internal/adapters/events/multi\ngithub.com/diasYuri/agentflow/internal/adapters/events/stdout\ngithub.com/diasYuri/agentflow/internal/adapters/runrepo/local\ngithub.com/diasYuri/agentflow/internal/adapters/shell\ngithub.com/diasYuri/agentflow/internal/adapters/yaml\ngithub.com/diasYuri/agentflow/internal/app\ngithub.com/diasYuri/agentflow/internal/cli\ngithub.com/diasYuri/agentflow/internal/domain/run\ngithub.com/diasYuri/agentflow/internal/domain/workflow\ngithub.com/diasYuri/agentflow/internal/ports\ngithub.com/diasYuri/agentflow/internal/runtime\n"
+      },
+      "stdout": "github.com/diasYuri/agentflow/cmd/agentflowflow\ngithub.com/diasYuri/agentflow/internal/adapters/agent/codex\ngithub.com/diasYuri/agentflow/internal/adapters/agent/fake\ngithub.com/diasYuri/agentflow/internal/adapters/events/jsonl\ngithub.com/diasYuri/agentflow/internal/adapters/events/memory\ngithub.com/diasYuri/agentflow/internal/adapters/events/multi\ngithub.com/diasYuri/agentflow/internal/adapters/events/stdout\ngithub.com/diasYuri/agentflow/internal/adapters/runrepo/local\ngithub.com/diasYuri/agentflow/internal/adapters/shell\ngithub.com/diasYuri/agentflow/internal/adapters/yaml\ngithub.com/diasYuri/agentflow/internal/app\ngithub.com/diasYuri/agentflow/internal/cli\ngithub.com/diasYuri/agentflow/internal/domain/run\ngithub.com/diasYuri/agentflow/internal/domain/workflow\ngithub.com/diasYuri/agentflow/internal/ports\ngithub.com/diasYuri/agentflow/internal/runtime\n",
+      "exit_code": 0,
+      "duration": 88920958,
+      "attempts": 1
+    },
+    "run_tests": {
+      "run_id": "2026-05-14T202217Z-local-health-check",
+      "node_id": "run_tests",
+      "status": "success",
+      "output": {
+        "exit_code": 0,
+        "stderr": "",
+        "stdout": "?   \tgithub.com/diasYuri/agentflow/cmd/agentflowflow\t[no test files]\nok  \tgithub.com/diasYuri/agentflow/internal/adapters/agent/codex\t0.465s\n?   \tgithub.com/diasYuri/agentflow/internal/adapters/agent/fake\t[no test files]\n?   \tgithub.com/diasYuri/agentflow/internal/adapters/events/jsonl\t[no test files]\n?   \tgithub.com/diasYuri/agentflow/internal/adapters/events/memory\t[no test files]\n?   \tgithub.com/diasYuri/agentflow/internal/adapters/events/multi\t[no test files]\n?   \tgithub.com/diasYuri/agentflow/internal/adapters/events/stdout\t[no test files]\n?   \tgithub.com/diasYuri/agentflow/internal/adapters/runrepo/local\t[no test files]\n?   \tgithub.com/diasYuri/agentflow/internal/adapters/shell\t[no test files]\n?   \tgithub.com/diasYuri/agentflow/internal/adapters/yaml\t[no test files]\nok  \tgithub.com/diasYuri/agentflow/internal/app\t2.181s\nok  \tgithub.com/diasYuri/agentflow/internal/cli\t1.178s\n?   \tgithub.com/diasYuri/agentflow/internal/domain/run\t[no test files]\nok  \tgithub.com/diasYuri/agentflow/internal/domain/workflow\t1.558s\n?   \tgithub.com/diasYuri/agentflow/internal/ports\t[no test files]\n?   \tgithub.com/diasYuri/agentflow/internal/runtime\t[no test files]\n"
+      },
+      "stdout": "?   \tgithub.com/diasYuri/agentflow/cmd/agentflowflow\t[no test files]\nok  \tgithub.com/diasYuri/agentflow/internal/adapters/agent/codex\t0.465s\n?   \tgithub.com/diasYuri/agentflow/internal/adapters/agent/fake\t[no test files]\n?   \tgithub.com/diasYuri/agentflow/internal/adapters/events/jsonl\t[no test files]\n?   \tgithub.com/diasYuri/agentflow/internal/adapters/events/memory\t[no test files]\n?   \tgithub.com/diasYuri/agentflow/internal/adapters/events/multi\t[no test files]\n?   \tgithub.com/diasYuri/agentflow/internal/adapters/events/stdout\t[no test files]\n?   \tgithub.com/diasYuri/agentflow/internal/adapters/runrepo/local\t[no test files]\n?   \tgithub.com/diasYuri/agentflow/internal/adapters/shell\t[no test files]\n?   \tgithub.com/diasYuri/agentflow/internal/adapters/yaml\t[no test files]\nok  \tgithub.com/diasYuri/agentflow/internal/app\t2.181s\nok  \tgithub.com/diasYuri/agentflow/internal/cli\t1.178s\n?   \tgithub.com/diasYuri/agentflow/internal/domain/run\t[no test files]\nok  \tgithub.com/diasYuri/agentflow/internal/domain/workflow\t1.558s\n?   \tgithub.com/diasYuri/agentflow/internal/ports\t[no test files]\n?   \tgithub.com/diasYuri/agentflow/internal/runtime\t[no test files]\n",
+      "exit_code": 0,
+      "duration": 2804122291,
+      "attempts": 1
+    },
+    "tests_failed": {
+      "run_id": "2026-05-14T202217Z-local-health-check",
+      "node_id": "tests_failed",
+      "status": "skipped"
+    }
+  }
+}

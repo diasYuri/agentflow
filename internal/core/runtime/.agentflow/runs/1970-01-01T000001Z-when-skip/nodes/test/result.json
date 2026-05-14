@@ -1,0 +1,12 @@
+{
+  "run_id": "1970-01-01T000001Z-when-skip",
+  "node_id": "test",
+  "status": "success",
+  "output": {
+    "exit_code": 0,
+    "stderr": "",
+    "stdout": ""
+  },
+  "exit_code": 0,
+  "attempts": 1
+}

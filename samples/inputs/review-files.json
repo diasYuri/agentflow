@@ -1,0 +1,9 @@
+{
+  "files": [
+    "internal/core/runtime/run_workflow.go",
+    "internal/core/workflow/validation.go",
+    "internal/adapters/agent/codex/provider.go",
+    "internal/cli/root.go",
+    "cmd/agentflow/main.go"
+  ]
+}

@@ -1,0 +1,9 @@
+{"ts":"2026-05-14T18:12:36.360924-03:00","run_id":"2026-05-14T211236Z-release-notes","type":"run.created","data":{"dir":".agentflow/runs/2026-05-14T211236Z-release-notes"}}
+{"ts":"2026-05-14T18:12:36.360956-03:00","run_id":"2026-05-14T211236Z-release-notes","type":"run.started"}
+{"ts":"2026-05-14T18:12:36.360968-03:00","run_id":"2026-05-14T211236Z-release-notes","type":"node.ready","node_id":"normalize_changes"}
+{"ts":"2026-05-14T18:12:36.360998-03:00","run_id":"2026-05-14T211236Z-release-notes","type":"node.started","node_id":"normalize_changes","attempt":1}
+{"ts":"2026-05-14T18:12:36.361177-03:00","run_id":"2026-05-14T211236Z-release-notes","type":"node.completed","node_id":"normalize_changes","attempt":1}
+{"ts":"2026-05-14T18:12:36.361373-03:00","run_id":"2026-05-14T211236Z-release-notes","type":"node.ready","node_id":"draft_release_notes"}
+{"ts":"2026-05-14T18:12:36.361389-03:00","run_id":"2026-05-14T211236Z-release-notes","type":"node.started","node_id":"draft_release_notes","attempt":1}
+{"ts":"2026-05-14T18:12:43.047141-03:00","run_id":"2026-05-14T211236Z-release-notes","type":"node.failed","node_id":"draft_release_notes","attempt":1}
+{"ts":"2026-05-14T18:12:43.047813-03:00","run_id":"2026-05-14T211236Z-release-notes","type":"run.failed","data":{"status":"failed"}}

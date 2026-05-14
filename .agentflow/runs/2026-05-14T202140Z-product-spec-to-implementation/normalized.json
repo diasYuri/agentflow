@@ -1,0 +1,281 @@
+{
+  "version": "1",
+  "name": "product-spec-to-implementation",
+  "description": "Lê uma spec de produto em Markdown, gera specs técnicas, quebra em planos e implementa cada plano.",
+  "inputs": {
+    "spec_path": {
+      "type": "string",
+      "required": true
+    }
+  },
+  "defaults": {
+    "timeout": 900,
+    "working_dir": "."
+  },
+  "execution": {
+    "max_concurrency": 4,
+    "fail_fast": false,
+    "output_dir": ".agentflow/runs",
+    "max_node_output_bytes": 1048576
+  },
+  "nodes": [
+    {
+      "id": "load_product_spec",
+      "kind": "bash",
+      "sandbox": {},
+      "command": "cat \"${inputs.spec_path}\"\n",
+      "capture": {
+        "stdout": true,
+        "stderr": true,
+        "exit_code": true
+      }
+    },
+    {
+      "id": "draft_technical_specs",
+      "kind": "agent",
+      "depends_on": [
+        "load_product_spec"
+      ],
+      "provider": "codex",
+      "prompt": "Você é um arquiteto de software sênior.\n\nA partir da spec de produto abaixo, produza 1..n especificações técnicas independentes e implementáveis.\n\nRegras:\n- Preserve os requisitos da spec original.\n- Se houver ambiguidade, crie uma tech spec de esclarecimento em vez de inventar detalhes.\n- Cada tech spec deve ser pequena o suficiente para virar uma unidade de implementação.\n- Retorne JSON válido seguindo o schema.\n\nSpec de produto:\n${nodes.load_product_spec.stdout}\n",
+      "sandbox": {},
+      "output_schema": {
+        "properties": {
+          "technical_specs": {
+            "items": {
+              "properties": {
+                "acceptance_criteria": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "dependencies": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "goal": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "implementation_notes": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "risks": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "scope": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "title": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "title",
+                "goal",
+                "scope",
+                "acceptance_criteria",
+                "implementation_notes"
+              ],
+              "type": "object"
+            },
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": [
+          "technical_specs"
+        ],
+        "type": "object"
+      },
+      "capture": {}
+    },
+    {
+      "id": "extract_technical_specs",
+      "kind": "transform",
+      "depends_on": [
+        "draft_technical_specs"
+      ],
+      "sandbox": {},
+      "capture": {},
+      "operation": "pick",
+      "input": "${nodes.draft_technical_specs.output}",
+      "with": {
+        "path": "technical_specs"
+      }
+    },
+    {
+      "id": "per_technical_spec",
+      "kind": "map",
+      "depends_on": [
+        "extract_technical_specs"
+      ],
+      "for_each": "${nodes.extract_technical_specs.output}",
+      "concurrency": 2,
+      "max_items": 20,
+      "fail_fast": false,
+      "sandbox": {},
+      "capture": {},
+      "nodes": [
+        {
+          "id": "break_plans",
+          "kind": "agent",
+          "provider": "codex",
+          "prompt": "Você recebe uma especificação técnica e deve quebrá-la em 1..n planos de execução.\n\nRegras:\n- Os planos devem ser pequenos, ordenados e não sobrepostos.\n- Cada plano precisa ser implementável de forma objetiva.\n- Pense em arquivos, passos de implementação e validação.\n- Retorne JSON válido como uma lista de planos.\n\nEspecificação técnica:\n${item}\n",
+          "sandbox": {},
+          "output_schema": {
+            "items": {
+              "properties": {
+                "dependencies": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "files_to_touch": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "implementation_steps": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "notes": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "objective": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "validation": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "id",
+                "title",
+                "objective",
+                "files_to_touch",
+                "implementation_steps",
+                "validation",
+                "dependencies",
+                "notes"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "capture": {}
+        },
+        {
+          "id": "per_plan",
+          "kind": "map",
+          "depends_on": [
+            "break_plans"
+          ],
+          "for_each": "${nodes.break_plans.output}",
+          "concurrency": 2,
+          "max_items": 40,
+          "fail_fast": false,
+          "sandbox": {},
+          "capture": {},
+          "nodes": [
+            {
+              "id": "implement_plan",
+              "kind": "agent",
+              "continue_on_error": true,
+              "provider": "codex",
+              "prompt": "Você é o agente de implementação e está operando no repositório atual.\n\nImplemente somente este plano:\n${item}\n\nRegras:\n- Não reverta nem sobrescreva mudanças de outros planos.\n- Faça a menor mudança possível para cumprir o plano.\n- Preserve estilo, naming e convenções existentes.\n- Se houver dependências entre planos, avance apenas o que for seguro neste escopo.\n- Depois de implementar, retorne um resumo objetivo do que mudou.\n",
+              "sandbox": {
+                "mode": "workspace-write"
+              },
+              "output_schema": {
+                "properties": {
+                  "files_changed": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "status": {
+                    "type": "string"
+                  },
+                  "summary": {
+                    "type": "string"
+                  },
+                  "validation_notes": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "status",
+                  "files_changed",
+                  "summary",
+                  "validation_notes"
+                ],
+                "type": "object"
+              },
+              "capture": {}
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "collect_implementations",
+      "kind": "transform",
+      "depends_on": [
+        "per_technical_spec"
+      ],
+      "sandbox": {},
+      "capture": {},
+      "operation": "flat_map",
+      "input": "${nodes.per_technical_spec.outputs}"
+    },
+    {
+      "id": "summarize_implementation",
+      "kind": "agent",
+      "depends_on": [
+        "collect_implementations"
+      ],
+      "continue_on_error": true,
+      "provider": "codex",
+      "prompt": "Consolide o resultado final do workflow.\n\nTech specs:\n${nodes.draft_technical_specs.output}\n\nImplementações consolidadas:\n${nodes.collect_implementations.output}\n\nEntregue um resumo curto com:\n- status geral\n- specs técnicas processadas\n- planos implementados\n- pendências ou riscos\n",
+      "sandbox": {},
+      "capture": {}
+    }
+  ]
+}

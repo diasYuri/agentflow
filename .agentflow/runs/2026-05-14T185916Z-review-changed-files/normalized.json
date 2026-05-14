@@ -1,0 +1,70 @@
+{
+  "version": "1",
+  "name": "review-changed-files",
+  "description": "Revisa arquivos alterados em paralelo e consolida findings.",
+  "inputs": {
+    "files": {
+      "type": "array",
+      "required": true
+    }
+  },
+  "defaults": {
+    "timeout": 600,
+    "working_dir": "."
+  },
+  "execution": {
+    "max_concurrency": 4,
+    "fail_fast": false,
+    "output_dir": ".agentflow/runs"
+  },
+  "nodes": [
+    {
+      "id": "split_files",
+      "kind": "transform",
+      "sandbox": {},
+      "capture": {},
+      "operation": "chunk",
+      "input": "${inputs.files}",
+      "with": {
+        "chunks": 3
+      }
+    },
+    {
+      "id": "review_chunk",
+      "kind": "agent",
+      "depends_on": [
+        "split_files"
+      ],
+      "for_each": "${nodes.split_files.output}",
+      "concurrency": 2,
+      "max_items": 10,
+      "fail_fast": false,
+      "provider": "codex",
+      "prompt": "Revise este grupo de arquivos como code reviewer pragmático:\n\n${item}\n\nProcure:\n- bugs reais\n- regressões de comportamento\n- testes ausentes\n- riscos de segurança óbvios\n\nRetorne findings priorizados e sugestões objetivas.\n",
+      "sandbox": {},
+      "capture": {}
+    },
+    {
+      "id": "merge_reviews",
+      "kind": "transform",
+      "depends_on": [
+        "review_chunk"
+      ],
+      "sandbox": {},
+      "capture": {},
+      "operation": "merge",
+      "input": "${nodes.review_chunk.outputs}"
+    },
+    {
+      "id": "final_review",
+      "kind": "agent",
+      "depends_on": [
+        "merge_reviews"
+      ],
+      "provider": "codex",
+      "prompt": "Consolide os reviews abaixo em um relatório final curto.\n\nReviews:\n${nodes.merge_reviews.output}\n",
+      "sandbox": {},
+      "capture": {}
+    }
+  ]
+}

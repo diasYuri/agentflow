@@ -1,0 +1,409 @@
+package handlers
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+
+	"golang.org/x/sync/semaphore"
+
+	corerun "github.com/diasYuri/agentflow/internal/core/run"
+	coreworkflow "github.com/diasYuri/agentflow/internal/core/workflow"
+)
+
+type Executor struct {
+	svc Services
+}
+
+func Execute(ctx context.Context, svc Services, req ExecutionRequest) (Result, error) {
+	return (&Executor{svc: svc}).execute(ctx, req)
+}
+
+func (e *Executor) execute(ctx context.Context, req ExecutionRequest) (Result, error) {
+	now := e.now()
+	runID := fmt.Sprintf("%s-%s", now.UTC().Format("2006-01-02T150405Z"), sanitizeName(req.Plan.Workflow.Name))
+	handle, err := e.svc.Runs.CreateRun(ctx, corerun.RunMetadata{
+		RunID: runID, Workflow: req.Plan.Workflow.Name, WorkflowPath: req.WorkflowSourcePath, StartedAt: now,
+	})
+	if err != nil {
+		return Result{}, err
+	}
+	if err := e.svc.Runs.SaveWorkflow(ctx, runID, req.WorkflowSourcePath, req.Plan.Workflow, req.Plan); err != nil {
+		return Result{}, err
+	}
+	if opener, ok := e.svc.Events.(interface{ Open(string) error }); ok {
+		if err := opener.Open(filepath.Join(handle.Dir, "events.jsonl")); err != nil {
+			return Result{}, err
+		}
+	}
+	secrets := loadSecrets(req.Plan.Workflow)
+	state := newExecutionState(runID, req.Plan, req.Inputs, secrets, corerun.NewSecretMasker(secrets), now)
+	state.baseWorkingDir = req.WorkingDir
+	if err := e.emitState(ctx, state, corerun.Event{Type: "run.created", Data: map[string]any{"dir": handle.Dir}}); err != nil {
+		return Result{}, err
+	}
+	_ = e.emitState(ctx, state, corerun.Event{Type: "run.started"})
+
+	globalLimit := req.Plan.Workflow.Execution.MaxConcurrency
+	if globalLimit <= 0 {
+		globalLimit = 1
+	}
+	state.global = semaphore.NewWeighted(int64(globalLimit))
+	if err := e.executeNodes(ctx, state, req.Plan); err != nil {
+		return e.finish(ctx, req.Plan, state, corerun.RunFailed, err)
+	}
+	return e.finish(ctx, req.Plan, state, corerun.RunSuccess, nil)
+}
+
+func (e *Executor) executeNodes(ctx context.Context, state *ExecutionState, plan coreworkflow.ExecutionPlan) error {
+	indexByID := make(map[string]int, len(plan.Order))
+	for i, nodeID := range plan.Order {
+		indexByID[nodeID] = i
+	}
+	for pc := 0; pc < len(plan.Order); {
+		nodeID := plan.Order[pc]
+		node := plan.Nodes[nodeID].Spec
+		if state.failed && !node.ContinueOnError {
+			state.set(nodeID, corerun.NodeResult{RunID: state.runID, NodeID: nodeID, Status: corerun.NodeSkipped, Error: "run already failed", Path: append([]string(nil), state.path...)})
+			pc++
+			continue
+		}
+		if err := state.dependenciesReady(node); err != nil {
+			state.set(nodeID, corerun.NodeResult{RunID: state.runID, NodeID: nodeID, Status: corerun.NodeSkipped, Error: err.Error(), Path: append([]string(nil), state.path...)})
+			pc++
+			continue
+		}
+		ok, err := coreworkflow.EvalBool(node.When, state.evalContext(state.index, state.total, state.item))
+		if err != nil {
+			result := corerun.NodeResult{RunID: state.runID, NodeID: nodeID, Status: corerun.NodeFailed, Error: err.Error(), Path: append([]string(nil), state.path...)}
+			e.recordNode(ctx, state, result)
+			if !node.ContinueOnError {
+				return fmt.Errorf("node %q when failed: %w", nodeID, err)
+			}
+			pc++
+			continue
+		}
+		if !ok {
+			result := corerun.NodeResult{RunID: state.runID, NodeID: nodeID, Status: corerun.NodeSkipped, Path: append([]string(nil), state.path...)}
+			e.recordNode(ctx, state, result)
+			_ = e.emitState(ctx, state, corerun.Event{Type: "node.skipped", NodeID: nodeID})
+			pc++
+			continue
+		}
+		_ = e.emitState(ctx, state, corerun.Event{Type: "node.ready", NodeID: nodeID})
+		result := e.executeNode(ctx, state, node)
+		e.recordNode(ctx, state, result)
+		if isFailure(result.Status) && !node.ContinueOnError {
+			return fmt.Errorf("node %q failed: %s", nodeID, result.Error)
+		}
+		if node.GoToIf != nil {
+			jump, jumpErr := e.resolveGoToIf(node, state, indexByID)
+			if jumpErr != nil {
+				failedResult := result
+				failedResult.Status = corerun.NodeFailed
+				failedResult.Error = jumpErr.Error()
+				e.recordNode(ctx, state, failedResult)
+				if !node.ContinueOnError {
+					return fmt.Errorf("node %q go_to_if failed: %w", nodeID, jumpErr)
+				}
+				pc++
+				continue
+			}
+			if jump >= 0 {
+				pc = jump
+				continue
+			}
+		}
+		pc++
+	}
+	return nil
+}
+
+func (e *Executor) resolveGoToIf(node coreworkflow.NodeSpec, state *ExecutionState, indexByID map[string]int) (int, error) {
+	if node.GoToIf == nil {
+		return -1, nil
+	}
+	ok, err := coreworkflow.EvalBool(node.GoToIf.When, state.evalContext(state.index, state.total, state.item))
+	if err != nil {
+		return -1, err
+	}
+	if !ok {
+		return -1, nil
+	}
+	target, ok := indexByID[node.GoToIf.Target]
+	if !ok {
+		return -1, fmt.Errorf("unknown go_to_if target %q", node.GoToIf.Target)
+	}
+	return target, nil
+}
+
+func (e *Executor) executeNode(ctx context.Context, state *ExecutionState, node coreworkflow.NodeSpec) corerun.NodeResult {
+	if node.Kind == coreworkflow.NodeKindMap {
+		return e.executeMap(ctx, state, node)
+	}
+	if node.ForEach != "" {
+		return e.executeExpanded(ctx, state, node)
+	}
+	return e.executeSingle(ctx, state, node, "", nil, nil, nil)
+}
+
+type fanOutRunner func(ctx context.Context, index int, item any, instanceID string) corerun.NodeResult
+
+func (e *Executor) executeFanOut(
+	ctx context.Context,
+	state *ExecutionState,
+	node coreworkflow.NodeSpec,
+	items []any,
+	localConcurrency int,
+	failFast bool,
+	cancelResultPath []string,
+	finalPath []string,
+	instanceEventPath func(index int, instanceID string) []string,
+	runItem fanOutRunner,
+) corerun.NodeResult {
+	local := semaphore.NewWeighted(int64(localConcurrency))
+	results := make([]corerun.NodeResult, len(items))
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	cancelCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	for i, item := range items {
+		instanceID := fmt.Sprintf("%04d", i)
+		if failFast && cancelCtx.Err() != nil {
+			results[i] = corerun.NodeResult{RunID: state.runID, NodeID: node.ID, InstanceID: instanceID, Status: corerun.NodeCancelled, Error: cancelCtx.Err().Error(), Path: append([]string(nil), cancelResultPath...)}
+			continue
+		}
+		if err := local.Acquire(cancelCtx, 1); err != nil {
+			results[i] = corerun.NodeResult{RunID: state.runID, NodeID: node.ID, InstanceID: instanceID, Status: corerun.NodeCancelled, Error: err.Error(), Path: append([]string(nil), cancelResultPath...)}
+			continue
+		}
+		wg.Add(1)
+		go func(index int, item any) {
+			defer wg.Done()
+			defer local.Release(1)
+			instanceID := fmt.Sprintf("%04d", index)
+			startedEvent := corerun.Event{Type: "node.instance.started", NodeID: node.ID, InstanceID: instanceID}
+			if instanceEventPath != nil {
+				startedEvent.Path = instanceEventPath(index, instanceID)
+			}
+			_ = e.emitState(cancelCtx, state, startedEvent)
+			result := runItem(cancelCtx, index, item, instanceID)
+			completedEvent := corerun.Event{Type: eventForResult("node.instance.completed", "node.instance.failed", result.Status), NodeID: node.ID, InstanceID: instanceID}
+			if instanceEventPath != nil {
+				completedEvent.Path = instanceEventPath(index, instanceID)
+			}
+			_ = e.emitState(cancelCtx, state, completedEvent)
+			mu.Lock()
+			results[index] = result
+			if failFast && isFailure(result.Status) {
+				cancel()
+			}
+			mu.Unlock()
+		}(i, item)
+	}
+	wg.Wait()
+
+	outputs := make([]any, len(results))
+	status := corerun.NodeSuccess
+	var errs []string
+	for i, result := range results {
+		outputs[i] = result.Output
+		if isFailure(result.Status) {
+			status = result.Status
+			errs = append(errs, result.Error)
+		}
+		_ = e.svc.Runs.SaveNodeResult(ctx, state.runID, state.masker.MaskNodeResult(result))
+	}
+	finalResult := corerun.NodeResult{RunID: state.runID, NodeID: node.ID, Status: status, Outputs: outputs, Error: strings.Join(errs, "; ")}
+	if finalPath != nil {
+		finalResult.Path = append([]string(nil), finalPath...)
+	}
+	e.recordNode(ctx, state, finalResult)
+	return finalResult
+}
+
+func (e *Executor) executeMap(ctx context.Context, state *ExecutionState, node coreworkflow.NodeSpec) corerun.NodeResult {
+	items, err := e.forEachItems(ctx, state, node)
+	if err != nil {
+		return corerun.NodeResult{RunID: state.runID, NodeID: node.ID, Status: corerun.NodeFailed, Error: err.Error()}
+	}
+	if node.MaxItems > 0 && len(items) > node.MaxItems {
+		return corerun.NodeResult{RunID: state.runID, NodeID: node.ID, Status: corerun.NodeFailed, Error: fmt.Sprintf("for_each produced %d items, max_items is %d", len(items), node.MaxItems)}
+	}
+	localConcurrency := node.Concurrency
+	if localConcurrency <= 0 {
+		localConcurrency = len(items)
+	}
+	failFast := state.failFast(node)
+	expansionData := map[string]any{
+		"items":       len(items),
+		"concurrency": localConcurrency,
+		"fail_fast":   failFast,
+	}
+	if node.MaxItems > 0 {
+		expansionData["max_items"] = node.MaxItems
+	}
+	_ = e.emitState(ctx, state, corerun.Event{Type: "node.expanded", NodeID: node.ID, Data: expansionData})
+	childPlan := state.plan.Nodes[node.ID].ChildPlan
+	if childPlan == nil {
+		return corerun.NodeResult{RunID: state.runID, NodeID: node.ID, Status: corerun.NodeFailed, Error: "map node is missing nested plan", Path: append([]string(nil), state.path...)}
+	}
+	if len(items) == 0 {
+		return corerun.NodeResult{RunID: state.runID, NodeID: node.ID, Status: corerun.NodeSuccess, Outputs: []any{}, Path: append([]string(nil), state.path...)}
+	}
+	return e.executeFanOut(
+		ctx,
+		state,
+		node,
+		items,
+		localConcurrency,
+		failFast,
+		appendPath(state.path, node.ID),
+		append([]string(nil), state.path...),
+		func(index int, instanceID string) []string {
+			return appendPath(state.path, node.ID, instanceID)
+		},
+		func(ctx context.Context, index int, item any, instanceID string) corerun.NodeResult {
+			total := len(items)
+			itemPath := appendPath(state.path, node.ID, instanceID)
+			childState := state.spawn(*childPlan, itemPath)
+			childState.item = item
+			childState.index = &index
+			childState.total = &total
+			err := e.executeNodes(ctx, childState, *childPlan)
+			result := corerun.NodeResult{RunID: state.runID, NodeID: node.ID, InstanceID: instanceID, Index: &index, Path: appendPath(state.path, node.ID)}
+			if err != nil {
+				result.Status = corerun.NodeFailed
+				result.Error = err.Error()
+				if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+					result.Status = corerun.NodeTimeout
+				}
+			} else {
+				result.Status = corerun.NodeSuccess
+			}
+			if len(childPlan.Order) > 0 {
+				last := childPlan.Order[len(childPlan.Order)-1]
+				if childResult, ok := childState.results[last]; ok {
+					result.Output = resultValue(childResult)
+				}
+			}
+			return result
+		},
+	)
+}
+
+func (e *Executor) executeExpanded(ctx context.Context, state *ExecutionState, node coreworkflow.NodeSpec) corerun.NodeResult {
+	items, err := e.forEachItems(ctx, state, node)
+	if err != nil {
+		return corerun.NodeResult{RunID: state.runID, NodeID: node.ID, Status: corerun.NodeFailed, Error: err.Error()}
+	}
+	if node.MaxItems > 0 && len(items) > node.MaxItems {
+		return corerun.NodeResult{RunID: state.runID, NodeID: node.ID, Status: corerun.NodeFailed, Error: fmt.Sprintf("for_each produced %d items, max_items is %d", len(items), node.MaxItems)}
+	}
+	localConcurrency := node.Concurrency
+	if localConcurrency <= 0 {
+		localConcurrency = len(items)
+	}
+	failFast := state.failFast(node)
+	expansionData := map[string]any{
+		"items":       len(items),
+		"concurrency": localConcurrency,
+		"fail_fast":   failFast,
+	}
+	if node.MaxItems > 0 {
+		expansionData["max_items"] = node.MaxItems
+	}
+	_ = e.emitState(ctx, state, corerun.Event{Type: "node.expanded", NodeID: node.ID, Data: expansionData})
+	if len(items) == 0 {
+		return corerun.NodeResult{RunID: state.runID, NodeID: node.ID, Status: corerun.NodeSuccess, Outputs: []any{}}
+	}
+	return e.executeFanOut(
+		ctx,
+		state,
+		node,
+		items,
+		localConcurrency,
+		failFast,
+		append([]string(nil), state.path...),
+		nil,
+		nil,
+		func(ctx context.Context, index int, item any, instanceID string) corerun.NodeResult {
+			total := len(items)
+			return e.executeSingle(ctx, state, node, instanceID, &index, &total, item)
+		},
+	)
+}
+
+func (e *Executor) executeSingle(ctx context.Context, state *ExecutionState, node coreworkflow.NodeSpec, instanceID string, index *int, total *int, item any) corerun.NodeResult {
+	attempts := 1 + effectiveRetries(state.plan.Workflow, node)
+	var last corerun.NodeResult
+	for attempt := 1; attempt <= attempts; attempt++ {
+		if attempt > 1 {
+			delay := time.Duration(attempt-1) * 250 * time.Millisecond
+			state.incrementRetries()
+			_ = e.emitState(ctx, state, corerun.Event{
+				Type:       "node.retrying",
+				NodeID:     node.ID,
+				InstanceID: instanceID,
+				Attempt:    attempt,
+				Data: map[string]any{
+					"attempt":         attempt,
+					"max_attempts":    attempts,
+					"retry":           attempt - 1,
+					"max_retries":     attempts - 1,
+					"delay_ms":        delay.Milliseconds(),
+					"previous_status": last.Status,
+					"previous_error":  last.Error,
+				},
+			})
+			time.Sleep(delay)
+		}
+		last = e.executeAttempt(ctx, state, node, instanceID, index, total, item, attempt)
+		last.Attempts = attempt
+		if !isFailure(last.Status) {
+			return last
+		}
+	}
+	return last
+}
+
+func (e *Executor) executeAttempt(ctx context.Context, state *ExecutionState, node coreworkflow.NodeSpec, instanceID string, index *int, total *int, item any, attempt int) corerun.NodeResult {
+	timeout := effectiveTimeout(state.plan.Workflow, node)
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
+		defer cancel()
+	}
+	if err := state.global.Acquire(ctx, 1); err != nil {
+		return corerun.NodeResult{RunID: state.runID, NodeID: node.ID, InstanceID: instanceID, Index: index, Status: corerun.NodeCancelled, Error: err.Error()}
+	}
+	defer state.global.Release(1)
+
+	start := e.now()
+	eventType := "node.started"
+	if instanceID != "" {
+		eventType = "node.instance.started"
+	}
+	_ = e.emitState(ctx, state, corerun.Event{Type: eventType, NodeID: node.ID, InstanceID: instanceID, Attempt: attempt})
+	result := corerun.NodeResult{RunID: state.runID, NodeID: node.ID, InstanceID: instanceID, Index: index, Path: append([]string(nil), state.path...)}
+	output, status, err := e.dispatch(ctx, state, node, instanceID, index, total, item, attempt)
+	result.Duration = e.now().Sub(start)
+	result.Status = status
+	result.Output = output.Output
+	result.Stdout = output.Stdout
+	result.Stderr = output.Stderr
+	result.ExitCode = output.ExitCode
+	if err != nil {
+		result.Error = err.Error()
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			result.Status = corerun.NodeTimeout
+		}
+	}
+	_ = e.emitState(ctx, state, corerun.Event{Type: eventForResult("node.completed", "node.failed", result.Status), NodeID: node.ID, InstanceID: instanceID, Attempt: attempt})
+	return result
+}

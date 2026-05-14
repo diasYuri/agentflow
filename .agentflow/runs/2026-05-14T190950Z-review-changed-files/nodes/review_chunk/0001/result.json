@@ -1,0 +1,10 @@
+{
+  "run_id": "2026-05-14T190950Z-review-changed-files",
+  "node_id": "review_chunk",
+  "instance_id": "0001",
+  "index": 1,
+  "status": "failed",
+  "error": "codex exec exited with code 2: WARNING: proceeding, even though we could not update PATH: Operation not permitted (os error 1)\nerror: invalid value 'seatbelt' for '--sandbox \u003cSANDBOX_MODE\u003e'\n  [possible values: read-only, workspace-write, danger-full-access]\n\nFor more information, try '--help'.\n",
+  "duration": 17917667,
+  "attempts": 1
+}

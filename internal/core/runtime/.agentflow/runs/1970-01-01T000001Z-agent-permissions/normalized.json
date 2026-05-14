@@ -1,0 +1,40 @@
+{
+  "version": "1",
+  "name": "agent-permissions",
+  "defaults": {},
+  "execution": {},
+  "nodes": [
+    {
+      "id": "write_enabled",
+      "kind": "agent",
+      "permission": {
+        "write": true
+      },
+      "prompt": "write mode",
+      "sandbox": {},
+      "capture": {}
+    },
+    {
+      "id": "write_disabled",
+      "kind": "agent",
+      "permission": {
+        "write": false
+      },
+      "prompt": "read mode",
+      "sandbox": {},
+      "capture": {}
+    },
+    {
+      "id": "explicit_sandbox",
+      "kind": "agent",
+      "permission": {
+        "write": true
+      },
+      "prompt": "explicit sandbox",
+      "sandbox": {
+        "mode": "danger-full-access"
+      },
+      "capture": {}
+    }
+  ]
+}

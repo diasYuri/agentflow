@@ -1,0 +1,10 @@
+{
+  "run_id": "2026-05-14T191030Z-review-changed-files",
+  "node_id": "review_chunk",
+  "instance_id": "0002",
+  "index": 2,
+  "status": "failed",
+  "error": "codex exec exited with code 1: Reading prompt from stdin...\n",
+  "duration": 14118831500,
+  "attempts": 1
+}

@@ -1,0 +1,78 @@
+{
+  "run_id": "2026-05-14T211323Z-release-notes",
+  "workflow": "release-notes",
+  "status": "success",
+  "started_at": "2026-05-14T18:13:23.349919-03:00",
+  "finished_at": "2026-05-14T18:13:44.386201-03:00",
+  "duration_ms": 21036,
+  "agent_calls": 2,
+  "bash_calls": 0,
+  "failed_nodes": 0,
+  "retries": 0,
+  "nodes": {
+    "draft_release_notes": {
+      "run_id": "2026-05-14T211323Z-release-notes",
+      "node_id": "draft_release_notes",
+      "status": "success",
+      "output": {
+        "breaking_changes": [],
+        "corrections": [],
+        "highlights": [
+          "Parser e validador de workflows em YAML.",
+          "Planejador de DAG com comando para gerar gráficos Mermaid.",
+          "Persistência local de execuções com eventos em JSONL.",
+          "Provider da Codex integrado por meio da porta `AgentProvider`.",
+          "Execução com fan-out/fan-in e limites de concorrência."
+        ],
+        "improvements": [
+          "A base de automação agora suporta definição, validação e visualização de workflows.",
+          "As execuções locais ficam mais observáveis e recuperáveis com registro persistente de eventos.",
+          "A integração com provedores de agentes foi ampliada sem acoplamento direto à implementação.",
+          "O mecanismo de execução passou a escalar melhor em fluxos paralelos, preservando controle sobre concorrência."
+        ],
+        "summary": "Release v0.1.0 traz a primeira base funcional para workflows em YAML, planejamento em DAG, visualização Mermaid, persistência local de execuções e integração com o provider da Codex, além de execução paralela com fan-out/fan-in.",
+        "validation": [
+          "JSON válido gerado conforme o schema solicitado."
+        ]
+      },
+      "duration": 10716515583,
+      "attempts": 1
+    },
+    "final_check": {
+      "run_id": "2026-05-14T211323Z-release-notes",
+      "node_id": "final_check",
+      "status": "success",
+      "output": {
+        "breaking_changes": [],
+        "corrections": [],
+        "highlights": [
+          "Parser e validador de workflows em YAML.",
+          "Planejador de DAG com comando para gerar gráficos em Mermaid.",
+          "Persistência local de execuções com eventos registrados em JSONL.",
+          "Integração com o provider da Codex por meio da porta `AgentProvider`.",
+          "Execução com fan-out/fan-in e limites de concorrência configuráveis."
+        ],
+        "improvements": [
+          "A base de automação agora permite definir, validar e visualizar workflows.",
+          "As execuções locais ficaram mais observáveis e recuperáveis com registro persistente de eventos.",
+          "A integração com provedores de agentes foi ampliada sem acoplamento direto à implementação.",
+          "O mecanismo de execução passou a lidar melhor com fluxos paralelos, mantendo o controle de concorrência."
+        ],
+        "summary": "A versão v0.1.0 apresenta a primeira base funcional para workflows em YAML, planejamento em DAG, visualização em Mermaid, persistência local de execuções e integração com o provider da Codex, além de execução paralela com fan-out/fan-in.",
+        "validation": [
+          "JSON válido gerado conforme o schema solicitado."
+        ]
+      },
+      "duration": 10314000250,
+      "attempts": 1
+    },
+    "normalize_changes": {
+      "run_id": "2026-05-14T211323Z-release-notes",
+      "node_id": "normalize_changes",
+      "status": "success",
+      "output": "[\"Add YAML workflow parser and validator\",\"Add DAG planner and Mermaid graph command\",\"Add local run persistence with JSONL events\",\"Add Codex provider behind AgentProvider port\",\"Add fan-out/fan-in execution with concurrency limits\"]",
+      "duration": 184709,
+      "attempts": 1
+    }
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "run_id": "2026-05-14T202217Z-local-health-check",
+  "node_id": "list_module",
+  "status": "success",
+  "output": {
+    "exit_code": 0,
+    "stderr": "",
+    "stdout": "github.com/diasYuri/agentflow/cmd/agentflowflow\ngithub.com/diasYuri/agentflow/internal/adapters/agent/codex\ngithub.com/diasYuri/agentflow/internal/adapters/agent/fake\ngithub.com/diasYuri/agentflow/internal/adapters/events/jsonl\ngithub.com/diasYuri/agentflow/internal/adapters/events/memory\ngithub.com/diasYuri/agentflow/internal/adapters/events/multi\ngithub.com/diasYuri/agentflow/internal/adapters/events/stdout\ngithub.com/diasYuri/agentflow/internal/adapters/runrepo/local\ngithub.com/diasYuri/agentflow/internal/adapters/shell\ngithub.com/diasYuri/agentflow/internal/adapters/yaml\ngithub.com/diasYuri/agentflow/internal/app\ngithub.com/diasYuri/agentflow/internal/cli\ngithub.com/diasYuri/agentflow/internal/domain/run\ngithub.com/diasYuri/agentflow/internal/domain/workflow\ngithub.com/diasYuri/agentflow/internal/ports\ngithub.com/diasYuri/agentflow/internal/runtime\n"
+  },
+  "stdout": "github.com/diasYuri/agentflow/cmd/agentflowflow\ngithub.com/diasYuri/agentflow/internal/adapters/agent/codex\ngithub.com/diasYuri/agentflow/internal/adapters/agent/fake\ngithub.com/diasYuri/agentflow/internal/adapters/events/jsonl\ngithub.com/diasYuri/agentflow/internal/adapters/events/memory\ngithub.com/diasYuri/agentflow/internal/adapters/events/multi\ngithub.com/diasYuri/agentflow/internal/adapters/events/stdout\ngithub.com/diasYuri/agentflow/internal/adapters/runrepo/local\ngithub.com/diasYuri/agentflow/internal/adapters/shell\ngithub.com/diasYuri/agentflow/internal/adapters/yaml\ngithub.com/diasYuri/agentflow/internal/app\ngithub.com/diasYuri/agentflow/internal/cli\ngithub.com/diasYuri/agentflow/internal/domain/run\ngithub.com/diasYuri/agentflow/internal/domain/workflow\ngithub.com/diasYuri/agentflow/internal/ports\ngithub.com/diasYuri/agentflow/internal/runtime\n",
+  "exit_code": 0,
+  "duration": 88920958,
+  "attempts": 1
+}

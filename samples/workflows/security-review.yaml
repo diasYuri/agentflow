@@ -1,0 +1,61 @@
+version: "1"
+name: security-review
+description: "Auditoria defensiva por áreas do repositório com consolidação final."
+
+inputs:
+  areas:
+    type: array
+    required: true
+
+defaults:
+  timeout: 900
+  retries: 0
+  working_dir: "."
+
+execution:
+  max_concurrency: 4
+  fail_fast: false
+
+nodes:
+  - id: review_area
+    kind: agent
+    provider: codex
+    for_each: "${inputs.areas}"
+    concurrency: 2
+    max_items: 12
+    fail_fast: false
+    prompt: |
+      Faça uma revisão defensiva de segurança desta área:
+
+      ${item}
+
+      Escopo:
+      - vulnerabilidades práticas
+      - vazamento de secrets
+      - execução shell perigosa
+      - validação de inputs
+      - persistência de dados sensíveis
+
+      Retorne severidade, evidência e correção sugerida.
+
+  - id: merge_findings
+    kind: transform
+    depends_on: [review_area]
+    operation: merge
+    input: "${nodes.review_area.outputs}"
+
+  - id: final_security_report
+    kind: agent
+    provider: codex
+    depends_on: [merge_findings]
+    prompt: |
+      Consolide os findings de segurança em um relatório executivo.
+
+      Findings:
+      ${nodes.merge_findings.output}
+
+      Formato:
+      - Findings críticos primeiro
+      - Risco
+      - Evidência
+      - Correção recomendada

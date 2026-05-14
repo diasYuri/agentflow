@@ -1,0 +1,16 @@
+?   	github.com/diasYuri/agentflow/cmd/agentflowflow	[no test files]
+ok  	github.com/diasYuri/agentflow/internal/adapters/agent/codex	0.465s
+?   	github.com/diasYuri/agentflow/internal/adapters/agent/fake	[no test files]
+?   	github.com/diasYuri/agentflow/internal/adapters/events/jsonl	[no test files]
+?   	github.com/diasYuri/agentflow/internal/adapters/events/memory	[no test files]
+?   	github.com/diasYuri/agentflow/internal/adapters/events/multi	[no test files]
+?   	github.com/diasYuri/agentflow/internal/adapters/events/stdout	[no test files]
+?   	github.com/diasYuri/agentflow/internal/adapters/runrepo/local	[no test files]
+?   	github.com/diasYuri/agentflow/internal/adapters/shell	[no test files]
+?   	github.com/diasYuri/agentflow/internal/adapters/yaml	[no test files]
+ok  	github.com/diasYuri/agentflow/internal/app	2.181s
+ok  	github.com/diasYuri/agentflow/internal/cli	1.178s
+?   	github.com/diasYuri/agentflow/internal/domain/run	[no test files]
+ok  	github.com/diasYuri/agentflow/internal/domain/workflow	1.558s
+?   	github.com/diasYuri/agentflow/internal/ports	[no test files]
+?   	github.com/diasYuri/agentflow/internal/runtime	[no test files]

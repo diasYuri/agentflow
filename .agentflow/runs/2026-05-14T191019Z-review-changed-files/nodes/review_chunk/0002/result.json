@@ -1,0 +1,10 @@
+{
+  "run_id": "2026-05-14T191019Z-review-changed-files",
+  "node_id": "review_chunk",
+  "instance_id": "0002",
+  "index": 2,
+  "status": "failed",
+  "error": "codex exec exited with code 1: WARNING: proceeding, even though we could not update PATH: Operation not permitted (os error 1)\nReading prompt from stdin...\nError: failed to initialize in-process app-server client: Operation not permitted (os error 1)\n",
+  "duration": 28316584,
+  "attempts": 1
+}

@@ -1,0 +1,8 @@
+{
+  "run_id": "2026-05-14T202140Z-product-spec-to-implementation",
+  "node_id": "draft_technical_specs",
+  "status": "failed",
+  "error": "codex exec exited with code 1: Reading prompt from stdin...\n",
+  "duration": 8021040000,
+  "attempts": 1
+}

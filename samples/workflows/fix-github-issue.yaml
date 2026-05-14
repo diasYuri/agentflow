@@ -1,0 +1,102 @@
+version: "1"
+name: fix-github-issue
+description: "Analisa uma issue, implementa correção com Codex e roda testes locais."
+
+inputs:
+  issue_url:
+    type: string
+    required: true
+
+vars:
+  test_command: "go test ./..."
+
+defaults:
+  timeout: 900
+  retries: 0
+  working_dir: "."
+
+execution:
+  max_concurrency: 2
+  fail_fast: true
+  max_node_output_bytes: 1048576
+
+nodes:
+  - id: inspect_issue
+    kind: agent
+    provider: codex
+    prompt: |
+      Analise a issue abaixo e identifique:
+      - problema provável
+      - arquivos prováveis
+      - plano de correção mínimo
+
+      Issue: ${inputs.issue_url}
+
+  - id: implement_fix
+    kind: agent
+    provider: codex
+    depends_on: [inspect_issue]
+    retries: 1
+    prompt: |
+      Implemente a correção com base nesta análise:
+
+      ${nodes.inspect_issue.output}
+
+      Regras:
+      - faça alterações mínimas
+      - mantenha o estilo existente
+      - não quebre APIs públicas sem necessidade
+      - não altere arquivos não relacionados
+
+  - id: test
+    kind: bash
+    depends_on: [implement_fix]
+    command: |
+      ${vars.test_command}
+    capture:
+      stdout: true
+      stderr: true
+      exit_code: true
+    continue_on_error: true
+
+  - id: fix_tests
+    kind: agent
+    provider: codex
+    depends_on: [test]
+    when: "${nodes.test.exit_code} != 0"
+    prompt: |
+      Os testes falharam. Corrija a implementação mantendo o escopo mínimo.
+
+      stdout:
+      ${nodes.test.stdout}
+
+      stderr:
+      ${nodes.test.stderr}
+
+  - id: retest
+    kind: bash
+    depends_on: [fix_tests]
+    when: "success('fix_tests')"
+    command: |
+      ${vars.test_command}
+    capture:
+      stdout: true
+      stderr: true
+      exit_code: true
+
+  - id: summarize
+    kind: agent
+    provider: codex
+    depends_on: [test, retest]
+    prompt: |
+      Gere um resumo final para o usuário:
+      - arquivos alterados
+      - estratégia usada
+      - status dos testes
+      - riscos ou follow-ups
+
+      Resultado inicial dos testes:
+      ${nodes.test.output}
+
+      Resultado do reteste, se existir:
+      ${nodes.retest.output}

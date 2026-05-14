@@ -1,0 +1,14 @@
+{
+  "run_id": "2026-05-14T202217Z-local-health-check",
+  "node_id": "run_tests",
+  "status": "success",
+  "output": {
+    "exit_code": 0,
+    "stderr": "",
+    "stdout": "?   \tgithub.com/diasYuri/agentflow/cmd/agentflowflow\t[no test files]\nok  \tgithub.com/diasYuri/agentflow/internal/adapters/agent/codex\t0.465s\n?   \tgithub.com/diasYuri/agentflow/internal/adapters/agent/fake\t[no test files]\n?   \tgithub.com/diasYuri/agentflow/internal/adapters/events/jsonl\t[no test files]\n?   \tgithub.com/diasYuri/agentflow/internal/adapters/events/memory\t[no test files]\n?   \tgithub.com/diasYuri/agentflow/internal/adapters/events/multi\t[no test files]\n?   \tgithub.com/diasYuri/agentflow/internal/adapters/events/stdout\t[no test files]\n?   \tgithub.com/diasYuri/agentflow/internal/adapters/runrepo/local\t[no test files]\n?   \tgithub.com/diasYuri/agentflow/internal/adapters/shell\t[no test files]\n?   \tgithub.com/diasYuri/agentflow/internal/adapters/yaml\t[no test files]\nok  \tgithub.com/diasYuri/agentflow/internal/app\t2.181s\nok  \tgithub.com/diasYuri/agentflow/internal/cli\t1.178s\n?   \tgithub.com/diasYuri/agentflow/internal/domain/run\t[no test files]\nok  \tgithub.com/diasYuri/agentflow/internal/domain/workflow\t1.558s\n?   \tgithub.com/diasYuri/agentflow/internal/ports\t[no test files]\n?   \tgithub.com/diasYuri/agentflow/internal/runtime\t[no test files]\n"
+  },
+  "stdout": "?   \tgithub.com/diasYuri/agentflow/cmd/agentflowflow\t[no test files]\nok  \tgithub.com/diasYuri/agentflow/internal/adapters/agent/codex\t0.465s\n?   \tgithub.com/diasYuri/agentflow/internal/adapters/agent/fake\t[no test files]\n?   \tgithub.com/diasYuri/agentflow/internal/adapters/events/jsonl\t[no test files]\n?   \tgithub.com/diasYuri/agentflow/internal/adapters/events/memory\t[no test files]\n?   \tgithub.com/diasYuri/agentflow/internal/adapters/events/multi\t[no test files]\n?   \tgithub.com/diasYuri/agentflow/internal/adapters/events/stdout\t[no test files]\n?   \tgithub.com/diasYuri/agentflow/internal/adapters/runrepo/local\t[no test files]\n?   \tgithub.com/diasYuri/agentflow/internal/adapters/shell\t[no test files]\n?   \tgithub.com/diasYuri/agentflow/internal/adapters/yaml\t[no test files]\nok  \tgithub.com/diasYuri/agentflow/internal/app\t2.181s\nok  \tgithub.com/diasYuri/agentflow/internal/cli\t1.178s\n?   \tgithub.com/diasYuri/agentflow/internal/domain/run\t[no test files]\nok  \tgithub.com/diasYuri/agentflow/internal/domain/workflow\t1.558s\n?   \tgithub.com/diasYuri/agentflow/internal/ports\t[no test files]\n?   \tgithub.com/diasYuri/agentflow/internal/runtime\t[no test files]\n",
+  "exit_code": 0,
+  "duration": 2804122291,
+  "attempts": 1
+}

@@ -1,0 +1,5 @@
+{
+  "test_command": "go test ./...",
+  "failure_context": "A suíte falha depois de alterar validação de workflows YAML."
+}
+
