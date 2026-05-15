@@ -78,6 +78,9 @@ func (uc *RunWorkflowUseCase) prepareRunWorkflow(ctx context.Context, opts RunOp
 	if err != nil {
 		return workflowPreparation{}, err
 	}
+	if err := coreworkflow.ValidateInputValues(*spec, resolvedInputs); err != nil {
+		return workflowPreparation{}, err
+	}
 	handlers.ApplyWorkflowOverrides(spec, opts)
 	if err := coreworkflow.Validate(spec, uc.Agents); err != nil {
 		return workflowPreparation{}, err

@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -115,6 +116,174 @@ nodes:
 	}
 	got, _ := manager.WorkflowStatus(run.ID)
 	t.Fatalf("workflow did not complete successfully: %#v", got)
+}
+
+func TestManagerAppliesRuntimeOptionsPerWorkflowRun(t *testing.T) {
+	dir := shortTempDir(t)
+	home := filepath.Join(dir, "home")
+	t.Setenv("HOME", home)
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(oldwd)
+	})
+	workflowDir := filepath.Join(dir, ".agentflow", "workflows")
+	if err := os.MkdirAll(workflowDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workflowDir, "per-run.yaml"), []byte(`
+version: "1"
+name: per-run
+nodes:
+  - id: ok
+    kind: noop
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := Config{
+		SocketPath: filepath.Join(dir, "agentflowd.sock"),
+		PIDPath:    filepath.Join(dir, "agentflowd.pid"),
+		LogPath:    filepath.Join(dir, "agentflowd.log"),
+		RunRoot:    filepath.Join(dir, "default-runs"),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runSupervisor := suture.NewSimple("test-workflows")
+	done := make(chan error, 1)
+	go func() {
+		done <- runSupervisor.Serve(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+	manager := NewManager(cfg, runSupervisor, nil)
+	runRoot := filepath.Join(dir, "request-runs")
+	eventsPath := filepath.Join(dir, "request-events.jsonl")
+	run, err := manager.StartWorkflow(RunWorkflowRequest{
+		WorkflowRef: "per-run",
+		WorkingDir:  dir,
+		OutputDir:   runRoot,
+		EventsJSONL: eventsPath,
+		LogFormat:   "json",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(run.RunDir, runRoot) {
+		t.Fatalf("initial run dir mismatch: got %q want prefix %q", run.RunDir, runRoot)
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		got, ok := manager.WorkflowStatus(run.ID)
+		if ok && got.Status == "success" {
+			if !strings.HasPrefix(got.RunDir, runRoot) {
+				t.Fatalf("finished run dir mismatch: got %q want prefix %q", got.RunDir, runRoot)
+			}
+			assertFileContains(t, eventsPath, `"type":"run.completed"`)
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	got, _ := manager.WorkflowStatus(run.ID)
+	t.Fatalf("workflow did not complete successfully: %#v", got)
+}
+
+func TestManagerLoadsPersistedWorkflowRuns(t *testing.T) {
+	dir := shortTempDir(t)
+	home := filepath.Join(dir, "home")
+	t.Setenv("HOME", home)
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(oldwd)
+	})
+	workflowDir := filepath.Join(dir, ".agentflow", "workflows")
+	if err := os.MkdirAll(workflowDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workflowDir, "persisted.yaml"), []byte(`
+version: "1"
+name: persisted
+nodes:
+  - id: ok
+    kind: noop
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := Config{
+		SocketPath: filepath.Join(dir, "agentflowd.sock"),
+		PIDPath:    filepath.Join(dir, "agentflowd.pid"),
+		LogPath:    filepath.Join(dir, "agentflowd.log"),
+		RunRoot:    filepath.Join(dir, "runs"),
+		DBPath:     filepath.Join(dir, "agentflowd.sqlite"),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runSupervisor := suture.NewSimple("test-workflows")
+	done := make(chan error, 1)
+	go func() {
+		done <- runSupervisor.Serve(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+	store, err := OpenSQLiteRunStore(context.Background(), cfg.DBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := NewManagerWithStore(cfg, runSupervisor, nil, store)
+	run, err := manager.StartWorkflow(RunWorkflowRequest{WorkflowRef: "persisted", WorkingDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		got, ok := manager.WorkflowStatus(run.ID)
+		if ok && got.Status == "success" {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	got, _ := manager.WorkflowStatus(run.ID)
+	if got.Status != "success" {
+		t.Fatalf("workflow did not complete successfully: %#v", got)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := OpenSQLiteRunStore(context.Background(), cfg.DBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	reloaded := NewManagerWithStore(cfg, runSupervisor, nil, reopened)
+	loaded, ok := reloaded.WorkflowStatus(run.ID)
+	if !ok {
+		t.Fatalf("expected persisted run %q to load", run.ID)
+	}
+	if loaded.Status != "success" {
+		t.Fatalf("expected persisted success, got %#v", loaded)
+	}
+	if loaded.RunDir == "" {
+		t.Fatal("expected persisted run dir")
+	}
 }
 
 func TestManagerCancelsRunningWorkflow(t *testing.T) {
@@ -233,4 +402,15 @@ func shortTempDir(t *testing.T) string {
 		_ = os.RemoveAll(dir)
 	})
 	return dir
+}
+
+func assertFileContains(t *testing.T, path string, want string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), want) {
+		t.Fatalf("expected %s to contain %q, got %q", path, want, string(data))
+	}
 }

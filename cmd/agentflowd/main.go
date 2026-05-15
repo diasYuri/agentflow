@@ -20,6 +20,9 @@ func main() {
 	if value := os.Getenv("AGENTFLOWD_RUN_ROOT"); value != "" {
 		cfg.RunRoot = value
 	}
+	if value := os.Getenv("AGENTFLOWD_DB"); value != "" {
+		cfg.DBPath = value
+	}
 	if value := os.Getenv("AGENTFLOW_CODEX_PATH"); value != "" {
 		cfg.CodexPath = value
 	}

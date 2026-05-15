@@ -49,7 +49,7 @@ Os workflows são resolvidos por nome/ref, com suporte aos diretórios de trabal
 
 - [`cmd/agentflow/main.go`](/Users/yuri/git/diasYuri/agentflow/cmd/agentflow/main.go): ponto de entrada do binário e integração com sinais do sistema.
 - [`internal/cli/root.go`](/Users/yuri/git/diasYuri/agentflow/internal/cli/root.go): definição dos comandos `validate`, `graph`, `dry-run` e `run`, além do parsing de flags e inputs.
-- [`internal/cli/root_test.go`](/Users/yuri/git/diasYuri/agentflow/internal/cli/root_test.go): cobertura dos comportamentos visíveis do CLI, incluindo grafo Mermaid e persistência de runs fora de `--output-dir`.
+- [`internal/cli/root_test.go`](/Users/yuri/git/diasYuri/agentflow/internal/cli/root_test.go): cobertura dos comportamentos visíveis do CLI, incluindo grafo Mermaid e flags suportadas.
 - [`samples/README.md`](/Users/yuri/git/diasYuri/agentflow/samples/README.md): documentação de uso dos workflows de exemplo e dos diretórios de resolução.
 
 ## Observações relevantes
@@ -58,6 +58,5 @@ Os workflows são resolvidos por nome/ref, com suporte aos diretórios de trabal
 - `validate` e `graph` validam a definição do workflow, mas não executam etapas nem resolvem inputs externos.
 - `dry-run` não executa comandos; ele mostra o plano já resolvido em JSON para inspeção ou automação.
 - `run` pode receber `--dry-run` para validar e planejar sem executar, mas o comportamento padrão é executar de fato.
-- O diretório de saída indicado por `--output-dir` é ignorado na implementação atual; os runs continuam sendo gravados no storage local padrão.
+- A CLI não expõe `--output-dir`; os runs continuam sendo gravados no storage local padrão.
 - `run` imprime os metadados do run apenas quando a execução gera um `RunID`, o que facilita rastrear o artefato correspondente em disco.
-

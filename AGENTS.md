@@ -40,4 +40,4 @@
 ## Security & Configuration Tips
 
 - Review sample workflows before running them; `run` can execute local shell commands.
-- Be cautious with `--codex-path`, `--working-dir`, and `--output-dir`, especially when pointing outside the repository.
+- Be cautious with `--codex-path` and `--working-dir`, especially when pointing outside the repository.

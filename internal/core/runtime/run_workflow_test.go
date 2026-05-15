@@ -126,6 +126,33 @@ nodes:
 	}
 }
 
+func TestRunWorkflowRejectsInvalidProvidedInputType(t *testing.T) {
+	dir := t.TempDir()
+	workflowPath := writeWorkflow(t, dir, `
+version: "1"
+name: typed-inputs
+inputs:
+  enabled:
+    type: boolean
+    required: true
+nodes:
+  - id: ok
+    kind: noop
+`)
+	uc := newTestRunWorkflowUseCase(dir, &scriptedShell{}, eventmemory.New())
+
+	_, err := uc.Run(context.Background(), RunOptions{
+		WorkflowRef: workflowPath,
+		Inputs:      map[string]any{"enabled": "true"},
+	})
+	if err == nil {
+		t.Fatal("expected invalid input type error")
+	}
+	if !strings.Contains(err.Error(), `input "enabled"`) {
+		t.Fatalf("expected input context, got %v", err)
+	}
+}
+
 func TestRunWorkflowMapContainerExecutesNestedWorkflow(t *testing.T) {
 	dir := t.TempDir()
 	workflowPath := writeWorkflow(t, dir, `
@@ -632,6 +659,31 @@ nodes:
 	}
 	if warningIndex > completedIndex {
 		t.Fatalf("expected bash warning before completion, warning=%d completed=%d", warningIndex, completedIndex)
+	}
+}
+
+func TestRunWorkflowRequiresRequiredSecrets(t *testing.T) {
+	dir := t.TempDir()
+	workflowPath := writeWorkflow(t, dir, `
+version: "1"
+name: require-secret
+secrets:
+  api_token:
+    env: AGENTFLOW_MISSING_TEST_SECRET
+    required: true
+nodes:
+  - id: leak
+    kind: bash
+    command: "${secrets.api_token}"
+`)
+	uc := newTestRunWorkflowUseCase(dir, &scriptedShell{}, eventmemory.New())
+
+	_, err := uc.Run(context.Background(), RunOptions{WorkflowRef: workflowPath})
+	if err == nil {
+		t.Fatal("expected required secret error")
+	}
+	if !strings.Contains(err.Error(), `secret "api_token" requires environment variable "AGENTFLOW_MISSING_TEST_SECRET"`) {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

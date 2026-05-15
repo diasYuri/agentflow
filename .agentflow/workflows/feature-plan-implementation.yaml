@@ -1,0 +1,233 @@
+version: "1"
+name: feat-plan-impl
+description: "Recebe uma descrição de feature, gera planos em .agentflow/plans, implementa cada plano em ordem, revisa e aplica ajustes finais."
+
+inputs:
+  feature:
+    type: string
+    required: true
+
+defaults:
+  timeout: 1200
+  retries: 0
+  working_dir: "."
+
+execution:
+  max_concurrency: 1
+  fail_fast: true
+  max_node_output_bytes: 1048576
+
+nodes:
+  - id: create_implementation_plans
+    kind: agent
+    provider: codex
+    permission:
+      write: true
+    prompt: |
+      Você é um planejador técnico sênior trabalhando neste repositório.
+
+      Objetivo: quebrar a feature abaixo em planos de implementação Markdown dentro de `.agentflow/plans/`.
+
+      Feature:
+      ${inputs.feature}
+
+      Regras:
+      - Inspecione o repositório antes de planejar.
+      - Crie `.agentflow/plans/` se ainda não existir.
+      - Cada plano deve caber em uma sessão de implementação.
+      - Os planos devem ser ordenados, pequenos, objetivos e sem sobreposição desnecessária.
+      - Use nomes estáveis como `.agentflow/plans/001-slug-curto.md`.
+      - Cada arquivo de plano deve conter: objetivo, contexto, escopo, arquivos prováveis, passos de implementação, validação e riscos.
+      - Não implemente a feature neste node; apenas escreva os arquivos de plano.
+      - Retorne JSON válido seguindo o schema.
+    output_schema:
+      type: object
+      required:
+        - plans
+      additionalProperties: false
+      properties:
+        plans:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required:
+              - path
+              - description
+            additionalProperties: false
+            properties:
+              path:
+                type: string
+              description:
+                type: string
+
+  - id: implement_plans
+    kind: map
+    depends_on: [create_implementation_plans]
+    for_each: "${nodes.create_implementation_plans.output.plans}"
+    concurrency: 1
+    max_items: 50
+    fail_fast: true
+    nodes:
+      - id: implement_plan
+        kind: agent
+        provider: codex
+        permission:
+          write: true
+        prompt: |
+          Você é o agente de implementação e está operando no repositório atual.
+
+          Implemente exatamente este plano, respeitando a ordem definida pelo workflow:
+          ${item}
+
+          Regras:
+          - Leia o arquivo indicado em `path` antes de alterar código.
+          - Implemente somente o escopo do plano atual.
+          - Não reverta mudanças existentes ou mudanças de planos anteriores.
+          - Preserve padrões, estilo e arquitetura existentes.
+          - Adicione ou ajuste testes quando o plano exigir.
+          - Execute validações relevantes quando forem rápidas e locais.
+          - Retorne JSON válido seguindo o schema.
+        output_schema:
+          type: object
+          required:
+            - plan_path
+            - status
+            - summary
+            - files_changed
+            - validation
+            - follow_ups
+          additionalProperties: false
+          properties:
+            plan_path:
+              type: string
+            status:
+              type: string
+            summary:
+              type: string
+            files_changed:
+              type: array
+              items:
+                type: string
+            validation:
+              type: array
+              items:
+                type: string
+            follow_ups:
+              type: array
+              items:
+                type: string
+
+  - id: review_implementation
+    kind: agent
+    provider: codex
+    depends_on: [implement_plans]
+    prompt: |
+      Você é um revisor de código pragmático.
+
+      Revise a implementação completa depois da conclusão de todos os planos.
+
+      Feature original:
+      ${inputs.feature}
+
+      Planos gerados:
+      ${nodes.create_implementation_plans.output.plans}
+
+      Resultados das implementações:
+      ${nodes.implement_plans.outputs}
+
+      Regras:
+      - Priorize bugs reais, regressões, lacunas de teste e desalinhamento com a feature.
+      - Verifique se os planos foram implementados na ordem e sem escopo indevido.
+      - Não altere arquivos neste node; apenas revise.
+      - Retorne JSON válido seguindo o schema.
+    output_schema:
+      type: object
+      required:
+        - status
+        - findings
+        - recommended_fine_tuning
+      additionalProperties: false
+      properties:
+        status:
+          type: string
+        findings:
+          type: array
+          items:
+            type: object
+            required:
+              - severity
+              - description
+              - evidence
+              - recommendation
+            additionalProperties: false
+            properties:
+              severity:
+                type: string
+              description:
+                type: string
+              evidence:
+                type: string
+              recommendation:
+                type: string
+        recommended_fine_tuning:
+          type: array
+          items:
+            type: string
+
+  - id: fine_tune
+    kind: agent
+    provider: codex
+    depends_on: [review_implementation]
+    permission:
+      write: true
+    prompt: |
+      Você é o agente de ajuste fino final.
+
+      Aplique apenas os ajustes necessários com base na revisão.
+
+      Feature original:
+      ${inputs.feature}
+
+      Planos:
+      ${nodes.create_implementation_plans.output.plans}
+
+      Implementações:
+      ${nodes.implement_plans.outputs}
+
+      Revisão:
+      ${nodes.review_implementation.output}
+
+      Regras:
+      - Corrija findings relevantes da revisão.
+      - Mantenha o escopo estritamente ligado à feature e aos planos.
+      - Não reescreva a implementação sem necessidade.
+      - Preserve mudanças de planos anteriores.
+      - Execute validações relevantes quando forem rápidas e locais.
+      - Retorne um resumo final objetivo.
+    output_schema:
+      type: object
+      required:
+        - status
+        - summary
+        - files_changed
+        - validation
+        - remaining_risks
+      additionalProperties: false
+      properties:
+        status:
+          type: string
+        summary:
+          type: string
+        files_changed:
+          type: array
+          items:
+            type: string
+        validation:
+          type: array
+          items:
+            type: string
+        remaining_risks:
+          type: array
+          items:
+            type: string

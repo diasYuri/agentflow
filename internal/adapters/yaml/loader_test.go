@@ -84,6 +84,36 @@ func TestWorkflowRepositoryLoadReturnsHelpfulNotFoundError(t *testing.T) {
 	}
 }
 
+func TestWorkflowRepositoryLoadRejectsRemovedToolsField(t *testing.T) {
+	root := t.TempDir()
+	localRoot := filepath.Join(root, "agentflow", "workflows")
+	if err := os.MkdirAll(localRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(localRoot, "tools.yaml")
+	content := []byte(`version: "1"
+name: removed-tools
+nodes:
+  - id: agent
+    kind: agent
+    prompt: test
+    tools:
+      - shell
+`)
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	repo := NewWorkflowRepository(localRoot, filepath.Join(root, "home", ".agentflow", "workflows"))
+	_, _, err := repo.Load(context.Background(), "removed-tools")
+	if err == nil {
+		t.Fatal("expected removed tools field to be rejected")
+	}
+	if !strings.Contains(err.Error(), "field tools not found") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func writeWorkflowFile(t *testing.T, root string, filename string, name string, description string) string {
 	t.Helper()
 	if err := os.MkdirAll(root, 0o755); err != nil {

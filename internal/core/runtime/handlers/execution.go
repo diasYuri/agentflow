@@ -29,6 +29,10 @@ func (e *Executor) execute(ctx context.Context, req ExecutionRequest) (Result, e
 	if runID == "" {
 		runID = NewRunID(req.Plan.Workflow.Name, now)
 	}
+	secrets, err := loadSecrets(req.Plan.Workflow)
+	if err != nil {
+		return Result{}, err
+	}
 	handle, err := e.svc.Runs.CreateRun(ctx, corerun.RunMetadata{
 		RunID: runID, Workflow: req.Plan.Workflow.Name, WorkflowPath: req.WorkflowSourcePath, StartedAt: now,
 	})
@@ -43,7 +47,6 @@ func (e *Executor) execute(ctx context.Context, req ExecutionRequest) (Result, e
 			return Result{}, err
 		}
 	}
-	secrets := loadSecrets(req.Plan.Workflow)
 	state := newExecutionState(runID, req.Plan, req.Inputs, secrets, corerun.NewSecretMasker(secrets), now)
 	state.baseWorkingDir = req.WorkingDir
 	if err := e.emitState(ctx, state, corerun.Event{Type: "run.created", Data: map[string]any{"dir": handle.Dir}}); err != nil {

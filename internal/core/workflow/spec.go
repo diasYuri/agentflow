@@ -70,7 +70,6 @@ type NodeSpec struct {
 	Model        string          `json:"model,omitempty" yaml:"model"`
 	Prompt       string          `json:"prompt,omitempty" yaml:"prompt"`
 	System       string          `json:"system,omitempty" yaml:"system"`
-	Tools        []string        `json:"tools,omitempty" yaml:"tools"`
 	Sandbox      SandboxSpec     `json:"sandbox,omitempty" yaml:"sandbox"`
 	OutputSchema map[string]any  `json:"output_schema,omitempty" yaml:"output_schema"`
 

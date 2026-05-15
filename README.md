@@ -195,6 +195,7 @@ Arquivos padrão:
 - Socket: `~/.agentflow/agentflowd.sock`
 - PID: `~/.agentflow/agentflowd.pid`
 - Log do daemon: `~/.agentflow/agentflowd.log`
+- Índice do daemon: `~/.agentflow/agentflowd.sqlite`
 - Runs: `~/.agentflow/runs`
 
 ## Exemplos incluídos

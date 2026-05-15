@@ -2,10 +2,13 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/diasYuri/agentflow/internal/daemon"
 )
 
 func TestGraphCommandPrintsMermaid(t *testing.T) {
@@ -75,51 +78,69 @@ func TestWorkflowListReportsDaemonUnavailable(t *testing.T) {
 	}
 }
 
-func TestRunCommandIgnoresOutputDirFlag(t *testing.T) {
-	dir := t.TempDir()
-	home := filepath.Join(dir, "home")
-	if err := os.MkdirAll(home, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("HOME", home)
+func TestRunCommandDoesNotExposeOutputDirFlag(t *testing.T) {
+	cmd := NewRootCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"run", "cli-run", "-it", "--output-dir", "ignored"})
 
-	oldwd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected unknown flag error")
 	}
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
+	if !strings.Contains(err.Error(), "unknown flag: --output-dir") {
+		t.Fatalf("expected unknown output-dir flag, got %v", err)
+	}
+}
+
+func TestRunCommandSendsRuntimeOptionsToDaemon(t *testing.T) {
+	var got daemon.RunWorkflowRequest
+	oldClient := newWorkflowRunClient
+	newWorkflowRunClient = func(socketPath string) workflowRunClient {
+		return workflowRunClientFunc(func(ctx context.Context, req daemon.RunWorkflowRequest) (daemon.RunWorkflowResponse, error) {
+			got = req
+			return daemon.RunWorkflowResponse{Run: daemon.WorkflowRun{ID: "run-1", RunDir: "/tmp/run-1", Status: "created"}}, nil
+		})
 	}
 	t.Cleanup(func() {
-		_ = os.Chdir(oldwd)
+		newWorkflowRunClient = oldClient
 	})
-
-	workflowDir := filepath.Join(dir, ".agentflow", "workflows")
-	if err := os.MkdirAll(workflowDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(workflowDir, "cli-run.yaml"), []byte(`
-version: "1"
-name: cli-run
-nodes:
-  - id: ok
-    kind: noop
-`), 0o644); err != nil {
-		t.Fatal(err)
-	}
 
 	cmd := NewRootCommand()
 	var out bytes.Buffer
 	cmd.SetOut(&out)
-	cmd.SetArgs([]string{"run", "cli-run", "-it", "--output-dir", filepath.Join(dir, "ignored")})
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{
+		"run", "daemon-run",
+		"--codex-path", "/tmp/codex",
+		"--events-jsonl", "/tmp/events.jsonl",
+		"--log-format", "json",
+		"--working-dir", "/tmp/work",
+	})
 
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), filepath.Join(home, ".agentflow", "runs")) {
-		t.Fatalf("expected run dir under home, got:\n%s", out.String())
+	if got.WorkflowRef != "daemon-run" {
+		t.Fatalf("workflow ref mismatch: got %q", got.WorkflowRef)
 	}
-	if strings.Contains(out.String(), filepath.Join(dir, "ignored")) {
-		t.Fatalf("output-dir flag affected storage:\n%s", out.String())
+	if got.CodexPath != "/tmp/codex" {
+		t.Fatalf("codex path mismatch: got %q", got.CodexPath)
 	}
+	if got.EventsJSONL != "/tmp/events.jsonl" {
+		t.Fatalf("events jsonl mismatch: got %q", got.EventsJSONL)
+	}
+	if got.LogFormat != "json" {
+		t.Fatalf("log format mismatch: got %q", got.LogFormat)
+	}
+	if got.WorkingDir != "/tmp/work" {
+		t.Fatalf("working dir mismatch: got %q", got.WorkingDir)
+	}
+}
+
+type workflowRunClientFunc func(context.Context, daemon.RunWorkflowRequest) (daemon.RunWorkflowResponse, error)
+
+func (f workflowRunClientFunc) RunWorkflow(ctx context.Context, req daemon.RunWorkflowRequest) (daemon.RunWorkflowResponse, error) {
+	return f(ctx, req)
 }

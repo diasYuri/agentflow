@@ -18,6 +18,7 @@ type Config struct {
 	PIDPath    string
 	LogPath    string
 	RunRoot    string
+	DBPath     string
 	CodexPath  string
 }
 
@@ -28,6 +29,7 @@ func DefaultConfig() Config {
 		PIDPath:    filepath.Join(root, PIDName),
 		LogPath:    filepath.Join(root, LogName),
 		RunRoot:    filepath.Join(root, "runs"),
+		DBPath:     filepath.Join(root, "agentflowd.sqlite"),
 	}
 }
 
@@ -52,6 +54,11 @@ type RunWorkflowRequest struct {
 	Vars           map[string]any `json:"vars,omitempty"`
 	MaxConcurrency int            `json:"max_concurrency,omitempty"`
 	WorkingDir     string         `json:"working_dir,omitempty"`
+	CodexPath      string         `json:"codex_path,omitempty"`
+	LogFormat      string         `json:"log_format,omitempty"`
+	EventsJSONL    string         `json:"events_jsonl,omitempty"`
+	RunRoot        string         `json:"run_root,omitempty"`
+	OutputDir      string         `json:"output_dir,omitempty"`
 	DryRun         bool           `json:"dry_run,omitempty"`
 }
 

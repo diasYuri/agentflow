@@ -1,7 +1,0 @@
-{
-  "run_id": "1970-01-01T000001Z-agent-permissions",
-  "workflow": "agent-permissions",
-  "workflow_path": "/var/folders/tf/7zgm_5115vjc9x3162_qjg140000gn/T/TestRunWorkflowMapsPermissionWriteToAgentSandbox1882206881/001/workflow.yaml",
-  "started_at": "1970-01-01T00:00:01Z",
-  "output_dir": ".agentflow/runs"
-}

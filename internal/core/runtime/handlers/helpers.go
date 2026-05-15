@@ -30,7 +30,6 @@ type Options struct {
 	Vars           map[string]any
 	MaxConcurrency int
 	WorkingDir     string
-	OutputDir      string
 	DryRun         bool
 }
 
@@ -88,17 +87,24 @@ func mergeVars(spec *coreworkflow.WorkflowSpec, overrides map[string]any) {
 	}
 }
 
-func loadSecrets(spec coreworkflow.WorkflowSpec) map[string]any {
+func loadSecrets(spec coreworkflow.WorkflowSpec) (map[string]any, error) {
 	secrets := map[string]any{}
 	for name, secret := range spec.Secrets {
 		if secret.Env == "" {
+			if secret.Required {
+				return nil, fmt.Errorf("secret %q env is required", name)
+			}
 			continue
 		}
 		if value, ok := os.LookupEnv(secret.Env); ok {
 			secrets[name] = value
+			continue
+		}
+		if secret.Required {
+			return nil, fmt.Errorf("secret %q requires environment variable %q", name, secret.Env)
 		}
 	}
-	return secrets
+	return secrets, nil
 }
 
 func effectiveRetries(spec coreworkflow.WorkflowSpec, node coreworkflow.NodeSpec) int {

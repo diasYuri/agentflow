@@ -27,6 +27,7 @@ type Manager struct {
 	cfg           Config
 	runSupervisor serviceAdder
 	logger        *slog.Logger
+	store         RunStore
 
 	mu      sync.Mutex
 	records map[string]*runRecord
@@ -38,15 +39,22 @@ type runRecord struct {
 }
 
 func NewManager(cfg Config, runSupervisor serviceAdder, logger *slog.Logger) *Manager {
+	return NewManagerWithStore(cfg, runSupervisor, logger, nil)
+}
+
+func NewManagerWithStore(cfg Config, runSupervisor serviceAdder, logger *slog.Logger, store RunStore) *Manager {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Manager{
+	manager := &Manager{
 		cfg:           cfg,
 		runSupervisor: runSupervisor,
 		logger:        logger,
+		store:         store,
 		records:       map[string]*runRecord{},
 	}
+	manager.loadPersistedRuns(context.Background())
+	return manager
 }
 
 func (m *Manager) Serve(ctx context.Context) error {
@@ -61,16 +69,19 @@ func (m *Manager) StartWorkflow(req RunWorkflowRequest) (WorkflowRun, error) {
 	}
 	now := time.Now()
 	runID := runworkflow.NewRunID(req.WorkflowRef, now)
+	runRoot := firstNonEmpty(req.RunRoot, req.OutputDir, m.cfg.RunRoot)
 	run := WorkflowRun{
 		ID:        runID,
 		Workflow:  req.WorkflowRef,
-		RunDir:    filepath.Join(m.cfg.RunRoot, runID),
+		RunDir:    filepath.Join(runRoot, runID),
 		Status:    corerun.RunCreated,
 		StartedAt: now,
 	}
 	uc, err := app.NewRunWorkflowUseCase(app.RuntimeOptions{
-		CodexPath: m.cfg.CodexPath,
-		RunRoot:   m.cfg.RunRoot,
+		CodexPath:   firstNonEmpty(req.CodexPath, m.cfg.CodexPath),
+		LogFormat:   req.LogFormat,
+		EventsJSONL: req.EventsJSONL,
+		RunRoot:     runRoot,
 	})
 	if err != nil {
 		return WorkflowRun{}, err
@@ -79,8 +90,18 @@ func (m *Manager) StartWorkflow(req RunWorkflowRequest) (WorkflowRun, error) {
 	m.mu.Lock()
 	m.records[runID] = &runRecord{run: run, service: service}
 	m.mu.Unlock()
+	m.persist(run)
 	m.runSupervisor.Add(service)
 	return run, nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func (m *Manager) ListWorkflows() []WorkflowRun {
@@ -113,10 +134,16 @@ func (m *Manager) CancelWorkflow(runID string) (WorkflowRun, error) {
 	if !ok {
 		return WorkflowRun{}, os.ErrNotExist
 	}
-	record.service.Cancel()
+	if record.service != nil {
+		record.service.Cancel()
+	}
 	m.mark(runID, func(run *WorkflowRun) {
 		if run.Status == corerun.RunCreated || run.Status == corerun.RunRunning {
 			run.Status = corerun.RunCancelled
+			run.FinishedAt = time.Now()
+			if record.service == nil {
+				run.Error = "workflow is not active in this daemon process"
+			}
 		}
 	})
 	run, _ := m.WorkflowStatus(runID)
@@ -178,6 +205,7 @@ func (m *Manager) mark(runID string, update func(*WorkflowRun)) {
 	defer m.mu.Unlock()
 	if record, ok := m.records[runID]; ok {
 		update(&record.run)
+		m.persistLocked(record.run)
 	}
 }
 
@@ -189,7 +217,44 @@ func (m *Manager) cancelAll() {
 	}
 	m.mu.Unlock()
 	for _, record := range records {
-		record.service.Cancel()
+		if record.service != nil {
+			record.service.Cancel()
+		}
+	}
+}
+
+func (m *Manager) loadPersistedRuns(ctx context.Context) {
+	if m.store == nil {
+		return
+	}
+	runs, err := m.store.LoadRuns(ctx)
+	if err != nil {
+		m.logger.Error("load persisted workflow runs", "error", err)
+		return
+	}
+	for _, run := range runs {
+		if run.Status == corerun.RunCreated || run.Status == corerun.RunRunning {
+			run.Status = corerun.RunCancelled
+			run.FinishedAt = time.Now()
+			run.Error = "daemon stopped before workflow completed"
+			m.persist(run)
+		}
+		m.records[run.ID] = &runRecord{run: run}
+	}
+}
+
+func (m *Manager) persist(run WorkflowRun) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.persistLocked(run)
+}
+
+func (m *Manager) persistLocked(run WorkflowRun) {
+	if m.store == nil {
+		return
+	}
+	if err := m.store.UpsertRun(context.Background(), run); err != nil {
+		m.logger.Error("persist workflow run", "run_id", run.ID, "error", err)
 	}
 }
 

@@ -25,7 +25,6 @@ type options struct {
 	vars           []string
 	maxConcurrency int
 	workingDir     string
-	outputDir      string
 	codexPath      string
 	logFormat      string
 	eventsJSONL    string
@@ -33,6 +32,14 @@ type options struct {
 	dryRun         bool
 	interactive    bool
 	noColor        bool
+}
+
+type workflowRunClient interface {
+	RunWorkflow(context.Context, daemon.RunWorkflowRequest) (daemon.RunWorkflowResponse, error)
+}
+
+var newWorkflowRunClient = func(socketPath string) workflowRunClient {
+	return daemon.NewClient(socketPath)
 }
 
 func NewRootCommand() *cobra.Command {
@@ -116,7 +123,7 @@ func newDryRunCommand(opts *options) *cobra.Command {
 			}
 			plan, resolved, err := uc.DryRun(cmd.Context(), runworkflow.RunOptions{
 				WorkflowRef: args[0], Inputs: inputs, Vars: vars, MaxConcurrency: local.maxConcurrency,
-				WorkingDir: local.workingDir, OutputDir: local.outputDir,
+				WorkingDir: local.workingDir,
 			})
 			if err != nil {
 				return err
@@ -151,7 +158,7 @@ func newRunCommand(opts *options) *cobra.Command {
 			}
 			result, err := uc.Run(cmd.Context(), runworkflow.RunOptions{
 				WorkflowRef: args[0], Inputs: inputs, Vars: vars, MaxConcurrency: local.maxConcurrency,
-				WorkingDir: local.workingDir, OutputDir: local.outputDir, DryRun: local.dryRun,
+				WorkingDir: local.workingDir, DryRun: local.dryRun,
 			})
 			if result.RunID != "" {
 				fmt.Fprintf(cmd.OutOrStdout(), "run_id: %s\nrun_dir: %s\nstatus: %s\n", result.RunID, result.RunDir, result.Status)
@@ -198,7 +205,7 @@ func newWorkflowRunCommand(opts *options) *cobra.Command {
 				}
 				result, err := uc.Run(cmd.Context(), runworkflow.RunOptions{
 					WorkflowRef: args[0], Inputs: inputs, Vars: vars, MaxConcurrency: local.maxConcurrency,
-					WorkingDir: local.workingDir, OutputDir: local.outputDir, DryRun: local.dryRun,
+					WorkingDir: local.workingDir, DryRun: local.dryRun,
 				})
 				if result.RunID != "" {
 					fmt.Fprintf(cmd.OutOrStdout(), "run_id: %s\nrun_dir: %s\nstatus: %s\n", result.RunID, result.RunDir, result.Status)
@@ -379,7 +386,6 @@ func addCommonFlags(cmd *cobra.Command, opts *options) {
 	cmd.Flags().StringArrayVar(&opts.vars, "var", nil, "workflow var override key=value, repeatable")
 	cmd.Flags().IntVar(&opts.maxConcurrency, "max-concurrency", 0, "override execution.max_concurrency")
 	cmd.Flags().StringVar(&opts.workingDir, "working-dir", ".", "base working directory for the run")
-	cmd.Flags().StringVar(&opts.outputDir, "output-dir", "", "run output directory (ignored)")
 	cmd.Flags().StringVar(&opts.codexPath, "codex-path", "", "path to codex binary")
 	cmd.Flags().StringVar(&opts.logFormat, "log-format", "text", "text or json")
 	cmd.Flags().StringVar(&opts.eventsJSONL, "events-jsonl", "", "events JSONL path")
@@ -412,12 +418,15 @@ func runWorkflowViaDaemon(cmd *cobra.Command, workflowRef string, opts *options)
 	if err != nil {
 		return err
 	}
-	resp, err := daemon.NewClient("").RunWorkflow(cmd.Context(), daemon.RunWorkflowRequest{
+	resp, err := newWorkflowRunClient("").RunWorkflow(cmd.Context(), daemon.RunWorkflowRequest{
 		WorkflowRef:    workflowRef,
 		Inputs:         inputs,
 		Vars:           vars,
 		MaxConcurrency: opts.maxConcurrency,
 		WorkingDir:     opts.workingDir,
+		CodexPath:      opts.codexPath,
+		LogFormat:      opts.logFormat,
+		EventsJSONL:    opts.eventsJSONL,
 		DryRun:         opts.dryRun,
 	})
 	if err != nil {
