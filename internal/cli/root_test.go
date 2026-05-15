@@ -114,6 +114,7 @@ func TestRunCommandSendsRuntimeOptionsToDaemon(t *testing.T) {
 	cmd.SetArgs([]string{
 		"run", "daemon-run",
 		"--codex-path", "/tmp/codex",
+		"--claude-path", "/tmp/claude",
 		"--events-jsonl", "/tmp/events.jsonl",
 		"--log-format", "json",
 		"--working-dir", "/tmp/work",
@@ -127,6 +128,9 @@ func TestRunCommandSendsRuntimeOptionsToDaemon(t *testing.T) {
 	}
 	if got.CodexPath != "/tmp/codex" {
 		t.Fatalf("codex path mismatch: got %q", got.CodexPath)
+	}
+	if got.ClaudePath != "/tmp/claude" {
+		t.Fatalf("claude path mismatch: got %q", got.ClaudePath)
 	}
 	if got.EventsJSONL != "/tmp/events.jsonl" {
 		t.Fatalf("events jsonl mismatch: got %q", got.EventsJSONL)

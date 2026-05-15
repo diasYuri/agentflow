@@ -28,6 +28,8 @@ nodes:
 
       Objetivo: quebrar a feature abaixo em planos de implementação Markdown dentro de `.agentflow/plans/`.
 
+      Não crie mais plans do que o necessário para implementar a feature.
+
       Feature:
       ${inputs.feature}
 

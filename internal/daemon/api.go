@@ -20,6 +20,7 @@ type Config struct {
 	RunRoot    string
 	DBPath     string
 	CodexPath  string
+	ClaudePath string
 }
 
 func DefaultConfig() Config {
@@ -55,6 +56,7 @@ type RunWorkflowRequest struct {
 	MaxConcurrency int            `json:"max_concurrency,omitempty"`
 	WorkingDir     string         `json:"working_dir,omitempty"`
 	CodexPath      string         `json:"codex_path,omitempty"`
+	ClaudePath     string         `json:"claude_path,omitempty"`
 	LogFormat      string         `json:"log_format,omitempty"`
 	EventsJSONL    string         `json:"events_jsonl,omitempty"`
 	RunRoot        string         `json:"run_root,omitempty"`

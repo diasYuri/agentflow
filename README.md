@@ -30,7 +30,7 @@ AgentFlow foi feito para tirar fluxos repetitivos da cabeça do time e colocá-l
 Requisitos:
 
 - Go 1.24+
-- Codex CLI no `PATH` para workflows com `kind: agent`
+- Codex CLI ou Claude Code CLI no `PATH` para workflows com `kind: agent`
 
 Build dos binários:
 
@@ -73,12 +73,30 @@ go run ./cmd/agentflow run samples/workflows/local-health-check.yaml -it
 
 ## Workflows com agentes
 
-Workflows que usam `kind: agent` chamam o provider `codex`. Informe o caminho do binário quando necessário:
+Workflows que usam `kind: agent` podem chamar os providers `codex` ou `claude`. Quando `provider` é omitido, o padrão continua sendo `codex`. Informe o caminho do binário quando necessário:
 
 ```bash
 go run ./cmd/agentflow run samples/workflows/fix-github-issue.yaml \
   --input-json samples/inputs/fix-issue.json \
   --codex-path "$(which codex)" \
+  -it
+```
+
+Exemplo mínimo usando Claude Code:
+
+```yaml
+nodes:
+  - id: summarize
+    kind: agent
+    provider: claude
+    permission:
+      write: false
+    prompt: "Resuma o estado do projeto sem alterar arquivos."
+```
+
+```bash
+go run ./cmd/agentflow run samples/workflows/claude-code-review.yaml \
+  --claude-path "$(which claude)" \
   -it
 ```
 
@@ -155,6 +173,7 @@ Flags úteis:
 --max-concurrency <n>     # sobrescreve execution.max_concurrency
 --working-dir <path>      # diretório base da execução
 --codex-path <path>       # caminho para o binário codex
+--claude-path <path>      # caminho para o binário claude
 --events-jsonl <path>     # grava eventos em JSONL
 ```
 
@@ -164,7 +183,7 @@ Um workflow declara `version`, `name`, `inputs`, `vars`, `defaults`, `execution`
 
 Tipos de node suportados:
 
-- `agent`: delega trabalho para um agente Codex.
+- `agent`: delega trabalho para um agente Codex ou Claude Code.
 - `bash`: executa comandos locais e captura saída.
 - `transform`: transforma dados entre etapas.
 - `map`: expande uma lista em execuções paralelizáveis.
@@ -206,7 +225,8 @@ Arquivos padrão:
 - `security-review.yaml`: faz auditoria defensiva por áreas do repositório.
 - `release-notes.yaml`: gera release notes a partir de commits e PRs.
 - `product-spec-to-implementation.yaml`: transforma uma spec de produto em plano e implementação.
-- `local-health-check.yaml`: roda checagens locais sem depender do Codex.
+- `local-health-check.yaml`: roda checagens locais sem depender de agente.
+- `claude-code-review.yaml`: sample mínimo com `provider: claude`, permissão somente leitura e saída estruturada.
 
 ## Segurança
 
@@ -218,7 +238,7 @@ agentflow graph <workflow>
 agentflow dry-run <workflow>
 ```
 
-Revise especialmente nodes `bash`, permissões de agents, `--working-dir`, `--codex-path` e qualquer workflow vindo de fora do seu repositório.
+Revise especialmente nodes `bash`, permissões de agents, `--working-dir`, `--codex-path`, `--claude-path` e qualquer workflow vindo de fora do seu repositório.
 
 ## Documentação
 
@@ -229,4 +249,5 @@ Para começar pelos fundamentos:
 - [`docs/cli.md`](docs/cli.md)
 - [`docs/workflow-dsl.md`](docs/workflow-dsl.md)
 - [`docs/runtime-execution.md`](docs/runtime-execution.md)
+- [`docs/claude-agent.md`](docs/claude-agent.md)
 - [`samples/README.md`](samples/README.md)

@@ -3,6 +3,7 @@
 ## Objetivo
 
 Esta feature conecta nós `agent` ao Codex CLI local, usando `codex` como provider padrão.
+Para Claude Code, veja [`docs/claude-agent.md`](/Users/yuri/git/diasYuri/agentflow/docs/claude-agent.md).
 O foco é permitir que workflows executem tarefas de geração, análise e revisão com o mesmo
 runtime local do projeto, sem exigir uma camada extra de orquestração.
 
@@ -90,7 +91,7 @@ Quando o turn retorna, o provider monta o resultado do agente:
 
 ## Observações relevantes
 
-- `codex` é o provider esperado para nós `agent` quando `provider` não é especificado.
+- `codex` é o provider padrão para nós `agent` quando `provider` não é especificado; `provider: claude` também é suportado para Claude Code.
 - `permission.write` é obrigatório quando o bloco `permission` existe no node `agent`.
 - O sandbox explícito do node tem prioridade; o fallback via `permission.write` só entra em
   cena quando o campo `sandbox` não foi declarado.
@@ -101,4 +102,3 @@ Quando o turn retorna, o provider monta o resultado do agente:
   JSON válido; caso contrário, o texto bruto continua disponível em `Text`.
 - Os eventos brutos preservam o histórico emitido pelo turn, o que facilita auditoria e debug
   sem depender apenas do texto final.
-

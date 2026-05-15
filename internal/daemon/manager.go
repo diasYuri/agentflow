@@ -78,7 +78,8 @@ func (m *Manager) StartWorkflow(req RunWorkflowRequest) (WorkflowRun, error) {
 		StartedAt: now,
 	}
 	uc, err := app.NewRunWorkflowUseCase(app.RuntimeOptions{
-		CodexPath:   firstNonEmpty(req.CodexPath, m.cfg.CodexPath),
+		CodexPath:   firstNonEmpty(req.CodexPath, m.cfg.CodexPath, os.Getenv("AGENTFLOW_CODEX_PATH")),
+		ClaudePath:  firstNonEmpty(req.ClaudePath, m.cfg.ClaudePath, os.Getenv("AGENTFLOW_CLAUDE_PATH")),
 		LogFormat:   req.LogFormat,
 		EventsJSONL: req.EventsJSONL,
 		RunRoot:     runRoot,

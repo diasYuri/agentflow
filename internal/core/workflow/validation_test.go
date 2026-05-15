@@ -96,6 +96,20 @@ func TestValidateAllowsAgentPermissionWrite(t *testing.T) {
 	}
 }
 
+func TestValidateAllowsClaudeAgentProvider(t *testing.T) {
+	spec := &WorkflowSpec{
+		Version: "1",
+		Name:    "claude-provider",
+		Nodes: []NodeSpec{
+			{ID: "implement", Kind: NodeKindAgent, Provider: "claude", Prompt: "do it"},
+		},
+	}
+
+	if err := Validate(spec, DefaultProviders()); err != nil {
+		t.Fatalf("expected claude provider to validate, got %v", err)
+	}
+}
+
 func TestValidateRejectsPermissionOnNonAgentNode(t *testing.T) {
 	write := true
 	spec := &WorkflowSpec{

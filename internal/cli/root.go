@@ -26,6 +26,7 @@ type options struct {
 	maxConcurrency int
 	workingDir     string
 	codexPath      string
+	claudePath     string
 	logFormat      string
 	eventsJSONL    string
 	graphFormat    string
@@ -324,8 +325,12 @@ func newDaemonStartCommand(opts *options) *cobra.Command {
 			proc := exec.Command(path)
 			proc.Stdout = logFile
 			proc.Stderr = logFile
+			proc.Env = os.Environ()
 			if opts.codexPath != "" {
-				proc.Env = append(os.Environ(), "AGENTFLOW_CODEX_PATH="+opts.codexPath)
+				proc.Env = append(proc.Env, "AGENTFLOW_CODEX_PATH="+opts.codexPath)
+			}
+			if opts.claudePath != "" {
+				proc.Env = append(proc.Env, "AGENTFLOW_CLAUDE_PATH="+opts.claudePath)
 			}
 			if err := proc.Start(); err != nil {
 				_ = logFile.Close()
@@ -346,6 +351,7 @@ func newDaemonStartCommand(opts *options) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&opts.codexPath, "codex-path", "", "path to codex binary for daemon workflow runs")
+	cmd.Flags().StringVar(&opts.claudePath, "claude-path", "", "path to claude binary for daemon workflow runs")
 	return cmd
 }
 
@@ -387,6 +393,7 @@ func addCommonFlags(cmd *cobra.Command, opts *options) {
 	cmd.Flags().IntVar(&opts.maxConcurrency, "max-concurrency", 0, "override execution.max_concurrency")
 	cmd.Flags().StringVar(&opts.workingDir, "working-dir", ".", "base working directory for the run")
 	cmd.Flags().StringVar(&opts.codexPath, "codex-path", "", "path to codex binary")
+	cmd.Flags().StringVar(&opts.claudePath, "claude-path", "", "path to claude binary")
 	cmd.Flags().StringVar(&opts.logFormat, "log-format", "text", "text or json")
 	cmd.Flags().StringVar(&opts.eventsJSONL, "events-jsonl", "", "events JSONL path")
 	cmd.Flags().BoolVar(&opts.noColor, "no-color", false, "disable color output")
@@ -395,6 +402,7 @@ func addCommonFlags(cmd *cobra.Command, opts *options) {
 func buildUseCase(opts *options) (*runworkflow.RunWorkflowUseCase, error) {
 	return app.NewRunWorkflowUseCase(app.RuntimeOptions{
 		CodexPath:   opts.codexPath,
+		ClaudePath:  opts.claudePath,
 		LogFormat:   opts.logFormat,
 		EventsJSONL: opts.eventsJSONL,
 		EventWriter: os.Stdout,
@@ -425,6 +433,7 @@ func runWorkflowViaDaemon(cmd *cobra.Command, workflowRef string, opts *options)
 		MaxConcurrency: opts.maxConcurrency,
 		WorkingDir:     opts.workingDir,
 		CodexPath:      opts.codexPath,
+		ClaudePath:     opts.claudePath,
 		LogFormat:      opts.logFormat,
 		EventsJSONL:    opts.eventsJSONL,
 		DryRun:         opts.dryRun,

@@ -26,6 +26,9 @@ func main() {
 	if value := os.Getenv("AGENTFLOW_CODEX_PATH"); value != "" {
 		cfg.CodexPath = value
 	}
+	if value := os.Getenv("AGENTFLOW_CLAUDE_PATH"); value != "" {
+		cfg.ClaudePath = value
+	}
 	if err := os.MkdirAll(filepath.Dir(cfg.LogPath), 0o755); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

@@ -4,8 +4,11 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/diasYuri/agentflow/internal/core/workflow"
 )
 
 func TestWorkflowRepositoryLoadPrefersLocalScope(t *testing.T) {
@@ -111,6 +114,40 @@ nodes:
 	}
 	if !strings.Contains(err.Error(), "field tools not found") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestWorkflowRepositoryLoadAcceptsDirectWorkflowPath(t *testing.T) {
+	root := t.TempDir()
+	path := writeWorkflowFile(t, root, "direct.yaml", "direct-workflow", "direct")
+
+	repo := NewWorkflowRepository(filepath.Join(root, "missing-local"), filepath.Join(root, "missing-global"))
+	spec, sourcePath, err := repo.Load(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.Name != "direct-workflow" {
+		t.Fatalf("expected direct workflow, got %q", spec.Name)
+	}
+	if sourcePath != filepath.Clean(path) {
+		t.Fatalf("expected direct source path, got %q", sourcePath)
+	}
+}
+
+func TestClaudeSampleWorkflowValidates(t *testing.T) {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve test path")
+	}
+	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
+	path := filepath.Join(root, "samples", "workflows", "claude-code-review.yaml")
+
+	spec, err := decodeWorkflow(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := workflow.Validate(spec, workflow.DefaultProviders()); err != nil {
+		t.Fatalf("expected claude sample to validate: %v", err)
 	}
 }
 

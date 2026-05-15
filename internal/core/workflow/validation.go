@@ -369,5 +369,5 @@ func (s StaticProviderSet) HasProvider(name string) bool {
 }
 
 func DefaultProviders() StaticProviderSet {
-	return StaticProviderSet{"codex": {}}
+	return StaticProviderSet{"codex": {}, "claude": {}}
 }

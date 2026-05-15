@@ -1,0 +1,44 @@
+version: "1"
+name: claude-code-review
+description: "Revisao minima somente leitura usando Claude Code."
+
+defaults:
+  timeout: 300
+  retries: 0
+  working_dir: "."
+
+execution:
+  max_concurrency: 1
+  fail_fast: true
+
+nodes:
+  - id: review_workspace
+    kind: agent
+    provider: claude
+    permission:
+      write: false
+    system: |
+      You are reviewing the repository in read-only mode.
+      Do not modify files.
+      Return only valid JSON matching the schema.
+    output_schema:
+      type: object
+      properties:
+        summary:
+          type: string
+        findings:
+          type: array
+          items:
+            type: string
+        validation:
+          type: array
+          items:
+            type: string
+      required:
+        - summary
+        - findings
+        - validation
+      additionalProperties: false
+    prompt: |
+      Inspect the repository at a high level and summarize any obvious follow-up work.
+      Keep findings concise and do not change files.

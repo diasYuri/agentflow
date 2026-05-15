@@ -35,6 +35,13 @@ func (r *WorkflowRepository) Load(ctx context.Context, ref string) (*workflow.Wo
 	if name == "" {
 		return nil, "", fmt.Errorf("workflow name is required")
 	}
+	if isWorkflowPath(name) {
+		spec, err := decodeWorkflow(name)
+		if err != nil {
+			return nil, "", err
+		}
+		return spec, filepath.Clean(name), nil
+	}
 
 	localSpec, localPath, localErrs, err := r.findInScope(ctx, r.localRoot, name)
 	if err != nil {
@@ -117,6 +124,20 @@ func (r *WorkflowRepository) findInScope(ctx context.Context, root string, name 
 type scopeMatch struct {
 	spec *workflow.WorkflowSpec
 	path string
+}
+
+func isWorkflowPath(ref string) bool {
+	ext := strings.ToLower(filepath.Ext(ref))
+	if ext != ".yaml" && ext != ".yml" {
+		return false
+	}
+	if strings.Contains(ref, string(filepath.Separator)) || filepath.IsAbs(ref) {
+		return true
+	}
+	if _, err := os.Stat(ref); err == nil {
+		return true
+	}
+	return false
 }
 
 func decodeWorkflow(path string) (*workflow.WorkflowSpec, error) {

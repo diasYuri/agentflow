@@ -35,7 +35,7 @@ O pipeline de execução local `-it` usa o caso de uso `RunWorkflowUseCase` com:
 - repositório YAML para carregar o workflow;
 - repositório local de runs para persistir artefatos;
 - sink de eventos em `stdout` e, opcionalmente, em JSONL;
-- provider de agentes `codex` quando o workflow pede `kind: agent`;
+- providers de agentes `codex` e `claude` quando o workflow pede `kind: agent`;
 - runner de shell para etapas locais.
 
 ### Resolução de entradas
@@ -47,7 +47,10 @@ As entradas são combinadas nesta ordem:
 3. `--var key=value` injeta variáveis separadas para o workflow;
 4. `--max-concurrency` sobrescreve `execution.max_concurrency` quando informado;
 5. `--working-dir` define o diretório base da execução;
-6. `--codex-path` aponta para o binário `codex` usado pelo provider de agentes.
+6. `--codex-path` aponta para o binário `codex` usado pelo provider `codex`.
+7. `--claude-path` aponta para o binário `claude` usado pelo provider `claude`.
+
+Quando a execução vai para o daemon, esses caminhos são enviados na requisição do run. Ao iniciar o `agentflowd`, a CLI também propaga `--codex-path` como `AGENTFLOW_CODEX_PATH` e `--claude-path` como `AGENTFLOW_CLAUDE_PATH`. Se o caminho do Claude não for informado, o adapter ainda pode resolver `CLAUDE_PATH` ou o binário `claude` no `PATH`.
 
 O parser tenta converter valores simples para `bool`, `int`, `float` ou JSON válido antes de manter a string bruta.
 
@@ -71,5 +74,6 @@ Os workflows são resolvidos por nome/ref, seguindo a convenção documentada em
 - `dry-run` não executa comandos; ele mostra o plano já resolvido em JSON para inspeção ou automação.
 - `run` aceita `--dry-run` para validar e planejar sem executar; por padrão essa solicitação vai para o daemon.
 - `run -it` é o caminho compatível para executar no processo da CLI.
+- `provider: claude` exige Claude Code CLI disponível via `--claude-path`, `AGENTFLOW_CLAUDE_PATH`, `CLAUDE_PATH` ou `PATH`.
 - A CLI não expõe `--output-dir`; os runs são gravados no storage local padrão em `.agentflow/runs` ou `~/.agentflow/runs`, dependendo do modo de execução.
 - `run` imprime os metadados do run apenas quando a execução gera um `RunID`, o que facilita rastrear o artefato correspondente em disco.

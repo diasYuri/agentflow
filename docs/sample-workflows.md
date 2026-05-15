@@ -4,7 +4,7 @@
 
 Esta página documenta os workflows de exemplo que vivem em `samples/` e funciona como referência viva dos padrões suportados pela ferramenta. O conjunto cobre cenários comuns de uso local e mostra, em YAML real, como combinar nós `bash`, `agent`, `transform`, `map`, `for_each`, `output_schema`, `retries` e `continue_on_error`.
 
-Os exemplos são pensados para leitura, validação e execução local. Eles não dependem de UI nem de infraestrutura externa além do Codex CLI quando o workflow usa nós `agent`.
+Os exemplos são pensados para leitura, validação e execução local. Eles não dependem de UI nem de infraestrutura externa além do CLI do provider escolhido quando o workflow usa nós `agent`.
 
 ## Como funciona
 
@@ -17,7 +17,7 @@ O fluxo recomendado é:
 3. simular a execução com `go run ./cmd/agentflow dry-run <workflow.yaml> --input-json <file>`;
 4. executar de fato com `go run ./cmd/agentflow run <workflow.yaml> --input-json <file>`.
 
-Os exemplos com `kind: agent` usam o provider `codex` e exigem o Codex CLI disponível no `PATH` ou configurado via `--codex-path`. O workflow `local-health-check` é o único da coleção que roda apenas comandos locais, sem depender de agente.
+Os exemplos com `kind: agent` usam `codex` por padrão e podem optar por `provider: claude`. Workflows Codex exigem o Codex CLI no `PATH` ou `--codex-path`; workflows Claude exigem Claude Code CLI no `PATH`, `CLAUDE_PATH`, `AGENTFLOW_CLAUDE_PATH` ou `--claude-path`. O workflow `local-health-check` roda apenas comandos locais, sem depender de agente.
 
 ## Workflows incluídos
 
@@ -28,6 +28,7 @@ Os exemplos com `kind: agent` usam o provider `codex` e exigem o Codex CLI dispo
 - `release-notes.yaml`: geração de release notes com `transform`, `output_schema` e validação em dois passos para manter o JSON consistente.
 - `product-spec-to-implementation.yaml`: leitura de uma spec em Markdown, extração de specs técnicas, `map` aninhado para quebrar e implementar planos, `output_schema` e `continue_on_error` para preservar o avanço do conjunto.
 - `test-failure-debugging.yaml`: reprodução de falha de teste, diagnóstico condicionado por `when`, tentativa de correção com `retries` e verificação final.
+- `claude-code-review.yaml`: sample mínimo com `provider: claude`, permissão somente leitura e `output_schema` pequeno.
 
 ## Arquivos principais
 
@@ -39,6 +40,7 @@ Os exemplos com `kind: agent` usam o provider `codex` e exigem o Codex CLI dispo
 - [`/Users/yuri/git/diasYuri/agentflow/samples/workflows/release-notes.yaml`](</Users/yuri/git/diasYuri/agentflow/samples/workflows/release-notes.yaml>): exemplo centrado em `output_schema` para saída estruturada.
 - [`/Users/yuri/git/diasYuri/agentflow/samples/workflows/product-spec-to-implementation.yaml`](</Users/yuri/git/diasYuri/agentflow/samples/workflows/product-spec-to-implementation.yaml>): demonstração mais completa de `map`, `transform` e execução paralela em múltiplos níveis.
 - [`/Users/yuri/git/diasYuri/agentflow/samples/workflows/test-failure-debugging.yaml`](</Users/yuri/git/diasYuri/agentflow/samples/workflows/test-failure-debugging.yaml>): fluxo focado em troubleshooting de testes.
+- [`/Users/yuri/git/diasYuri/agentflow/samples/workflows/claude-code-review.yaml`](</Users/yuri/git/diasYuri/agentflow/samples/workflows/claude-code-review.yaml>): fluxo mínimo para validar e executar Claude Code como provider.
 - [`/Users/yuri/git/diasYuri/agentflow/samples/inputs/fix-issue.json`](</Users/yuri/git/diasYuri/agentflow/samples/inputs/fix-issue.json>), [`/Users/yuri/git/diasYuri/agentflow/samples/inputs/review-files.json`](</Users/yuri/git/diasYuri/agentflow/samples/inputs/review-files.json>), [`/Users/yuri/git/diasYuri/agentflow/samples/inputs/security-review.json`](</Users/yuri/git/diasYuri/agentflow/samples/inputs/security-review.json>), [`/Users/yuri/git/diasYuri/agentflow/samples/inputs/release-notes.json`](</Users/yuri/git/diasYuri/agentflow/samples/inputs/release-notes.json>), [`/Users/yuri/git/diasYuri/agentflow/samples/inputs/product-spec-to-implementation.json`](</Users/yuri/git/diasYuri/agentflow/samples/inputs/product-spec-to-implementation.json>) e [`/Users/yuri/git/diasYuri/agentflow/samples/inputs/test-failure.json`](</Users/yuri/git/diasYuri/agentflow/samples/inputs/test-failure.json>): payloads prontos para rodar os exemplos sem montar JSON manualmente.
 - [`/Users/yuri/git/diasYuri/agentflow/samples/inputs/product-spec.md`](</Users/yuri/git/diasYuri/agentflow/samples/inputs/product-spec.md>): spec de produto usada pelo exemplo de spec-to-implementation.
 
