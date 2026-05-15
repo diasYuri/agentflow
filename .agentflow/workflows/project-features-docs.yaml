@@ -1,0 +1,118 @@
+version: "1"
+name: features-docs
+description: "Mapeia as features do projeto e gera documentação em docs/ para cada feature."
+
+defaults:
+  timeout: 900
+  retries: 0
+  working_dir: "."
+
+execution:
+  max_concurrency: 2
+  fail_fast: false
+  max_node_output_bytes: 1048576
+
+nodes:
+  - id: map_features
+    kind: agent
+    provider: codex
+    prompt: |
+      Você é um analista técnico sênior.
+
+      Inspecione o repositório atual e mapeie todas as features do projeto que ainda não estão documentadas, ou documentadas de forma incompleta.
+
+      Regras:
+      - Considere código, comandos, fluxos, exemplos e documentação existentes.
+      - Agrupe por feature observável, não por arquivo isolado.
+      - Seja completo, mas evite inventar feature que não esteja sustentada no repositório.
+      - Retorne JSON válido seguindo o schema.
+
+      Para cada feature, inclua:
+      - `slug`: curto, em kebab-case
+      - `title`: nome legível
+      - `summary`: resumo curto
+      - `behavior`: o que a feature faz
+      - `files`: arquivos mais relevantes
+      - `docs_path`: caminho sugerido do Markdown dentro de `docs/`
+    output_schema:
+      type: object
+      required:
+        - features
+      additionalProperties: false
+      properties:
+        features:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required:
+              - slug
+              - title
+              - summary
+              - behavior
+              - files
+              - docs_path
+            additionalProperties: false
+            properties:
+              slug:
+                type: string
+              title:
+                type: string
+              summary:
+                type: string
+              behavior:
+                type: array
+                items:
+                  type: string
+              files:
+                type: array
+                items:
+                  type: string
+              docs_path:
+                type: string
+
+  - id: write_feature_docs
+    kind: map
+    depends_on: [map_features]
+    for_each: "${nodes.map_features.output.features}"
+    concurrency: 2
+    max_items: 200
+    fail_fast: false
+    nodes:
+      - id: write_doc
+        kind: agent
+        provider: codex
+        permission:
+          write: true
+        prompt: |
+          Você vai escrever a documentação da feature abaixo em Markdown dentro de `docs/`.
+
+          Feature:
+          ${item}
+
+          Regras:
+          - Crie o arquivo indicado em `docs_path`.
+          - Se o diretório `docs/` não existir, crie-o.
+          - O documento deve explicar: objetivo, como funciona, principais arquivos envolvidos e observações relevantes.
+          - Preserve o estilo do projeto.
+          - Não altere arquivos fora de `docs/` a menos que seja estritamente necessário para criar o diretório.
+          - Retorne JSON válido seguindo o schema.
+        output_schema:
+          type: object
+          required:
+            - status
+            - docs_path
+            - summary
+            - files_changed
+          additionalProperties: false
+          properties:
+            status:
+              type: string
+            docs_path:
+              type: string
+            summary:
+              type: string
+            files_changed:
+              type: array
+              items:
+                type: string

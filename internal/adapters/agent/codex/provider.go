@@ -23,7 +23,7 @@ func (p *Provider) Run(ctx context.Context, req ports.AgentRequest) (ports.Agent
 	client, err := codexsdk.New(&codexsdk.CodexOptions{
 		CodexPathOverride: firstNonEmpty(p.codexPath, os.Getenv("CODEX_PATH")),
 		APIKey:            os.Getenv("OPENAI_API_KEY"),
-		Env:               req.Env,
+		Env:               mergeCodexEnv(req.Env),
 	})
 	if err != nil {
 		return ports.AgentResult{}, err
@@ -91,4 +91,18 @@ func normalizeSandboxMode(value string) codexsdk.SandboxMode {
 	default:
 		return ""
 	}
+}
+
+func mergeCodexEnv(overrides map[string]string) map[string]string {
+	env := make(map[string]string)
+	for _, item := range os.Environ() {
+		key, value, ok := strings.Cut(item, "=")
+		if ok {
+			env[key] = value
+		}
+	}
+	for key, value := range overrides {
+		env[key] = value
+	}
+	return env
 }

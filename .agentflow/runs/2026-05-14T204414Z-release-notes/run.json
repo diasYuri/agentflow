@@ -1,7 +1,0 @@
-{
-  "run_id": "2026-05-14T204414Z-release-notes",
-  "workflow": "release-notes",
-  "workflow_path": "samples/workflows/release-notes.yaml",
-  "started_at": "2026-05-14T17:44:14.958181-03:00",
-  "output_dir": ".agentflow/runs"
-}

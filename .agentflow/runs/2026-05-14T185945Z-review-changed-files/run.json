@@ -1,7 +1,0 @@
-{
-  "run_id": "2026-05-14T185945Z-review-changed-files",
-  "workflow": "review-changed-files",
-  "workflow_path": "samples/workflows/review-changed-files.yaml",
-  "started_at": "2026-05-14T15:59:45.640478-03:00",
-  "output_dir": ".agentflow/runs"
-}

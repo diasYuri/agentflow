@@ -1,7 +1,0 @@
-{
-  "run_id": "2026-05-14T202217Z-local-health-check",
-  "workflow": "local-health-check",
-  "workflow_path": "samples/workflows/local-health-check.yaml",
-  "started_at": "2026-05-14T17:22:17.979086-03:00",
-  "output_dir": ".agentflow/runs"
-}

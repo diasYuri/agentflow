@@ -142,7 +142,7 @@ func decodeWorkflow(path string) (*workflow.WorkflowSpec, error) {
 }
 
 func defaultWorkflowRoots() (string, string) {
-	localRoot := filepath.Join("agentflow", "workflows")
+	localRoot := filepath.Join(".agentflow", "workflows")
 	if cwd, err := os.Getwd(); err == nil {
 		localRoot = filepath.Join(cwd, localRoot)
 	}

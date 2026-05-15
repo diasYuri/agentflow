@@ -1,8 +1,0 @@
-{
-  "run_id": "2026-05-14T211323Z-release-notes",
-  "node_id": "normalize_changes",
-  "status": "success",
-  "output": "[\"Add YAML workflow parser and validator\",\"Add DAG planner and Mermaid graph command\",\"Add local run persistence with JSONL events\",\"Add Codex provider behind AgentProvider port\",\"Add fan-out/fan-in execution with concurrency limits\"]",
-  "duration": 184709,
-  "attempts": 1
-}

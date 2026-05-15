@@ -15,14 +15,14 @@ go run ./cmd/agentflow dry-run samples/workflows/review-changed-files.yaml --inp
 Para executar um workflow com agentes:
 
 ```bash
-mkdir -p agentflow/workflows
-cp samples/workflows/fix-github-issue.yaml agentflow/workflows/fix-github-issue.yaml
+mkdir -p .agentflow/workflows
+cp samples/workflows/fix-github-issue.yaml .agentflow/workflows/fix-github-issue.yaml
 go run ./cmd/agentflow run fix-github-issue \
   --input-json samples/inputs/fix-issue.json \
   --codex-path "$(which codex)"
 ```
 
-Os workflows são resolvidos primeiro em `./agentflow/workflows` e depois em `~/.agentflow/workflows`. Os runs são sempre persistidos em `~/.agentflow/runs`.
+Os workflows são resolvidos primeiro em `./.agentflow/workflows` e depois em `~/.agentflow/workflows`. Os runs são sempre persistidos em `~/.agentflow/runs`.
 
 ## Exemplos
 
