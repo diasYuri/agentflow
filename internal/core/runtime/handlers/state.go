@@ -185,6 +185,7 @@ func (e *Executor) recordNode(ctx context.Context, state *ExecutionState, result
 }
 
 func (e *Executor) finish(ctx context.Context, plan coreworkflow.ExecutionPlan, state *ExecutionState, status corerun.RunStatus, finalErr error) (Result, error) {
+	persistCtx := context.WithoutCancel(ctx)
 	finished := e.now()
 	summary := corerun.Summary{
 		RunID: state.runID, Workflow: plan.Workflow.Name, Status: status, StartedAt: state.startedAt,
@@ -192,13 +193,13 @@ func (e *Executor) finish(ctx context.Context, plan coreworkflow.ExecutionPlan, 
 		BashCalls: state.bashCalls(), FailedNodes: countFailedNodes(state.results), Retries: state.retries(), Nodes: state.results,
 	}
 	publicSummary := state.masker.MaskSummary(summary)
-	_ = e.svc.Runs.FinalizeRun(ctx, state.runID, publicSummary)
+	_ = e.svc.Runs.FinalizeRun(persistCtx, state.runID, publicSummary)
 	eventType := "run.completed"
 	if status != corerun.RunSuccess {
 		eventType = "run.failed"
 	}
-	_ = e.emitState(ctx, state, corerun.Event{Type: eventType, Data: map[string]any{"status": status}})
-	_ = e.svc.Events.Close(ctx)
+	_ = e.emitState(persistCtx, state, corerun.Event{Type: eventType, Data: map[string]any{"status": status}})
+	_ = e.svc.Events.Close(persistCtx)
 	dir, _ := e.svc.Runs.RunDir(state.runID)
 	return Result{RunID: state.runID, RunDir: dir, Status: status, Summary: publicSummary, Plan: plan}, maskError(state.masker, finalErr)
 }

@@ -25,7 +25,10 @@ func Execute(ctx context.Context, svc Services, req ExecutionRequest) (Result, e
 
 func (e *Executor) execute(ctx context.Context, req ExecutionRequest) (Result, error) {
 	now := e.now()
-	runID := fmt.Sprintf("%s-%s", now.UTC().Format("2006-01-02T150405Z"), sanitizeName(req.Plan.Workflow.Name))
+	runID := req.RunID
+	if runID == "" {
+		runID = NewRunID(req.Plan.Workflow.Name, now)
+	}
 	handle, err := e.svc.Runs.CreateRun(ctx, corerun.RunMetadata{
 		RunID: runID, Workflow: req.Plan.Workflow.Name, WorkflowPath: req.WorkflowSourcePath, StartedAt: now,
 	})
@@ -54,9 +57,16 @@ func (e *Executor) execute(ctx context.Context, req ExecutionRequest) (Result, e
 	}
 	state.global = semaphore.NewWeighted(int64(globalLimit))
 	if err := e.executeNodes(ctx, state, req.Plan); err != nil {
+		if errors.Is(err, context.Canceled) {
+			return e.finish(ctx, req.Plan, state, corerun.RunCancelled, err)
+		}
 		return e.finish(ctx, req.Plan, state, corerun.RunFailed, err)
 	}
 	return e.finish(ctx, req.Plan, state, corerun.RunSuccess, nil)
+}
+
+func NewRunID(workflowName string, now time.Time) string {
+	return fmt.Sprintf("%s-%s", now.UTC().Format("2006-01-02T150405.000000000Z"), sanitizeName(workflowName))
 }
 
 func (e *Executor) executeNodes(ctx context.Context, state *ExecutionState, plan coreworkflow.ExecutionPlan) error {
@@ -65,6 +75,9 @@ func (e *Executor) executeNodes(ctx context.Context, state *ExecutionState, plan
 		indexByID[nodeID] = i
 	}
 	for pc := 0; pc < len(plan.Order); {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		nodeID := plan.Order[pc]
 		node := plan.Nodes[nodeID].Spec
 		if state.failed && !node.ContinueOnError {
@@ -402,6 +415,8 @@ func (e *Executor) executeAttempt(ctx context.Context, state *ExecutionState, no
 		result.Error = err.Error()
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			result.Status = corerun.NodeTimeout
+		} else if errors.Is(ctx.Err(), context.Canceled) {
+			result.Status = corerun.NodeCancelled
 		}
 	}
 	_ = e.emitState(ctx, state, corerun.Event{Type: eventForResult("node.completed", "node.failed", result.Status), NodeID: node.ID, InstanceID: instanceID, Attempt: attempt})

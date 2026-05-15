@@ -25,6 +25,7 @@ type Services struct {
 
 type Options struct {
 	WorkflowRef    string
+	RunID          string
 	Inputs         map[string]any
 	Vars           map[string]any
 	MaxConcurrency int
@@ -42,6 +43,7 @@ type Result struct {
 }
 
 type ExecutionRequest struct {
+	RunID              string
 	WorkflowSourcePath string
 	Plan               coreworkflow.ExecutionPlan
 	Inputs             map[string]any

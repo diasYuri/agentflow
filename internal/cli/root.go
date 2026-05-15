@@ -5,21 +5,18 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
-	codexagent "github.com/diasYuri/agentflow/internal/adapters/agent/codex"
-	"github.com/diasYuri/agentflow/internal/adapters/events/jsonl"
-	"github.com/diasYuri/agentflow/internal/adapters/events/multi"
-	"github.com/diasYuri/agentflow/internal/adapters/events/stdout"
-	runrepo "github.com/diasYuri/agentflow/internal/adapters/runrepo/local"
-	"github.com/diasYuri/agentflow/internal/adapters/shell"
-	yamlrepo "github.com/diasYuri/agentflow/internal/adapters/yaml"
-	"github.com/diasYuri/agentflow/internal/core/ports"
+	"github.com/diasYuri/agentflow/internal/app"
 	runworkflow "github.com/diasYuri/agentflow/internal/core/runtime"
 	"github.com/diasYuri/agentflow/internal/core/workflow"
+	"github.com/diasYuri/agentflow/internal/daemon"
 )
 
 type options struct {
@@ -34,6 +31,7 @@ type options struct {
 	eventsJSONL    string
 	graphFormat    string
 	dryRun         bool
+	interactive    bool
 	noColor        bool
 }
 
@@ -43,7 +41,14 @@ func NewRootCommand() *cobra.Command {
 		Use:   "agentflow",
 		Short: "Run local YAML workflows for agent coding",
 	}
-	cmd.AddCommand(newValidateCommand(opts), newDryRunCommand(opts), newRunCommand(opts), newGraphCommand(opts))
+	cmd.AddCommand(
+		newValidateCommand(opts),
+		newDryRunCommand(opts),
+		newRunCommand(opts),
+		newGraphCommand(opts),
+		newDaemonCommand(opts),
+		newWorkflowCommand(opts),
+	)
 	return cmd
 }
 
@@ -130,9 +135,12 @@ func newRunCommand(opts *options) *cobra.Command {
 	local := *opts
 	cmd := &cobra.Command{
 		Use:   "run <workflow>",
-		Short: "Run a workflow",
+		Short: "Run a workflow through agentflowd unless -it is set",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if !local.interactive {
+				return runWorkflowViaDaemon(cmd, args[0], &local)
+			}
 			uc, err := buildUseCase(&local)
 			if err != nil {
 				return err
@@ -153,7 +161,216 @@ func newRunCommand(opts *options) *cobra.Command {
 	}
 	addCommonFlags(cmd, &local)
 	cmd.Flags().BoolVar(&local.dryRun, "dry-run", false, "validate and plan without executing")
+	addInteractiveFlags(cmd, &local)
 	return cmd
+}
+
+func newWorkflowCommand(opts *options) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "workflow",
+		Short: "Control workflows through agentflowd",
+	}
+	cmd.AddCommand(
+		newWorkflowRunCommand(opts),
+		newWorkflowListCommand(),
+		newWorkflowStatusCommand(),
+		newWorkflowLogsCommand(),
+		newWorkflowCancelCommand(),
+	)
+	return cmd
+}
+
+func newWorkflowRunCommand(opts *options) *cobra.Command {
+	local := *opts
+	cmd := &cobra.Command{
+		Use:   "run <workflow>",
+		Short: "Start a workflow in agentflowd",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if local.interactive {
+				uc, err := buildUseCase(&local)
+				if err != nil {
+					return err
+				}
+				inputs, vars, err := parseInputsAndVars(&local)
+				if err != nil {
+					return err
+				}
+				result, err := uc.Run(cmd.Context(), runworkflow.RunOptions{
+					WorkflowRef: args[0], Inputs: inputs, Vars: vars, MaxConcurrency: local.maxConcurrency,
+					WorkingDir: local.workingDir, OutputDir: local.outputDir, DryRun: local.dryRun,
+				})
+				if result.RunID != "" {
+					fmt.Fprintf(cmd.OutOrStdout(), "run_id: %s\nrun_dir: %s\nstatus: %s\n", result.RunID, result.RunDir, result.Status)
+				}
+				return err
+			}
+			return runWorkflowViaDaemon(cmd, args[0], &local)
+		},
+	}
+	addCommonFlags(cmd, &local)
+	cmd.Flags().BoolVar(&local.dryRun, "dry-run", false, "validate and plan without executing")
+	addInteractiveFlags(cmd, &local)
+	return cmd
+}
+
+func newWorkflowListCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "list",
+		Short: "List workflow runs",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			resp, err := daemon.NewClient("").ListWorkflows(cmd.Context())
+			if err != nil {
+				return err
+			}
+			for _, run := range resp.Runs {
+				fmt.Fprintf(cmd.OutOrStdout(), "%s\t%s\t%s\t%s\n", run.ID, run.Status, run.Workflow, run.RunDir)
+			}
+			return nil
+		},
+	}
+}
+
+func newWorkflowStatusCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "status <id>",
+		Short: "Show workflow run status",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			resp, err := daemon.NewClient("").WorkflowStatus(cmd.Context(), args[0])
+			if err != nil {
+				return err
+			}
+			printRun(cmd, resp.Run)
+			return nil
+		},
+	}
+}
+
+func newWorkflowLogsCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "logs <id>",
+		Short: "Print workflow run event logs",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			resp, err := daemon.NewClient("").WorkflowLogs(cmd.Context(), args[0])
+			if err != nil {
+				return err
+			}
+			for _, line := range resp.Lines {
+				fmt.Fprintln(cmd.OutOrStdout(), line)
+			}
+			return nil
+		},
+	}
+}
+
+func newWorkflowCancelCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "cancel <id>",
+		Short: "Cancel a running workflow",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			resp, err := daemon.NewClient("").CancelWorkflow(cmd.Context(), args[0])
+			if err != nil {
+				return err
+			}
+			printRun(cmd, resp.Run)
+			return nil
+		},
+	}
+}
+
+func newDaemonCommand(opts *options) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "daemon",
+		Short: "Control agentflowd",
+	}
+	cmd.AddCommand(newDaemonStartCommand(opts), newDaemonStopCommand(), newDaemonStatusCommand())
+	return cmd
+}
+
+func newDaemonStartCommand(opts *options) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "start",
+		Short: "Start agentflowd in the background",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client := daemon.NewClient("")
+			if status, err := client.Status(cmd.Context()); err == nil && status.Running {
+				fmt.Fprintf(cmd.OutOrStdout(), "agentflowd already running\npid: %d\nsocket: %s\n", status.PID, status.Socket)
+				return nil
+			}
+			path, err := findAgentflowd()
+			if err != nil {
+				return err
+			}
+			cfg := daemon.DefaultConfig()
+			if err := os.MkdirAll(filepath.Dir(cfg.LogPath), 0o755); err != nil {
+				return err
+			}
+			logFile, err := os.OpenFile(cfg.LogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+			if err != nil {
+				return err
+			}
+			proc := exec.Command(path)
+			proc.Stdout = logFile
+			proc.Stderr = logFile
+			if opts.codexPath != "" {
+				proc.Env = append(os.Environ(), "AGENTFLOW_CODEX_PATH="+opts.codexPath)
+			}
+			if err := proc.Start(); err != nil {
+				_ = logFile.Close()
+				return err
+			}
+			_ = logFile.Close()
+			deadline := time.Now().Add(3 * time.Second)
+			for time.Now().Before(deadline) {
+				status, err := client.Status(cmd.Context())
+				if err == nil && status.Running {
+					fmt.Fprintf(cmd.OutOrStdout(), "agentflowd started\npid: %d\nsocket: %s\n", status.PID, status.Socket)
+					return nil
+				}
+				time.Sleep(100 * time.Millisecond)
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "agentflowd starting\npid: %d\nsocket: %s\n", proc.Process.Pid, cfg.SocketPath)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&opts.codexPath, "codex-path", "", "path to codex binary for daemon workflow runs")
+	return cmd
+}
+
+func newDaemonStopCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "stop",
+		Short: "Stop agentflowd",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if _, err := daemon.NewClient("").Stop(cmd.Context()); err != nil {
+				return err
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), "agentflowd stopping")
+			return nil
+		},
+	}
+}
+
+func newDaemonStatusCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "status",
+		Short: "Show agentflowd status",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			status, err := daemon.NewClient("").Status(cmd.Context())
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "running: %t\npid: %d\nsocket: %s\nruns: %d\n", status.Running, status.PID, status.Socket, status.Runs)
+			return nil
+		},
+	}
 }
 
 func addCommonFlags(cmd *cobra.Command, opts *options) {
@@ -170,21 +387,68 @@ func addCommonFlags(cmd *cobra.Command, opts *options) {
 }
 
 func buildUseCase(opts *options) (*runworkflow.RunWorkflowUseCase, error) {
-	eventSink, err := jsonl.New(opts.eventsJSONL)
-	if err != nil {
-		return nil, err
-	}
-	sink := multi.New(eventSink, stdout.New(os.Stdout, opts.logFormat))
-	registry := ports.NewStaticAgentProviderRegistry(map[string]ports.AgentProvider{
-		"codex": codexagent.New(opts.codexPath),
+	return app.NewRunWorkflowUseCase(app.RuntimeOptions{
+		CodexPath:   opts.codexPath,
+		LogFormat:   opts.logFormat,
+		EventsJSONL: opts.eventsJSONL,
+		EventWriter: os.Stdout,
 	})
-	return &runworkflow.RunWorkflowUseCase{
-		Workflows: yamlrepo.NewWorkflowRepository(),
-		Runs:      runrepo.New(""),
-		Events:    sink,
-		Agents:    registry,
-		Shell:     shell.NewRunner(),
-	}, nil
+}
+
+func addInteractiveFlags(cmd *cobra.Command, opts *options) {
+	cmd.Flags().BoolP("it", "i", false, "run locally in the foreground")
+	cmd.Flags().BoolP("tty", "t", false, "run locally in the foreground")
+	_ = cmd.Flags().MarkHidden("tty")
+	cmd.PreRunE = func(cmd *cobra.Command, args []string) error {
+		it, _ := cmd.Flags().GetBool("it")
+		tty, _ := cmd.Flags().GetBool("tty")
+		opts.interactive = it || tty
+		return nil
+	}
+}
+
+func runWorkflowViaDaemon(cmd *cobra.Command, workflowRef string, opts *options) error {
+	inputs, vars, err := parseInputsAndVars(opts)
+	if err != nil {
+		return err
+	}
+	resp, err := daemon.NewClient("").RunWorkflow(cmd.Context(), daemon.RunWorkflowRequest{
+		WorkflowRef:    workflowRef,
+		Inputs:         inputs,
+		Vars:           vars,
+		MaxConcurrency: opts.maxConcurrency,
+		WorkingDir:     opts.workingDir,
+		DryRun:         opts.dryRun,
+	})
+	if err != nil {
+		return err
+	}
+	printRun(cmd, resp.Run)
+	return nil
+}
+
+func printRun(cmd *cobra.Command, run daemon.WorkflowRun) {
+	fmt.Fprintf(cmd.OutOrStdout(), "run_id: %s\nrun_dir: %s\nstatus: %s\n", run.ID, run.RunDir, run.Status)
+	if run.Error != "" {
+		fmt.Fprintf(cmd.OutOrStdout(), "error: %s\n", run.Error)
+	}
+}
+
+func findAgentflowd() (string, error) {
+	if path := os.Getenv("AGENTFLOWD_PATH"); path != "" {
+		return path, nil
+	}
+	if path, err := exec.LookPath("agentflowd"); err == nil {
+		return path, nil
+	}
+	self, err := os.Executable()
+	if err == nil {
+		candidate := filepath.Join(filepath.Dir(self), "agentflowd")
+		if _, statErr := os.Stat(candidate); statErr == nil {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("agentflowd binary not found in PATH; build it with go build ./cmd/agentflowd")
 }
 
 func parseInputsAndVars(opts *options) (map[string]any, map[string]any, error) {

@@ -20,7 +20,7 @@ func TestGraphCommandPrintsMermaid(t *testing.T) {
 	t.Cleanup(func() {
 		_ = os.Chdir(oldwd)
 	})
-	workflowDir := filepath.Join(dir, "agentflow", "workflows")
+	workflowDir := filepath.Join(dir, ".agentflow", "workflows")
 	if err := os.MkdirAll(workflowDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -57,6 +57,24 @@ nodes:
 	}
 }
 
+func TestWorkflowListReportsDaemonUnavailable(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cmd := NewRootCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"workflow", "list"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected daemon unavailable error")
+	}
+	if !strings.Contains(err.Error(), "agentflowd is not running") {
+		t.Fatalf("expected daemon unavailable message, got %v", err)
+	}
+}
+
 func TestRunCommandIgnoresOutputDirFlag(t *testing.T) {
 	dir := t.TempDir()
 	home := filepath.Join(dir, "home")
@@ -76,7 +94,7 @@ func TestRunCommandIgnoresOutputDirFlag(t *testing.T) {
 		_ = os.Chdir(oldwd)
 	})
 
-	workflowDir := filepath.Join(dir, "agentflow", "workflows")
+	workflowDir := filepath.Join(dir, ".agentflow", "workflows")
 	if err := os.MkdirAll(workflowDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +111,7 @@ nodes:
 	cmd := NewRootCommand()
 	var out bytes.Buffer
 	cmd.SetOut(&out)
-	cmd.SetArgs([]string{"run", "cli-run", "--output-dir", filepath.Join(dir, "ignored")})
+	cmd.SetArgs([]string{"run", "cli-run", "-it", "--output-dir", filepath.Join(dir, "ignored")})
 
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)

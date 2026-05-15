@@ -23,6 +23,10 @@ type RunOptions = handlers.Options
 
 type RunResult = handlers.Result
 
+func NewRunID(workflowName string, now time.Time) string {
+	return handlers.NewRunID(workflowName, now)
+}
+
 type workflowPreparation struct {
 	plan           coreworkflow.ExecutionPlan
 	resolvedInputs map[string]any
@@ -57,6 +61,7 @@ func (uc *RunWorkflowUseCase) Run(ctx context.Context, opts RunOptions) (RunResu
 		return RunResult{Status: corerun.RunPlanned, Plan: prepared.plan}, nil
 	}
 	return handlers.Execute(ctx, uc.services(), handlers.ExecutionRequest{
+		RunID:              opts.RunID,
 		WorkflowSourcePath: prepared.sourcePath,
 		Plan:               prepared.plan,
 		Inputs:             prepared.resolvedInputs,
