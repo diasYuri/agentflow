@@ -10,3 +10,4 @@ node_modules
 frontend/desktop/node_modules
 /agentflow-desktop
 /agentflowd
+node_modules/
