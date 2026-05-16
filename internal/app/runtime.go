@@ -5,6 +5,7 @@ import (
 
 	claudeagent "github.com/diasYuri/agentflow/internal/adapters/agent/claude"
 	codexagent "github.com/diasYuri/agentflow/internal/adapters/agent/codex"
+	piagent "github.com/diasYuri/agentflow/internal/adapters/agent/pi"
 	"github.com/diasYuri/agentflow/internal/adapters/events/jsonl"
 	"github.com/diasYuri/agentflow/internal/adapters/events/multi"
 	"github.com/diasYuri/agentflow/internal/adapters/events/stdout"
@@ -18,6 +19,7 @@ import (
 type RuntimeOptions struct {
 	CodexPath   string
 	ClaudePath  string
+	PiPath      string
 	LogFormat   string
 	EventsJSONL string
 	EventWriter io.Writer
@@ -40,6 +42,7 @@ func NewRunWorkflowUseCase(opts RuntimeOptions) (*runworkflow.RunWorkflowUseCase
 	registry := ports.NewStaticAgentProviderRegistry(map[string]ports.AgentProvider{
 		"codex":  codexagent.New(opts.CodexPath),
 		"claude": claudeagent.New(opts.ClaudePath),
+		"pi":     piagent.New(opts.PiPath),
 	})
 	return &runworkflow.RunWorkflowUseCase{
 		Workflows: yamlrepo.NewWorkflowRepository(),

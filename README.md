@@ -73,7 +73,7 @@ go run ./cmd/agentflow run samples/workflows/local-health-check.yaml -it
 
 ## Workflows com agentes
 
-Workflows que usam `kind: agent` podem chamar os providers `codex` ou `claude`. Quando `provider` é omitido, o padrão continua sendo `codex`. Informe o caminho do binário quando necessário:
+Workflows que usam `kind: agent` podem chamar os providers `codex`, `claude` ou `pi`. Quando `provider` é omitido, o padrão continua sendo `codex`. Informe o caminho do binário quando necessário:
 
 ```bash
 go run ./cmd/agentflow run samples/workflows/fix-github-issue.yaml \
@@ -97,6 +97,14 @@ nodes:
 ```bash
 go run ./cmd/agentflow run samples/workflows/claude-code-review.yaml \
   --claude-path "$(which claude)" \
+  -it
+```
+
+Exemplo mínimo usando Pi RPC:
+
+```bash
+go run ./cmd/agentflow run samples/workflows/pi-code-review.yaml \
+  --pi-path "$(which pi)" \
   -it
 ```
 
@@ -174,6 +182,7 @@ Flags úteis:
 --working-dir <path>      # diretório base da execução
 --codex-path <path>       # caminho para o binário codex
 --claude-path <path>      # caminho para o binário claude
+--pi-path <path>          # caminho para o binário pi
 --events-jsonl <path>     # grava eventos em JSONL
 ```
 
@@ -227,6 +236,7 @@ Arquivos padrão:
 - `product-spec-to-implementation.yaml`: transforma uma spec de produto em plano e implementação.
 - `local-health-check.yaml`: roda checagens locais sem depender de agente.
 - `claude-code-review.yaml`: sample mínimo com `provider: claude`, permissão somente leitura e saída estruturada.
+- `pi-code-review.yaml`: sample mínimo com `provider: pi`, permissão somente leitura e saída estruturada via RPC.
 
 ## Segurança
 
@@ -238,7 +248,7 @@ agentflow graph <workflow>
 agentflow dry-run <workflow>
 ```
 
-Revise especialmente nodes `bash`, permissões de agents, `--working-dir`, `--codex-path`, `--claude-path` e qualquer workflow vindo de fora do seu repositório.
+Revise especialmente nodes `bash`, permissões de agents, `--working-dir`, `--codex-path`, `--claude-path`, `--pi-path` e qualquer workflow vindo de fora do seu repositório.
 
 ## Documentação
 
@@ -250,4 +260,5 @@ Para começar pelos fundamentos:
 - [`docs/workflow-dsl.md`](docs/workflow-dsl.md)
 - [`docs/runtime-execution.md`](docs/runtime-execution.md)
 - [`docs/claude-agent.md`](docs/claude-agent.md)
+- [`docs/pi-agent.md`](docs/pi-agent.md)
 - [`samples/README.md`](samples/README.md)

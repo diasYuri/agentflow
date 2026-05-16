@@ -15,7 +15,7 @@ execution:
 nodes:
   - id: map_features
     kind: agent
-    provider: codex
+    provider: pi
     prompt: |
       Você é um analista técnico sênior.
 
@@ -81,7 +81,7 @@ nodes:
     nodes:
       - id: write_doc
         kind: agent
-        provider: codex
+        provider: pi
         permission:
           write: true
         prompt: |

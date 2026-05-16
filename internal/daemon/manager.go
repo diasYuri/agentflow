@@ -87,6 +87,7 @@ func (m *Manager) StartWorkflow(req RunWorkflowRequest) (WorkflowRun, error) {
 	uc, err := app.NewRunWorkflowUseCase(app.RuntimeOptions{
 		CodexPath:   firstNonEmpty(req.CodexPath, m.cfg.CodexPath, os.Getenv("AGENTFLOW_CODEX_PATH")),
 		ClaudePath:  firstNonEmpty(req.ClaudePath, m.cfg.ClaudePath, os.Getenv("AGENTFLOW_CLAUDE_PATH")),
+		PiPath:      firstNonEmpty(req.PiPath, m.cfg.PiPath, os.Getenv("AGENTFLOW_PI_PATH")),
 		LogFormat:   req.LogFormat,
 		EventsJSONL: req.EventsJSONL,
 		RunRoot:     runRoot,
@@ -214,6 +215,7 @@ func (m *Manager) ResumeWorkflow(runID string) (WorkflowRun, error) {
 	uc, err := app.NewRunWorkflowUseCase(app.RuntimeOptions{
 		CodexPath:   firstNonEmpty(req.CodexPath, m.cfg.CodexPath, os.Getenv("AGENTFLOW_CODEX_PATH")),
 		ClaudePath:  firstNonEmpty(req.ClaudePath, m.cfg.ClaudePath, os.Getenv("AGENTFLOW_CLAUDE_PATH")),
+		PiPath:      firstNonEmpty(req.PiPath, m.cfg.PiPath, os.Getenv("AGENTFLOW_PI_PATH")),
 		LogFormat:   req.LogFormat,
 		EventsJSONL: req.EventsJSONL,
 		RunRoot:     runRoot,

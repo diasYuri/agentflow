@@ -91,7 +91,7 @@ Quando o turn retorna, o provider monta o resultado do agente:
 
 ## Observações relevantes
 
-- `codex` é o provider padrão para nós `agent` quando `provider` não é especificado; `provider: claude` também é suportado para Claude Code.
+- `codex` é o provider padrão para nós `agent` quando `provider` não é especificado; `provider: claude` e `provider: pi` também são suportados.
 - `permission.write` é obrigatório quando o bloco `permission` existe no node `agent`.
 - O sandbox explícito do node tem prioridade; o fallback via `permission.write` só entra em
   cena quando o campo `sandbox` não foi declarado.

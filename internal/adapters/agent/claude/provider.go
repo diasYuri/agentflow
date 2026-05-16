@@ -35,6 +35,7 @@ func (p *Provider) Run(ctx context.Context, req ports.AgentRequest) (ports.Agent
 	if req.WorkingDir != "" {
 		cmd.Dir = req.WorkingDir
 	}
+	cmd.Stdin = strings.NewReader(req.Prompt)
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -52,7 +53,7 @@ func (p *Provider) Run(ctx context.Context, req ports.AgentRequest) (ports.Agent
 }
 
 func buildArgs(req ports.AgentRequest) ([]string, error) {
-	args := []string{"-p", "--output-format", "json"}
+	args := []string{"-p", "--output-format", "json", "--no-session-persistence"}
 	if strings.TrimSpace(req.Model) != "" {
 		args = append(args, "--model", req.Model)
 	}
@@ -67,7 +68,6 @@ func buildArgs(req ports.AgentRequest) ([]string, error) {
 		args = append(args, "--json-schema", string(schema))
 	}
 	args = append(args, sandboxArgs(req.Sandbox.Mode)...)
-	args = append(args, req.Prompt)
 	return args, nil
 }
 
@@ -87,9 +87,9 @@ func resolveClaudePath(override string) string {
 func sandboxArgs(mode string) []string {
 	switch strings.TrimSpace(mode) {
 	case "read-only":
-		return []string{"--tools", "Read,Glob,Grep,LS", "--allowedTools", "Read,Glob,Grep,LS"}
+		return []string{"--tools", "Read,Glob,Grep,LS"}
 	case "workspace-write":
-		return []string{"--allowedTools", "Read,Write,Edit,MultiEdit,Bash,Glob,Grep,LS"}
+		return []string{"--permission-mode", "acceptEdits"}
 	default:
 		return nil
 	}
@@ -129,6 +129,10 @@ func parseClaudeResult(data []byte, parseStructuredOutput bool) (ports.AgentResu
 		return ports.AgentResult{}, err
 	}
 
+	if isErr, _ := payload["is_error"].(bool); isErr {
+		return ports.AgentResult{}, claudeError(payload)
+	}
+
 	text := extractText(payload)
 	result := ports.AgentResult{
 		Text: text,
@@ -143,8 +147,17 @@ func parseClaudeResult(data []byte, parseStructuredOutput bool) (ports.AgentResu
 	if sessionID := stringField(payload, "session_id", "sessionID", "sessionId"); sessionID != "" {
 		result.Metadata["session_id"] = sessionID
 	}
-	if usage := extractUsage(payload); usage != nil {
+	if denials, ok := payload["permission_denials"].([]any); ok && len(denials) > 0 {
+		result.Metadata["permission_denials"] = denials
+	}
+	if cost, ok := numberField(payload, "total_cost_usd", "totalCostUsd"); ok {
+		result.Metadata["claude_cost_usd"] = cost
+	}
+	if usage, raw := extractUsage(payload); usage != nil {
 		result.Usage = usage
+		if raw != nil {
+			result.Metadata["claude_usage"] = raw
+		}
 	}
 	if parseStructuredOutput {
 		if structuredOutput, ok := payload["structured_output"]; ok && structuredOutput != nil {
@@ -161,8 +174,24 @@ func parseClaudeResult(data []byte, parseStructuredOutput bool) (ports.AgentResu
 	return result, nil
 }
 
+func claudeError(payload map[string]any) error {
+	subtype := stringField(payload, "subtype")
+	text := extractText(payload)
+	parts := []string{"claude reported error"}
+	if subtype != "" {
+		parts = append(parts, "subtype="+subtype)
+	}
+	if text != "" {
+		parts = append(parts, "result="+truncateOutput(text))
+	}
+	if denials, ok := payload["permission_denials"].([]any); ok && len(denials) > 0 {
+		parts = append(parts, fmt.Sprintf("permission_denials=%d", len(denials)))
+	}
+	return errors.New(strings.Join(parts, " "))
+}
+
 func extractText(payload map[string]any) string {
-	for _, key := range []string{"result", "text", "message", "final_response", "finalResponse", "content"} {
+	for _, key := range []string{"result", "text", "message", "final_response", "finalResponse"} {
 		if text, ok := payload[key].(string); ok {
 			return text
 		}
@@ -184,23 +213,28 @@ func extractText(payload map[string]any) string {
 	return ""
 }
 
-func extractUsage(payload map[string]any) *ports.Usage {
+func extractUsage(payload map[string]any) (*ports.Usage, map[string]any) {
 	rawUsage, ok := payload["usage"].(map[string]any)
 	if !ok {
-		return nil
+		return nil, nil
+	}
+	input := intField(rawUsage, "input_tokens", "inputTokens")
+	output := intField(rawUsage, "output_tokens", "outputTokens")
+	cacheRead := intField(rawUsage, "cache_read_input_tokens", "cacheReadInputTokens")
+	cacheCreate := intField(rawUsage, "cache_creation_input_tokens", "cacheCreationInputTokens")
+	total := intField(rawUsage, "total_tokens", "totalTokens")
+	if total == 0 {
+		total = input + cacheRead + cacheCreate + output
+	}
+	if input == 0 && output == 0 && cacheRead == 0 && cacheCreate == 0 && total == 0 {
+		return nil, nil
 	}
 	usage := &ports.Usage{
-		InputTokens:  intField(rawUsage, "input_tokens", "inputTokens"),
-		OutputTokens: intField(rawUsage, "output_tokens", "outputTokens"),
-		TotalTokens:  intField(rawUsage, "total_tokens", "totalTokens"),
+		InputTokens:  input,
+		OutputTokens: output,
+		TotalTokens:  total,
 	}
-	if usage.TotalTokens == 0 {
-		usage.TotalTokens = usage.InputTokens + usage.OutputTokens
-	}
-	if usage.InputTokens == 0 && usage.OutputTokens == 0 && usage.TotalTokens == 0 {
-		return nil
-	}
-	return usage
+	return usage, rawUsage
 }
 
 func stringField(payload map[string]any, keys ...string) string {
@@ -225,6 +259,23 @@ func intField(payload map[string]any, keys ...string) int {
 		}
 	}
 	return 0
+}
+
+func numberField(payload map[string]any, keys ...string) (float64, bool) {
+	for _, key := range keys {
+		switch value := payload[key].(type) {
+		case float64:
+			return value, true
+		case int:
+			return float64(value), true
+		case json.Number:
+			number, err := value.Float64()
+			if err == nil {
+				return number, true
+			}
+		}
+	}
+	return 0, false
 }
 
 func truncateOutput(value string) string {

@@ -219,6 +219,7 @@ func TestRunCommandSendsRuntimeOptionsToDaemon(t *testing.T) {
 		"run", "daemon-run",
 		"--codex-path", "/tmp/codex",
 		"--claude-path", "/tmp/claude",
+		"--pi-path", "/tmp/pi",
 		"--events-jsonl", "/tmp/events.jsonl",
 		"--log-format", "json",
 		"--working-dir", "/tmp/work",
@@ -236,6 +237,9 @@ func TestRunCommandSendsRuntimeOptionsToDaemon(t *testing.T) {
 	if got.ClaudePath != "/tmp/claude" {
 		t.Fatalf("claude path mismatch: got %q", got.ClaudePath)
 	}
+	if got.PiPath != "/tmp/pi" {
+		t.Fatalf("pi path mismatch: got %q", got.PiPath)
+	}
 	if got.EventsJSONL != "/tmp/events.jsonl" {
 		t.Fatalf("events jsonl mismatch: got %q", got.EventsJSONL)
 	}
@@ -244,6 +248,26 @@ func TestRunCommandSendsRuntimeOptionsToDaemon(t *testing.T) {
 	}
 	if got.WorkingDir != "/tmp/work" {
 		t.Fatalf("working dir mismatch: got %q", got.WorkingDir)
+	}
+}
+
+func TestDaemonProviderEnvIncludesPiPath(t *testing.T) {
+	env := daemonProviderEnv([]string{"PATH=/usr/bin"}, &options{
+		codexPath:  "/tmp/codex",
+		claudePath: "/tmp/claude",
+		piPath:     "/tmp/pi",
+	})
+
+	joined := "\n" + strings.Join(env, "\n") + "\n"
+	for _, want := range []string{
+		"\nPATH=/usr/bin\n",
+		"\nAGENTFLOW_CODEX_PATH=/tmp/codex\n",
+		"\nAGENTFLOW_CLAUDE_PATH=/tmp/claude\n",
+		"\nAGENTFLOW_PI_PATH=/tmp/pi\n",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("expected env %q in %#v", strings.TrimSpace(want), env)
+		}
 	}
 }
 

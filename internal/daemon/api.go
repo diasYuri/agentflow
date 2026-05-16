@@ -21,6 +21,7 @@ type Config struct {
 	DBPath     string
 	CodexPath  string
 	ClaudePath string
+	PiPath     string
 }
 
 func DefaultConfig() Config {
@@ -57,6 +58,7 @@ type RunWorkflowRequest struct {
 	WorkingDir     string         `json:"working_dir,omitempty"`
 	CodexPath      string         `json:"codex_path,omitempty"`
 	ClaudePath     string         `json:"claude_path,omitempty"`
+	PiPath         string         `json:"pi_path,omitempty"`
 	LogFormat      string         `json:"log_format,omitempty"`
 	EventsJSONL    string         `json:"events_jsonl,omitempty"`
 	RunRoot        string         `json:"run_root,omitempty"`

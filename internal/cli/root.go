@@ -28,6 +28,7 @@ type options struct {
 	workingDir     string
 	codexPath      string
 	claudePath     string
+	piPath         string
 	logFormat      string
 	eventsJSONL    string
 	graphFormat    string
@@ -411,13 +412,7 @@ func newDaemonStartCommand(opts *options) *cobra.Command {
 			proc := exec.Command(path)
 			proc.Stdout = logFile
 			proc.Stderr = logFile
-			proc.Env = os.Environ()
-			if opts.codexPath != "" {
-				proc.Env = append(proc.Env, "AGENTFLOW_CODEX_PATH="+opts.codexPath)
-			}
-			if opts.claudePath != "" {
-				proc.Env = append(proc.Env, "AGENTFLOW_CLAUDE_PATH="+opts.claudePath)
-			}
+			proc.Env = daemonProviderEnv(os.Environ(), opts)
 			if err := proc.Start(); err != nil {
 				_ = logFile.Close()
 				return err
@@ -438,6 +433,7 @@ func newDaemonStartCommand(opts *options) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&opts.codexPath, "codex-path", "", "path to codex binary for daemon workflow runs")
 	cmd.Flags().StringVar(&opts.claudePath, "claude-path", "", "path to claude binary for daemon workflow runs")
+	cmd.Flags().StringVar(&opts.piPath, "pi-path", "", "path to pi binary for daemon workflow runs")
 	return cmd
 }
 
@@ -480,6 +476,7 @@ func addCommonFlags(cmd *cobra.Command, opts *options) {
 	cmd.Flags().StringVar(&opts.workingDir, "working-dir", ".", "base working directory for the run")
 	cmd.Flags().StringVar(&opts.codexPath, "codex-path", "", "path to codex binary")
 	cmd.Flags().StringVar(&opts.claudePath, "claude-path", "", "path to claude binary")
+	cmd.Flags().StringVar(&opts.piPath, "pi-path", "", "path to pi binary")
 	cmd.Flags().StringVar(&opts.logFormat, "log-format", "text", "text or json")
 	cmd.Flags().StringVar(&opts.eventsJSONL, "events-jsonl", "", "events JSONL path")
 	cmd.Flags().BoolVar(&opts.noColor, "no-color", false, "disable color output")
@@ -489,10 +486,25 @@ func buildUseCase(opts *options) (*runworkflow.RunWorkflowUseCase, error) {
 	return app.NewRunWorkflowUseCase(app.RuntimeOptions{
 		CodexPath:   opts.codexPath,
 		ClaudePath:  opts.claudePath,
+		PiPath:      opts.piPath,
 		LogFormat:   opts.logFormat,
 		EventsJSONL: opts.eventsJSONL,
 		EventWriter: os.Stdout,
 	})
+}
+
+func daemonProviderEnv(base []string, opts *options) []string {
+	env := append([]string{}, base...)
+	if opts.codexPath != "" {
+		env = append(env, "AGENTFLOW_CODEX_PATH="+opts.codexPath)
+	}
+	if opts.claudePath != "" {
+		env = append(env, "AGENTFLOW_CLAUDE_PATH="+opts.claudePath)
+	}
+	if opts.piPath != "" {
+		env = append(env, "AGENTFLOW_PI_PATH="+opts.piPath)
+	}
+	return env
 }
 
 func addInteractiveFlags(cmd *cobra.Command, opts *options) {
@@ -520,6 +532,7 @@ func runWorkflowViaDaemon(cmd *cobra.Command, workflowRef string, opts *options)
 		WorkingDir:     opts.workingDir,
 		CodexPath:      opts.codexPath,
 		ClaudePath:     opts.claudePath,
+		PiPath:         opts.piPath,
 		LogFormat:      opts.logFormat,
 		EventsJSONL:    opts.eventsJSONL,
 		DryRun:         opts.dryRun,

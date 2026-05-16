@@ -2,7 +2,7 @@
 
 Exemplos de workflows YAML para casos reais de agent coding local.
 
-Os exemplos foram escritos para demonstrar a ferramenta sem depender de UI ou servidor. Workflows com `kind: agent` usam `codex` por padrão, mas podem declarar `provider: claude`. Use o CLI correspondente no `PATH` ou informe `--codex-path` / `--claude-path`.
+Os exemplos foram escritos para demonstrar a ferramenta sem depender de UI ou servidor. Workflows com `kind: agent` usam `codex` por padrão, mas podem declarar `provider: claude` ou `provider: pi`. Use o CLI correspondente no `PATH` ou informe `--codex-path`, `--claude-path` ou `--pi-path`.
 
 ## Preparar
 
@@ -11,6 +11,7 @@ go run ./cmd/agentflow validate samples/workflows/fix-github-issue.yaml
 go run ./cmd/agentflow graph samples/workflows/review-changed-files.yaml --format mermaid
 go run ./cmd/agentflow dry-run samples/workflows/review-changed-files.yaml --input-json samples/inputs/review-files.json
 go run ./cmd/agentflow validate samples/workflows/claude-code-review.yaml
+go run ./cmd/agentflow validate samples/workflows/pi-code-review.yaml
 ```
 
 Para executar um workflow com agentes:
@@ -33,6 +34,16 @@ go run ./cmd/agentflow run samples/workflows/claude-code-review.yaml \
   -it
 ```
 
+Para validar e executar o sample mínimo com Pi RPC:
+
+```bash
+go run ./cmd/agentflow validate samples/workflows/pi-code-review.yaml
+go run ./cmd/agentflow graph samples/workflows/pi-code-review.yaml --format mermaid
+go run ./cmd/agentflow run samples/workflows/pi-code-review.yaml \
+  --pi-path "$(which pi)" \
+  -it
+```
+
 Os workflows são resolvidos primeiro em `./.agentflow/workflows` e depois em `~/.agentflow/workflows`. Os runs são sempre persistidos em `~/.agentflow/runs`.
 
 ## Exemplos
@@ -45,6 +56,7 @@ Os workflows são resolvidos primeiro em `./.agentflow/workflows` e depois em `~
 - `product-spec-to-implementation.yaml`: lê uma spec `.md` e demonstra `kind: map` aninhado para iterar por spec técnica e por plano, implementando cada plano no workspace.
 - `local-health-check.yaml`: exemplo executável sem Codex; roda comandos locais e resume outputs.
 - `claude-code-review.yaml`: exemplo mínimo com `provider: claude`, permissão somente leitura e resposta estruturada.
+- `pi-code-review.yaml`: exemplo mínimo com `provider: pi`, permissão somente leitura e resposta estruturada via RPC.
 - `pause-on-failure.yaml`: demonstra `execution.pause_when_fail`; o run pausa quando o node `gate` falha (arquivo de flag ausente) e pode ser retomado com `workflow resume <id>` depois de criar o arquivo.
 
 ### Fluxo de pause/resume

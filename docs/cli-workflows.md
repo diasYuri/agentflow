@@ -27,7 +27,7 @@ O pipeline de execução usa o use case `RunWorkflowUseCase` com:
 - repositório YAML para carregar o workflow;
 - repositório local de runs para persistir artefatos;
 - sink de eventos em `stdout` e, opcionalmente, em JSONL;
-- providers de agentes `codex` e `claude` quando o workflow pede `kind: agent`;
+- providers de agentes `codex`, `claude` e `pi` quando o workflow pede `kind: agent`;
 - runner de shell para etapas locais.
 
 ### Resolução de entradas
@@ -39,7 +39,7 @@ As entradas são combinadas nesta ordem:
 3. `--var key=value` injeta variáveis separadas para o workflow;
 4. `--max-concurrency` sobrescreve `execution.max_concurrency` quando informado.
 
-Para workflows com agentes, `--codex-path` aponta para o binário do provider `codex` e `--claude-path` aponta para o binário do provider `claude`. Em execuções via daemon, `--claude-path` é propagado como `AGENTFLOW_CLAUDE_PATH`; sem override, o provider Claude ainda pode usar `CLAUDE_PATH` ou resolver `claude` pelo `PATH`.
+Para workflows com agentes, `--codex-path` aponta para o binário do provider `codex`, `--claude-path` aponta para o binário do provider `claude` e `--pi-path` aponta para o binário do provider `pi`. Em execuções via daemon, `--claude-path` é propagado como `AGENTFLOW_CLAUDE_PATH` e `--pi-path` como `AGENTFLOW_PI_PATH`; sem override, os providers ainda podem usar `CLAUDE_PATH`, `PI_PATH` ou resolver o binário pelo `PATH`.
 
 O parser também tenta converter valores simples para `bool`, `int`, `float` ou JSON válido antes de manter a string bruta.
 

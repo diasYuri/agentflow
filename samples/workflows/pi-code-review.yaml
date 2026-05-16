@@ -1,0 +1,32 @@
+version: "1"
+name: pi-code-review
+
+nodes:
+  - id: review
+    kind: agent
+    provider: pi
+    permission:
+      write: false
+    prompt: |
+      Review the current repository for one high-impact issue.
+      Return concise JSON with status, summary, and findings.
+    output_schema:
+      type: object
+      properties:
+        status:
+          type: string
+        summary:
+          type: string
+        findings:
+          type: array
+          items:
+            type: object
+            properties:
+              title:
+                type: string
+              severity:
+                type: string
+              file:
+                type: string
+            required: [title, severity]
+      required: [status, summary, findings]

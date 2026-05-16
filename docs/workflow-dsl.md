@@ -95,7 +95,7 @@ o node atual ou para um node anterior na ordem de execução.
 
 ## Observações relevantes
 
-- `provider` é validado para nodes `agent`; `codex` e `claude` são aceitos pelo conjunto padrão, e quando o campo não é informado o domínio usa `codex` como fallback.
+- `provider` é validado para nodes `agent`; `codex`, `claude` e `pi` são aceitos pelo conjunto padrão, e quando o campo não é informado o domínio usa `codex` como fallback.
 - `permission` só é aceito em nodes `agent`, e `permission.write` precisa estar definido quando o bloco existe.
 - `map` cria um escopo aninhado, mas mantém visíveis os nodes do escopo externo para referências controladas.
 - `ValidateInputValues` é útil para checar payloads recebidos sem repetir a lógica de tipos do spec.

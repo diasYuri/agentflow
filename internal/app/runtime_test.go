@@ -8,7 +8,7 @@ func TestNewRunWorkflowUseCaseRegistersAgentProviders(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, provider := range []string{"codex", "claude"} {
+	for _, provider := range []string{"codex", "claude", "pi"} {
 		if !uc.Agents.HasProvider(provider) {
 			t.Fatalf("expected provider %q to be registered", provider)
 		}

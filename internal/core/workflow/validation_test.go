@@ -110,6 +110,20 @@ func TestValidateAllowsClaudeAgentProvider(t *testing.T) {
 	}
 }
 
+func TestValidateAllowsPiAgentProvider(t *testing.T) {
+	spec := &WorkflowSpec{
+		Version: "1",
+		Name:    "pi-provider",
+		Nodes: []NodeSpec{
+			{ID: "implement", Kind: NodeKindAgent, Provider: "pi", Prompt: "do it"},
+		},
+	}
+
+	if err := Validate(spec, DefaultProviders()); err != nil {
+		t.Fatalf("expected pi provider to validate, got %v", err)
+	}
+}
+
 func TestValidateRejectsPermissionOnNonAgentNode(t *testing.T) {
 	write := true
 	spec := &WorkflowSpec{

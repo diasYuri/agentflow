@@ -74,6 +74,6 @@ A checagem de referências é feita sobre campos textuais como `when`, `go_to_if
 - `permission` só é aceito em nós `agent`, e `permission.write` precisa estar explicitamente definido
   quando o bloco existe.
 - O `provider` do nó `agent` é validado quando o backend de providers é informado. O conjunto padrão
-  aceita `codex` e `claude`; caso não haja valor explícito, o domínio usa `codex` como padrão.
+  aceita `codex`, `claude` e `pi`; caso não haja valor explícito, o domínio usa `codex` como padrão.
 - `ValidateInputValues` é útil para validar payloads de entrada sem precisar repetir a lógica de tipo
   do spec.
