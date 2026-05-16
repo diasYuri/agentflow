@@ -115,6 +115,15 @@ const (
 	WorktreeCleanupKept    WorktreeCleanupStatus = "kept"
 )
 
+type WorktreeAgentResolutionStatus string
+
+const (
+	WorktreeAgentResolutionNotAttempted WorktreeAgentResolutionStatus = "not_attempted"
+	WorktreeAgentResolutionRequested    WorktreeAgentResolutionStatus = "requested"
+	WorktreeAgentResolutionResolved     WorktreeAgentResolutionStatus = "resolved"
+	WorktreeAgentResolutionFailed       WorktreeAgentResolutionStatus = "failed"
+)
+
 type WorktreeChangedFile struct {
 	Path    string `json:"path"`
 	Status  string `json:"status"`
@@ -134,25 +143,30 @@ type WorktreeGitCommand struct {
 }
 
 type WorktreeMetadata struct {
-	Enabled                 bool                  `json:"enabled"`
-	Provider                string                `json:"provider"`
-	Name                    string                `json:"name"`
-	MergeStatus             WorktreeMergeStatus   `json:"merge_status"`
-	CleanupStatus           WorktreeCleanupStatus `json:"cleanup_status"`
-	ChangedFiles            []WorktreeChangedFile `json:"changed_files,omitempty"`
-	BaseCommit              string                `json:"base_commit"`
-	DestinationCommitBefore string                `json:"destination_commit_before_merge,omitempty"`
-	DestinationCommitAfter  string                `json:"destination_commit_after_merge,omitempty"`
-	WorktreePath            string                `json:"path"`
-	Destination             string                `json:"destination"`
-	Conflicts               []WorktreeConflict    `json:"conflicts,omitempty"`
-	Commands                []WorktreeGitCommand  `json:"commands,omitempty"`
-	AgentResolutionError    string                `json:"agent_resolution_error,omitempty"`
+	Enabled                 bool                          `json:"enabled"`
+	Provider                string                        `json:"provider"`
+	GitProvider             string                        `json:"git_provider,omitempty"`
+	Name                    string                        `json:"name"`
+	MergeStatus             WorktreeMergeStatus           `json:"merge_status"`
+	CleanupStatus           WorktreeCleanupStatus         `json:"cleanup_status"`
+	ChangedFiles            []WorktreeChangedFile         `json:"changed_files,omitempty"`
+	BaseCommit              string                        `json:"base_commit"`
+	DestinationCommitBefore string                        `json:"destination_commit_before_merge,omitempty"`
+	DestinationCommitAfter  string                        `json:"destination_commit_after_merge,omitempty"`
+	WorktreePath            string                        `json:"path"`
+	Destination             string                        `json:"destination"`
+	Conflicts               []WorktreeConflict            `json:"conflicts,omitempty"`
+	Commands                []WorktreeGitCommand          `json:"commands,omitempty"`
+	MergeFailureCause       string                        `json:"merge_failure_cause,omitempty"`
+	AgentResolutionStatus   WorktreeAgentResolutionStatus `json:"agent_resolution_status,omitempty"`
+	AgentResolutionProvider string                        `json:"agent_resolution_provider,omitempty"`
+	AgentResolutionError    string                        `json:"agent_resolution_error,omitempty"`
 }
 
 type WorktreeCheckpoint struct {
 	Enabled               bool   `json:"enabled"`
 	Provider              string `json:"provider"`
+	AgentProvider         string `json:"agent_provider,omitempty"`
 	ID                    string `json:"id,omitempty"`
 	Name                  string `json:"name"`
 	Path                  string `json:"path"`

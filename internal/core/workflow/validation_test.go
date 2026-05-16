@@ -232,8 +232,31 @@ func TestValidateRejectsUnknownWorktreeProvider(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected validation error")
 	}
-	if !strings.Contains(err.Error(), "unsupported worktree provider") {
+	if !strings.Contains(err.Error(), "unknown worktree agent provider") {
 		t.Fatalf("expected worktree provider error, got %v", err)
+	}
+}
+
+func TestValidateAllowsWorktreeAgentProviders(t *testing.T) {
+	for _, provider := range []string{"pi", "codex", "claude"} {
+		t.Run(provider, func(t *testing.T) {
+			spec := &WorkflowSpec{
+				Version: "1",
+				Name:    "worktree-" + provider,
+				Nodes:   []NodeSpec{{ID: "ok", Kind: NodeKindNoop}},
+				Worktree: WorktreeSpec{
+					Enabled:  true,
+					Provider: provider,
+					Base:     "current",
+					Merge:    WorktreeMergeSpec{Strategy: "deterministic", OnConflict: "agent"},
+					Cleanup:  WorktreeCleanupSpec{OnSuccess: ptr(true), OnFailure: "keep"},
+				},
+			}
+
+			if err := Validate(spec, DefaultProviders(), nil); err != nil {
+				t.Fatalf("expected worktree provider %q to validate, got %v", provider, err)
+			}
+		})
 	}
 }
 

@@ -49,7 +49,7 @@ Esse estado mantém:
 - o encadeamento de estados em nós expandidos ou aninhados;
 - contadores de `agentCalls`, `bashCalls` e `retries`;
 - o `failFast` efetivo e o conjunto de nós já concluídos;
-- quando `worktree.enabled` é true, mantém o caminho do worktree, commit base, provider e diretório de destino.
+- quando `worktree.enabled` é true, mantém o caminho do worktree, commit base, provider de agente, executor Git interno e diretório de destino.
 
 Quando `execution.pause_when_fail` está habilitado, uma falha final de node sem
 `continue_on_error` emite `run.pausing`, salva um checkpoint com `reason: "pause_when_fail"` e
@@ -72,24 +72,27 @@ emitido por um node anterior, a retomada verá o valor mascarado.
 Quando o workflow tem `worktree.enabled: true`, ao final de um run bem-sucedido o runtime
 executa um ciclo determinístico de merge antes de finalizar:
 
-1. **Status** — `provider.Status` verifica se o worktree tem mudanças. Se estiver clean,
+1. **Status** — o executor Git interno verifica se o worktree tem mudanças. Se estiver clean,
    registra `merge_status: no_changes`, salva `worktree/status.json` e pula o apply.
-2. **Diff** — `provider.Diff` gera o diff e a lista de arquivos alterados. O diff é salvo em
+2. **Diff** — o executor Git interno gera o diff e a lista de arquivos alterados. O diff é salvo em
    `worktree/diff.patch` e a lista ordenada de arquivos (adicionados, modificados, removidos,
    renomeados) vai para os metadados.
-3. **Apply** — `provider.Apply` aplica o diff no diretório de destino, validando que o
+3. **Apply** — o executor Git interno aplica o diff no diretório de destino, validando que o
    `HEAD` do destino ainda corresponde ao `base_commit`. Se tiver sucesso, registra
    `merge_status: merged`, salva `worktree/merge.log` e emite `worktree.merged`.
 4. **Conflitos** — se o apply retornar erro classificado como `ErrWorktreeResolvable`, o runtime
    registra `merge_status: conflict`, salva `worktree/conflicts.json` e, quando
-   `worktree.merge.on_conflict` é `"agent"`, solicita um agente de resolução. O agente recebe
+   `worktree.merge.on_conflict` é `"agent"`, solicita o agente definido em
+   `worktree.provider`. O agente recebe
    um prompt com workflow, base commit, arquivos alterados, conflitos e logs. Após a resolução,
-   o runtime reavalia status e reexecuta apply. Se o agente resolver e a validação subsequente
-   passar, o status vira `merged`; se continuar conflitando, permanece `conflict`.
-5. **Erros estruturais** — erros classificados como `ErrWorktreeStructural` (Git ausente,
-   destino não é repo, HEAD mudou, permissão negada) registram `merge_status: failed` e
-   **não** disparam agente.
-6. **Cleanup** — após o merge/cleanup, `provider.Cleanup` é chamado conforme política:
+   o runtime valida o destino diretamente e marca `merged` quando o agente deixou mudanças
+   novas no destino e o Git não está em estado ambíguo.
+5. **Falhas recuperáveis e estruturais** — erros classificados como `ErrWorktreeRecoverable`
+   (por exemplo, `HEAD` do destino avançou ou o destino tem mudanças locais) registram
+   `merge_status: failed`, mas também podem acionar o agente quando `on_conflict` é `"agent"`.
+   Erros classificados apenas como `ErrWorktreeStructural` (Git ausente, destino não é repo,
+   permissão negada) registram `merge_status: failed` e **não** disparam agente.
+6. **Cleanup** — após o merge/cleanup, o executor Git interno é chamado conforme política:
    - sucesso com `cleanup.on_success: true` (default): remove o worktree;
    - `no_changes` com `on_success: true`: remove se a política permitir;
    - conflito, falha de merge ou `on_success: false`: preserva o worktree;

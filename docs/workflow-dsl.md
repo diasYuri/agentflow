@@ -93,15 +93,15 @@ escrito de forma compacta ou estruturada.
 Forma compacta:
 
 - `worktree: true` — habilita o worktree com todos os valores padrão.
-- `worktree-provider: pi` — habilita o worktree e define o provider; é um atalho para
-  `worktree.enabled: true` + `worktree.provider: pi`.
+- `worktree-provider: pi` — alias legado e deprecated que habilita o worktree e define o
+  provider de agente; é um atalho para `worktree.enabled: true` + `worktree.provider: pi`.
 
 Forma estruturada:
 
 ```yaml
 worktree:
   enabled: true
-  provider: pi
+  provider: codex
   base: current
   merge:
     strategy: deterministic
@@ -117,12 +117,14 @@ worktree:
 - Quando `worktree-provider` é usado junto da forma estruturada, a forma estruturada vence,
   mas se os valores divergirem (por exemplo, `worktree.provider: codex` e `worktree-provider: pi`),
   a validação emite erro de conflito explícito.
+- `worktree.provider` escolhe o agente usado em `merge.on_conflict: agent`. Criação do
+  worktree, diff, apply e cleanup continuam sendo executados por Git local.
 
 #### Valores suportados nesta versão
 
 | Campo                | Valores suportados | Padrão          |
 | -------------------- | ------------------ | --------------- |
-| `provider`           | `pi`               | `pi`            |
+| `provider`           | `codex`, `claude`, `pi` | `codex`    |
 | `base`               | `current`          | `current`       |
 | `merge.strategy`     | `deterministic`    | `deterministic` |
 | `merge.on_conflict`  | `agent`            | `agent`         |
@@ -135,7 +137,7 @@ comportamento.
 ## Principais arquivos envolvidos
 
 - [`internal/core/workflow/spec.go`](/Users/yuri/git/diasYuri/agentflow/internal/core/workflow/spec.go): define `WorkflowSpec`, `InputSpec`, `NodeSpec`, `GoToIfSpec`, `WorktreeSpec` e os kinds suportados pelo DSL.
-- [`internal/core/workflow/validation.go`](/Users/yuri/git/diasYuri/agentflow/internal/core/workflow/validation.go): concentra as regras de validação estrutural, tipos de input, referências, provider de agent e worktree.
+- [`internal/core/workflow/validation.go`](/Users/yuri/git/diasYuri/agentflow/internal/core/workflow/validation.go): concentra as regras de validação estrutural, tipos de input, referências e providers de agente.
 - [`internal/core/workflow/validation_test.go`](/Users/yuri/git/diasYuri/agentflow/internal/core/workflow/validation_test.go): cobre defaults inválidos, referências entre nodes, permissões, escopo aninhado, saltos condicionais e worktree.
 - [`internal/core/workflow/plan.go`](/Users/yuri/git/diasYuri/agentflow/internal/core/workflow/plan.go): monta o plano de execução, detecta ciclos e valida `go_to_if` durante a ordenação.
 - [`internal/adapters/yaml/loader.go`](/Users/yuri/git/diasYuri/agentflow/internal/adapters/yaml/loader.go): carrega e normaliza o YAML, incluindo os atalhos `worktree: true` e `worktree-provider`.

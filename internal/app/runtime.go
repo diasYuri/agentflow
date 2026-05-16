@@ -11,7 +11,7 @@ import (
 	"github.com/diasYuri/agentflow/internal/adapters/events/stdout"
 	runrepo "github.com/diasYuri/agentflow/internal/adapters/runrepo/local"
 	"github.com/diasYuri/agentflow/internal/adapters/shell"
-	piworktree "github.com/diasYuri/agentflow/internal/adapters/worktree/pi"
+	gitworktree "github.com/diasYuri/agentflow/internal/adapters/worktree/git"
 	yamlrepo "github.com/diasYuri/agentflow/internal/adapters/yaml"
 	"github.com/diasYuri/agentflow/internal/core/ports"
 	runworkflow "github.com/diasYuri/agentflow/internal/core/runtime"
@@ -46,7 +46,7 @@ func NewRunWorkflowUseCase(opts RuntimeOptions) (*runworkflow.RunWorkflowUseCase
 		"pi":     piagent.New(opts.PiPath),
 	})
 	worktreeRegistry := ports.NewStaticWorktreeProviderRegistry(map[string]ports.WorktreeProvider{
-		"pi": piworktree.New(shell.NewRunner()),
+		"git": gitworktree.New(shell.NewRunner()),
 	})
 	return &runworkflow.RunWorkflowUseCase{
 		Workflows: yamlrepo.NewWorkflowRepository(),

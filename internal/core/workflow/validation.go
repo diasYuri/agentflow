@@ -15,6 +15,7 @@ type ProviderLookup interface {
 var nodeOutputReference = regexp.MustCompile(`\bnodes\.([A-Za-z_][A-Za-z0-9_-]*)\.(outputs|output)\b`)
 
 func Validate(spec *WorkflowSpec, agentProviders ProviderLookup, worktreeProviders ProviderLookup) error {
+	_ = worktreeProviders
 	if spec == nil {
 		return fmt.Errorf("workflow is nil")
 	}
@@ -30,7 +31,7 @@ func Validate(spec *WorkflowSpec, agentProviders ProviderLookup, worktreeProvide
 	if err := validateInputSpecs(spec.Inputs); err != nil {
 		return err
 	}
-	if err := validateWorktree(spec.Worktree, worktreeProviders); err != nil {
+	if err := validateWorktree(spec.Worktree, agentProviders); err != nil {
 		return err
 	}
 	if err := validateWorkflowScope(*spec, agentProviders, nil); err != nil {
@@ -48,13 +49,13 @@ func validateWorktree(w WorktreeSpec, providers ProviderLookup) error {
 	}
 	if providers != nil {
 		if !providers.HasProvider(w.Provider) {
-			return fmt.Errorf("unknown worktree provider %q", w.Provider)
+			return fmt.Errorf("unknown worktree agent provider %q", w.Provider)
 		}
 	} else {
 		switch w.Provider {
-		case "pi":
+		case "codex", "claude", "pi":
 		default:
-			return fmt.Errorf("unsupported worktree provider %q", w.Provider)
+			return fmt.Errorf("unknown worktree agent provider %q", w.Provider)
 		}
 	}
 	switch w.Base {

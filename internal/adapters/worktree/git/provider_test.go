@@ -1,4 +1,4 @@
-package pi
+package git
 
 import (
 	"context"
@@ -241,8 +241,8 @@ func TestApply_TargetChanged(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected apply to fail when target changed")
 	}
-	if !errors.Is(err, ports.ErrWorktreeStructural) {
-		t.Fatalf("expected structural error, got %v", err)
+	if !errors.Is(err, ports.ErrWorktreeRecoverable) {
+		t.Fatalf("expected recoverable error, got %v", err)
 	}
 }
 
@@ -278,8 +278,8 @@ func TestApply_TargetDirty(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected apply to fail when target is dirty")
 	}
-	if !errors.Is(err, ports.ErrWorktreeStructural) {
-		t.Fatalf("expected structural error, got %v", err)
+	if !errors.Is(err, ports.ErrWorktreeRecoverable) {
+		t.Fatalf("expected recoverable error, got %v", err)
 	}
 }
 

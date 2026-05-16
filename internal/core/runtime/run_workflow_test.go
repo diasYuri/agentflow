@@ -1046,6 +1046,7 @@ func (s *scriptedShell) commands() []string {
 type recordingAgentProvider struct {
 	mu       sync.Mutex
 	requests []ports.AgentRequest
+	onRun    func(ports.AgentRequest) error
 }
 
 func (p *recordingAgentProvider) Run(ctx context.Context, req ports.AgentRequest) (ports.AgentResult, error) {
@@ -1053,6 +1054,11 @@ func (p *recordingAgentProvider) Run(ctx context.Context, req ports.AgentRequest
 	p.mu.Lock()
 	p.requests = append(p.requests, req)
 	p.mu.Unlock()
+	if p.onRun != nil {
+		if err := p.onRun(req); err != nil {
+			return ports.AgentResult{}, err
+		}
+	}
 	return ports.AgentResult{Text: req.WorkingDir}, nil
 }
 
@@ -1286,7 +1292,7 @@ version: "1"
 name: worktree-bash
 worktree:
   enabled: true
-  provider: fake
+  provider: codex
   base: current
 execution:
   output_dir: "`+filepath.ToSlash(filepath.Join(dir, "runs"))+`"
@@ -1296,7 +1302,7 @@ nodes:
     command: "pwd"
 `)
 	worktrees := ports.NewStaticWorktreeProviderRegistry(map[string]ports.WorktreeProvider{
-		"fake": worktreefake.New(worktreeBase),
+		"git": worktreefake.New(worktreeBase),
 	})
 	uc := newTestRunWorkflowUseCaseWithWorktree(dir, shell.NewRunner(), eventmemory.New(), worktrees)
 
@@ -1329,7 +1335,7 @@ version: "1"
 name: worktree-agent
 worktree:
   enabled: true
-  provider: fake
+  provider: codex
   base: current
 execution:
   output_dir: "`+filepath.ToSlash(filepath.Join(dir, "runs"))+`"
@@ -1340,7 +1346,7 @@ nodes:
 `)
 	agent := &recordingAgentProvider{}
 	worktrees := ports.NewStaticWorktreeProviderRegistry(map[string]ports.WorktreeProvider{
-		"fake": worktreefake.New(worktreeBase),
+		"git": worktreefake.New(worktreeBase),
 	})
 	uc := &RunWorkflowUseCase{
 		Workflows: newTestWorkflowRepository(dir),
@@ -1390,9 +1396,9 @@ nodes:
 
 	_, err := uc.Run(context.Background(), RunOptions{WorkflowRef: workflowPath})
 	if err == nil {
-		t.Fatal("expected error for unknown worktree provider")
+		t.Fatal("expected error for unknown worktree agent provider")
 	}
-	if !strings.Contains(err.Error(), `unknown worktree provider "missing"`) {
+	if !strings.Contains(err.Error(), `unknown worktree agent provider "missing"`) {
 		t.Fatalf("expected unknown provider error, got %v", err)
 	}
 }
@@ -1406,7 +1412,7 @@ version: "1"
 name: worktree-fail
 worktree:
   enabled: true
-  provider: fake
+  provider: codex
   base: current
 execution:
   output_dir: "`+filepath.ToSlash(filepath.Join(dir, "runs"))+`"
@@ -1416,7 +1422,7 @@ nodes:
     command: "false"
 `)
 	worktrees := ports.NewStaticWorktreeProviderRegistry(map[string]ports.WorktreeProvider{
-		"fake": worktreefake.New(worktreeBase),
+		"git": worktreefake.New(worktreeBase),
 	})
 	uc := newTestRunWorkflowUseCaseWithWorktree(dir, shell.NewRunner(), eventmemory.New(), worktrees)
 
@@ -1429,7 +1435,7 @@ nodes:
 	}
 	assertFileExists(t, filepath.Join(result.RunDir, "artifacts", "worktree", "status.json"))
 	status := readWorktreeStatus(t, result.RunDir)
-	if !status.Enabled || status.Provider != "fake" || status.Name == "" || status.WorktreePath == "" || status.BaseCommit == "" {
+	if !status.Enabled || status.Provider != "codex" || status.GitProvider != "git" || status.Name == "" || status.WorktreePath == "" || status.BaseCommit == "" {
 		t.Fatalf("expected complete worktree metadata, got %+v", status)
 	}
 	if status.MergeStatus != run.WorktreeMergeFailed {
@@ -1447,7 +1453,7 @@ version: "1"
 name: worktree-no-changes
 worktree:
   enabled: true
-  provider: fake
+  provider: codex
   base: current
 execution:
   output_dir: "`+filepath.ToSlash(filepath.Join(dir, "runs"))+`"
@@ -1457,7 +1463,7 @@ nodes:
     command: "echo ok"
 `)
 	worktrees := ports.NewStaticWorktreeProviderRegistry(map[string]ports.WorktreeProvider{
-		"fake": wtProvider,
+		"git": wtProvider,
 	})
 	uc := newTestRunWorkflowUseCaseWithWorktree(dir, shell.NewRunner(), eventmemory.New(), worktrees)
 
@@ -1495,7 +1501,7 @@ version: "1"
 name: worktree-with-changes
 worktree:
   enabled: true
-  provider: fake
+  provider: codex
   base: current
 execution:
   output_dir: "`+filepath.ToSlash(filepath.Join(dir, "runs"))+`"
@@ -1505,7 +1511,7 @@ nodes:
     command: "echo ok"
 `)
 	worktrees := ports.NewStaticWorktreeProviderRegistry(map[string]ports.WorktreeProvider{
-		"fake": wtProvider,
+		"git": wtProvider,
 	})
 	uc := newTestRunWorkflowUseCaseWithWorktree(dir, shell.NewRunner(), eventmemory.New(), worktrees)
 
@@ -1520,7 +1526,7 @@ nodes:
 	if status.MergeStatus != run.WorktreeMergeMerged {
 		t.Fatalf("expected merged, got %s", status.MergeStatus)
 	}
-	if !status.Enabled || status.Provider != "fake" || status.Name != "wt-worktree-with-changes" {
+	if !status.Enabled || status.Provider != "codex" || status.GitProvider != "git" || status.Name != "wt-worktree-with-changes" {
 		t.Fatalf("expected enabled/provider/name metadata, got %+v", status)
 	}
 	if status.WorktreePath == "" || status.BaseCommit == "" || status.DestinationCommitBefore == "" || status.DestinationCommitAfter == "" {
@@ -1555,7 +1561,7 @@ version: "1"
 name: worktree-conflict
 worktree:
   enabled: true
-  provider: fake
+  provider: codex
   base: current
 execution:
   output_dir: "`+filepath.ToSlash(filepath.Join(dir, "runs"))+`"
@@ -1565,7 +1571,7 @@ nodes:
     command: "echo ok"
 `)
 	worktrees := ports.NewStaticWorktreeProviderRegistry(map[string]ports.WorktreeProvider{
-		"fake": wtProvider,
+		"git": wtProvider,
 	})
 	uc := newTestRunWorkflowUseCaseWithWorktree(dir, shell.NewRunner(), eventmemory.New(), worktrees)
 
@@ -1612,7 +1618,7 @@ version: "1"
 name: worktree-structural
 worktree:
   enabled: true
-  provider: fake
+  provider: codex
   base: current
 execution:
   output_dir: "`+filepath.ToSlash(filepath.Join(dir, "runs"))+`"
@@ -1622,7 +1628,7 @@ nodes:
     command: "echo ok"
 `)
 	worktrees := ports.NewStaticWorktreeProviderRegistry(map[string]ports.WorktreeProvider{
-		"fake": wtProvider,
+		"git": wtProvider,
 	})
 	uc := &RunWorkflowUseCase{
 		Workflows: newTestWorkflowRepository(dir),
@@ -1661,7 +1667,7 @@ version: "1"
 name: worktree-keep
 worktree:
   enabled: true
-  provider: fake
+  provider: codex
   base: current
   cleanup:
     on_success: false
@@ -1673,7 +1679,7 @@ nodes:
     command: "echo ok"
 `)
 	worktrees := ports.NewStaticWorktreeProviderRegistry(map[string]ports.WorktreeProvider{
-		"fake": wtProvider,
+		"git": wtProvider,
 	})
 	uc := newTestRunWorkflowUseCaseWithWorktree(dir, shell.NewRunner(), eventmemory.New(), worktrees)
 
@@ -1707,7 +1713,7 @@ version: "1"
 name: worktree-rename
 worktree:
   enabled: true
-  provider: fake
+  provider: codex
   base: current
 execution:
   output_dir: "`+filepath.ToSlash(filepath.Join(dir, "runs"))+`"
@@ -1717,7 +1723,7 @@ nodes:
     command: "echo ok"
 `)
 	worktrees := ports.NewStaticWorktreeProviderRegistry(map[string]ports.WorktreeProvider{
-		"fake": wtProvider,
+		"git": wtProvider,
 	})
 	uc := newTestRunWorkflowUseCaseWithWorktree(dir, shell.NewRunner(), eventmemory.New(), worktrees)
 
@@ -1756,7 +1762,7 @@ version: "1"
 name: worktree-agent-conflict
 worktree:
   enabled: true
-  provider: fake
+  provider: codex
   base: current
 execution:
   output_dir: "`+filepath.ToSlash(filepath.Join(dir, "runs"))+`"
@@ -1766,7 +1772,7 @@ nodes:
     command: "echo ok"
 `)
 	worktrees := ports.NewStaticWorktreeProviderRegistry(map[string]ports.WorktreeProvider{
-		"fake": wtProvider,
+		"git": wtProvider,
 	})
 	uc := &RunWorkflowUseCase{
 		Workflows: newTestWorkflowRepository(dir),
@@ -1796,6 +1802,142 @@ nodes:
 	}
 }
 
+func TestRunWorkflowWorktreeConflictAgentResolutionMarksMerged(t *testing.T) {
+	dir := t.TempDir()
+	initGitRepo(t, dir)
+	worktreeBase := t.TempDir()
+	wtProvider := worktreefake.New(worktreeBase)
+	wtProvider.StatusResult = &ports.WorktreeStatus{Clean: false, Files: []ports.FileStatus{{Path: "a.txt", Status: "M"}}}
+	wtProvider.DiffResult = &ports.ChangeSet{
+		Empty: false,
+		Files: []ports.FileChange{{Path: "a.txt", Status: "M"}},
+		Diff:  "diff...",
+	}
+	wtProvider.ApplyResult = &ports.MergeResult{
+		Success:   false,
+		Conflicts: []ports.Conflict{{Path: "a.txt", Reason: "content conflict"}},
+	}
+	wtProvider.ApplyError = ports.ErrWorktreeResolvable
+	agent := &recordingAgentProvider{
+		onRun: func(req ports.AgentRequest) error {
+			return os.WriteFile(filepath.Join(req.WorkingDir, "resolved.txt"), []byte("resolved\n"), 0o644)
+		},
+	}
+	workflowPath := writeWorkflow(t, dir, `
+version: "1"
+name: worktree-agent-resolves-conflict
+worktree:
+  enabled: true
+  provider: codex
+  base: current
+execution:
+  output_dir: "`+filepath.ToSlash(filepath.Join(dir, "runs"))+`"
+nodes:
+  - id: shell
+    kind: bash
+    command: "echo ok"
+`)
+	worktrees := ports.NewStaticWorktreeProviderRegistry(map[string]ports.WorktreeProvider{
+		"git": wtProvider,
+	})
+	uc := &RunWorkflowUseCase{
+		Workflows: newTestWorkflowRepository(dir),
+		Runs:      runrepo.New(filepath.Join(dir, "runs")),
+		Events:    eventmemory.New(),
+		Agents:    ports.NewStaticAgentProviderRegistry(map[string]ports.AgentProvider{"codex": agent}),
+		Shell:     shell.NewRunner(),
+		Worktrees: worktrees,
+		Now:       func() time.Time { return time.Unix(1, 0).UTC() },
+	}
+
+	result, err := uc.Run(context.Background(), RunOptions{WorkflowRef: workflowPath, WorkingDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := readWorktreeStatus(t, result.RunDir)
+	if status.MergeStatus != run.WorktreeMergeMerged {
+		t.Fatalf("expected merged after agent resolution, got %s", status.MergeStatus)
+	}
+	if status.AgentResolutionStatus != run.WorktreeAgentResolutionResolved {
+		t.Fatalf("expected resolved agent status, got %s", status.AgentResolutionStatus)
+	}
+	if status.AgentResolutionProvider != "codex" {
+		t.Fatalf("expected codex resolution provider, got %s", status.AgentResolutionProvider)
+	}
+	assertFileExists(t, filepath.Join(result.RunDir, "artifacts", "worktree", "merge.log"))
+}
+
+func TestRunWorkflowWorktreeRecoverableFailureRequestsAgent(t *testing.T) {
+	dir := t.TempDir()
+	initGitRepo(t, dir)
+	worktreeBase := t.TempDir()
+	wtProvider := worktreefake.New(worktreeBase)
+	wtProvider.StatusResult = &ports.WorktreeStatus{Clean: false, Files: []ports.FileStatus{{Path: "a.txt", Status: "M"}}}
+	wtProvider.DiffResult = &ports.ChangeSet{
+		Empty: false,
+		Files: []ports.FileChange{{Path: "a.txt", Status: "M"}},
+		Diff:  "diff...",
+	}
+	wtProvider.ApplyResult = &ports.MergeResult{Success: false}
+	wtProvider.ApplyError = ports.ErrWorktreeRecoverable
+	codexAgent := &recordingAgentProvider{}
+	agent := &recordingAgentProvider{
+		onRun: func(req ports.AgentRequest) error {
+			return os.WriteFile(filepath.Join(req.WorkingDir, "recoverable.txt"), []byte("resolved\n"), 0o644)
+		},
+	}
+	workflowPath := writeWorkflow(t, dir, `
+version: "1"
+name: worktree-agent-recovers-failed
+worktree:
+  enabled: true
+  provider: claude
+  base: current
+execution:
+  output_dir: "`+filepath.ToSlash(filepath.Join(dir, "runs"))+`"
+nodes:
+  - id: shell
+    kind: bash
+    command: "echo ok"
+`)
+	worktrees := ports.NewStaticWorktreeProviderRegistry(map[string]ports.WorktreeProvider{
+		"git": wtProvider,
+	})
+	uc := &RunWorkflowUseCase{
+		Workflows: newTestWorkflowRepository(dir),
+		Runs:      runrepo.New(filepath.Join(dir, "runs")),
+		Events:    eventmemory.New(),
+		Agents:    ports.NewStaticAgentProviderRegistry(map[string]ports.AgentProvider{"codex": codexAgent, "claude": agent}),
+		Shell:     shell.NewRunner(),
+		Worktrees: worktrees,
+		Now:       func() time.Time { return time.Unix(1, 0).UTC() },
+	}
+
+	result, err := uc.Run(context.Background(), RunOptions{WorkflowRef: workflowPath, WorkingDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(agent.requests) != 1 {
+		t.Fatalf("expected 1 claude agent call for recoverable failure, got %d", len(agent.requests))
+	}
+	if len(codexAgent.requests) != 0 {
+		t.Fatalf("expected codex not to be called, got %d", len(codexAgent.requests))
+	}
+	status := readWorktreeStatus(t, result.RunDir)
+	if status.MergeStatus != run.WorktreeMergeMerged {
+		t.Fatalf("expected merged after recoverable resolution, got %s", status.MergeStatus)
+	}
+	if status.AgentResolutionStatus != run.WorktreeAgentResolutionResolved {
+		t.Fatalf("expected resolved agent status, got %s", status.AgentResolutionStatus)
+	}
+	if status.AgentResolutionProvider != "claude" {
+		t.Fatalf("expected claude resolution provider, got %s", status.AgentResolutionProvider)
+	}
+	if status.MergeFailureCause == "" {
+		t.Fatal("expected merge failure cause")
+	}
+}
+
 func readWorktreeStatus(t *testing.T, runDir string) run.WorktreeMetadata {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join(runDir, "artifacts", "worktree", "status.json"))
@@ -1819,7 +1961,7 @@ version: "1"
 name: worktree-resume
 worktree:
   enabled: true
-  provider: fake
+  provider: codex
   base: current
 execution:
   output_dir: "`+filepath.ToSlash(filepath.Join(dir, "runs"))+`"
@@ -1838,7 +1980,7 @@ nodes:
     command: "test -f prepare.log && printf done"
 `)
 	worktrees := ports.NewStaticWorktreeProviderRegistry(map[string]ports.WorktreeProvider{
-		"fake": worktreefake.New(worktreeBase),
+		"git": worktreefake.New(worktreeBase),
 	})
 	uc := newTestRunWorkflowUseCaseWithWorktree(dir, shell.NewRunner(), events, worktrees)
 
@@ -1884,7 +2026,7 @@ nodes:
 	if resumedEvent == nil {
 		t.Fatalf("expected run.resumed event, got %#v", events.Events)
 	}
-	if resumedEvent.Data["worktree_path"] != pausedWorktreePath || resumedEvent.Data["worktree_provider"] != "fake" {
+	if resumedEvent.Data["worktree_path"] != pausedWorktreePath || resumedEvent.Data["worktree_provider"] != "codex" {
 		t.Fatalf("expected worktree resume event data, got %#v", resumedEvent.Data)
 	}
 }
@@ -1898,7 +2040,7 @@ version: "1"
 name: worktree-paused-cleanup
 worktree:
   enabled: true
-  provider: fake
+  provider: codex
   base: current
   cleanup:
     on_failure: cleanup
@@ -1911,7 +2053,7 @@ nodes:
     command: "if [ -f flaky.marker ]; then true; else touch flaky.marker; false; fi"
 `)
 	worktrees := ports.NewStaticWorktreeProviderRegistry(map[string]ports.WorktreeProvider{
-		"fake": worktreefake.New(worktreeBase),
+		"git": worktreefake.New(worktreeBase),
 	})
 	uc := newTestRunWorkflowUseCaseWithWorktree(dir, shell.NewRunner(), eventmemory.New(), worktrees)
 
@@ -1946,7 +2088,7 @@ version: "1"
 name: worktree-missing-checkpoint-state
 worktree:
   enabled: true
-  provider: fake
+  provider: codex
   base: current
 execution:
   output_dir: "`+filepath.ToSlash(filepath.Join(dir, "runs"))+`"
@@ -1957,7 +2099,7 @@ nodes:
     command: "false"
 `)
 	worktrees := ports.NewStaticWorktreeProviderRegistry(map[string]ports.WorktreeProvider{
-		"fake": worktreefake.New(worktreeBase),
+		"git": worktreefake.New(worktreeBase),
 	})
 	uc := newTestRunWorkflowUseCaseWithWorktree(dir, shell.NewRunner(), eventmemory.New(), worktrees)
 
@@ -1988,7 +2130,7 @@ version: "1"
 name: worktree-path-removed
 worktree:
   enabled: true
-  provider: fake
+  provider: codex
   base: current
 execution:
   output_dir: "`+filepath.ToSlash(filepath.Join(dir, "runs"))+`"
@@ -1999,7 +2141,7 @@ nodes:
     command: "false"
 `)
 	worktrees := ports.NewStaticWorktreeProviderRegistry(map[string]ports.WorktreeProvider{
-		"fake": worktreefake.New(worktreeBase),
+		"git": worktreefake.New(worktreeBase),
 	})
 	uc := newTestRunWorkflowUseCaseWithWorktree(dir, shell.NewRunner(), eventmemory.New(), worktrees)
 
@@ -2033,7 +2175,7 @@ version: "1"
 name: worktree-destination-changed
 worktree:
   enabled: true
-  provider: fake
+  provider: codex
   base: current
 execution:
   output_dir: "`+filepath.ToSlash(filepath.Join(dir, "runs"))+`"
@@ -2044,7 +2186,7 @@ nodes:
     command: "false"
 `)
 	worktrees := ports.NewStaticWorktreeProviderRegistry(map[string]ports.WorktreeProvider{
-		"fake": worktreefake.New(worktreeBase),
+		"git": worktreefake.New(worktreeBase),
 	})
 	uc := newTestRunWorkflowUseCaseWithWorktree(dir, shell.NewRunner(), eventmemory.New(), worktrees)
 

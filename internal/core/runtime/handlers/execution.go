@@ -23,6 +23,8 @@ type Executor struct {
 	svc Services
 }
 
+const internalGitWorktreeProvider = "git"
+
 var errRunPaused = errors.New("run paused")
 
 func Execute(ctx context.Context, svc Services, req ExecutionRequest) (Result, error) {
@@ -110,13 +112,18 @@ func (e *Executor) setupWorktree(ctx context.Context, state *ExecutionState, pla
 	if e.svc.Worktrees == nil {
 		return fmt.Errorf("worktree enabled but no worktree registry configured")
 	}
-	providerName := plan.Workflow.Worktree.Provider
+	agentProviderName := plan.Workflow.Worktree.Provider
+	if agentProviderName == "" {
+		agentProviderName = "codex"
+	}
+	providerName := internalGitWorktreeProvider
 	provider, ok := e.svc.Worktrees.Get(providerName)
 	if !ok {
-		return fmt.Errorf("unknown worktree provider %q", providerName)
+		return fmt.Errorf("worktree git provider %q not available", providerName)
 	}
 	state.worktreeEnabled = true
 	state.worktreeProvider = providerName
+	state.worktreeAgentProvider = agentProviderName
 
 	baseCommit, err := e.resolveBaseCommit(ctx, destinationDir, plan.Workflow.Worktree.Base)
 	if err != nil {
@@ -138,12 +145,13 @@ func (e *Executor) setupWorktree(ctx context.Context, state *ExecutionState, pla
 	state.baseWorkingDir = wt.Path
 
 	artifact := map[string]any{
-		"enabled":     true,
-		"provider":    providerName,
-		"name":        wt.Name,
-		"path":        wt.Path,
-		"base_commit": baseCommit,
-		"destination": destinationDir,
+		"enabled":      true,
+		"provider":     agentProviderName,
+		"git_provider": providerName,
+		"name":         wt.Name,
+		"path":         wt.Path,
+		"base_commit":  baseCommit,
+		"destination":  destinationDir,
 	}
 	data, err := json.MarshalIndent(artifact, "", "  ")
 	if err != nil {
@@ -155,12 +163,13 @@ func (e *Executor) setupWorktree(ctx context.Context, state *ExecutionState, pla
 	}
 
 	eventData := map[string]any{
-		"enabled":     true,
-		"provider":    providerName,
-		"name":        wt.Name,
-		"path":        wt.Path,
-		"base_commit": baseCommit,
-		"destination": destinationDir,
+		"enabled":      true,
+		"provider":     agentProviderName,
+		"git_provider": providerName,
+		"name":         wt.Name,
+		"path":         wt.Path,
+		"base_commit":  baseCommit,
+		"destination":  destinationDir,
 	}
 	_ = e.emitState(ctx, state, corerun.Event{Type: "worktree.created", Data: eventData})
 	return nil
@@ -189,9 +198,19 @@ func (e *Executor) restoreWorktree(ctx context.Context, state *ExecutionState, c
 		return fmt.Errorf("worktree enabled but no worktree registry configured")
 	}
 	providerName := wtCheckpoint.Provider
+	if providerName == "" || providerName == "pi" {
+		providerName = internalGitWorktreeProvider
+	}
 	provider, ok := e.svc.Worktrees.Get(providerName)
 	if !ok {
-		return fmt.Errorf("unknown worktree provider %q", providerName)
+		return fmt.Errorf("worktree git provider %q not available", providerName)
+	}
+	agentProviderName := wtCheckpoint.AgentProvider
+	if agentProviderName == "" {
+		agentProviderName = checkpoint.Workflow.Worktree.Provider
+	}
+	if agentProviderName == "" {
+		agentProviderName = "codex"
 	}
 	if wtCheckpoint.Path == "" {
 		return fmt.Errorf("checkpoint worktree path is empty")
@@ -234,6 +253,7 @@ func (e *Executor) restoreWorktree(ctx context.Context, state *ExecutionState, c
 
 	state.worktreeEnabled = true
 	state.worktreeProvider = providerName
+	state.worktreeAgentProvider = agentProviderName
 	state.worktree = wt
 	state.worktreePath = wt.Path
 	state.worktreeBaseCommit = wtCheckpoint.BaseCommit
@@ -298,7 +318,8 @@ func (e *Executor) resume(ctx context.Context, req ExecutionRequest) (Result, er
 	resumeData := map[string]any{"cursor": startCursor, "retry_node_id": checkpoint.RetryNodeID, "reason": checkpoint.Reason}
 	if state.worktreeEnabled {
 		resumeData["worktree_path"] = state.worktreePath
-		resumeData["worktree_provider"] = state.worktreeProvider
+		resumeData["worktree_provider"] = state.worktreeAgentProvider
+		resumeData["worktree_git_provider"] = state.worktreeProvider
 	}
 	_ = e.emitState(ctx, state, corerun.Event{Type: "run.resumed", Data: resumeData})
 	if err := e.saveCheckpoint(ctx, state, true, startCursor, "", ""); err != nil {

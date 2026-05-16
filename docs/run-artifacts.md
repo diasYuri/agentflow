@@ -40,11 +40,13 @@ diretório do run.
 Quando um workflow tem `worktree.enabled: true`, o runtime produz artefatos adicionais sob
 `<run_dir>/artifacts/worktree/`:
 
-- `worktree/status.json` — metadados finais do worktree, incluindo `enabled`, `provider`, `name`,
-  `path`, `base_commit`, `destination_commit_before_merge`, `destination_commit_after_merge`,
-  `merge_status`, `cleanup_status`, `changed_files`, `conflicts` e `commands`. Esse arquivo é
-  atualizado a cada etapa do ciclo de merge/cleanup.
-- `worktree/diff.patch` — diff determinístico gerado pelo provider entre o worktree e o
+- `worktree/status.json` — metadados finais do worktree, incluindo `enabled`, `provider`
+  (agente de resolução), `git_provider`, `name`, `path`, `base_commit`,
+  `destination_commit_before_merge`, `destination_commit_after_merge`, `merge_status`,
+  `cleanup_status`, `changed_files`, `conflicts`, `commands`,
+  `merge_failure_cause`, `agent_resolution_status`, `agent_resolution_provider` e
+  `agent_resolution_error`. Esse arquivo é atualizado a cada etapa do ciclo de merge/cleanup.
+- `worktree/diff.patch` — diff determinístico gerado pelo executor Git interno entre o worktree e o
   `base_commit`, persistido somente quando há mudanças.
 - `worktree/merge.log` — registro do merge bem-sucedido, com lista de arquivos alterados e
   comandos Git executados.

@@ -38,6 +38,7 @@ type ExecutionState struct {
 	pause                 PauseSignaller
 	worktreeEnabled       bool
 	worktreeProvider      string
+	worktreeAgentProvider string
 	worktreePath          string
 	destinationWorkingDir string
 	worktreeBaseCommit    string
@@ -192,6 +193,7 @@ func (s *ExecutionState) spawn(plan coreworkflow.ExecutionPlan, path []string) *
 		pause:                 s.pause,
 		worktreeEnabled:       s.worktreeEnabled,
 		worktreeProvider:      s.worktreeProvider,
+		worktreeAgentProvider: s.worktreeAgentProvider,
 		worktreePath:          s.worktreePath,
 		destinationWorkingDir: s.destinationWorkingDir,
 		worktreeBaseCommit:    s.worktreeBaseCommit,
@@ -241,6 +243,7 @@ func (e *Executor) saveCheckpoint(ctx context.Context, state *ExecutionState, en
 		checkpoint.Worktree = &corerun.WorktreeCheckpoint{
 			Enabled:               true,
 			Provider:              state.worktreeProvider,
+			AgentProvider:         state.worktreeAgentProvider,
 			ID:                    state.worktree.ID,
 			Name:                  state.worktree.Name,
 			Path:                  state.worktree.Path,

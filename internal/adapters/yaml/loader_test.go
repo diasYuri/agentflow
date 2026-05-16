@@ -172,8 +172,8 @@ worktree: true
 	if !spec.Worktree.Enabled {
 		t.Fatal("expected worktree enabled")
 	}
-	if spec.Worktree.Provider != "pi" {
-		t.Fatalf("expected provider pi, got %q", spec.Worktree.Provider)
+	if spec.Worktree.Provider != "codex" {
+		t.Fatalf("expected provider codex, got %q", spec.Worktree.Provider)
 	}
 	if spec.Worktree.Base != "current" {
 		t.Fatalf("expected base current, got %q", spec.Worktree.Base)

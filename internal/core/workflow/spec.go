@@ -135,7 +135,7 @@ func ApplyWorktreeDefaults(spec *WorkflowSpec) {
 		return
 	}
 	if spec.Worktree.Provider == "" {
-		spec.Worktree.Provider = "pi"
+		spec.Worktree.Provider = "codex"
 	}
 	if spec.Worktree.Base == "" {
 		spec.Worktree.Base = "current"

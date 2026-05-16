@@ -6,8 +6,9 @@ import (
 )
 
 var (
-	ErrWorktreeStructural = errors.New("worktree structural error")
-	ErrWorktreeResolvable = errors.New("worktree resolvable error")
+	ErrWorktreeStructural  = errors.New("worktree structural error")
+	ErrWorktreeResolvable  = errors.New("worktree resolvable error")
+	ErrWorktreeRecoverable = errors.New("worktree recoverable error")
 )
 
 const (

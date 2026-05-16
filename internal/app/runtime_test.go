@@ -13,4 +13,7 @@ func TestNewRunWorkflowUseCaseRegistersAgentProviders(t *testing.T) {
 			t.Fatalf("expected provider %q to be registered", provider)
 		}
 	}
+	if !uc.Worktrees.HasProvider("git") {
+		t.Fatal("expected git worktree executor to be registered")
+	}
 }

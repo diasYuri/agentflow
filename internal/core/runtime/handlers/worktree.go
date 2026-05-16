@@ -19,7 +19,7 @@ func (e *Executor) finalizeWorktree(ctx context.Context, state *ExecutionState) 
 	if !ok {
 		meta.MergeStatus = corerun.WorktreeMergeFailed
 		_ = e.saveWorktreeStatus(ctx, state, meta)
-		return meta, fmt.Errorf("worktree provider %q not available during finalize", state.worktreeProvider)
+		return meta, fmt.Errorf("worktree git provider %q not available during finalize", state.worktreeProvider)
 	}
 
 	// 1. Status
@@ -69,7 +69,25 @@ func (e *Executor) finalizeWorktree(ctx context.Context, state *ExecutionState) 
 	meta.Commands = appendGitCommands(meta.Commands, mergeResult.Commands)
 
 	if err != nil {
-		// Classify error
+		meta.MergeFailureCause = err.Error()
+		if errors.Is(err, coreports.ErrWorktreeRecoverable) {
+			meta.MergeStatus = corerun.WorktreeMergeFailed
+			meta.Conflicts = toWorktreeConflicts(mergeResult.Conflicts)
+			_ = e.saveWorktreeStatus(ctx, state, meta)
+			_ = e.saveConflictsArtifact(ctx, state, meta)
+			if state.plan.Workflow.Worktree.Merge.OnConflict == "agent" {
+				resolved, resolveErr := e.requestWorktreeResolution(ctx, state, meta, changeSet)
+				if resolveErr != nil {
+					meta = resolved
+					meta.AgentResolutionStatus = corerun.WorktreeAgentResolutionFailed
+					meta.AgentResolutionError = resolveErr.Error()
+					_ = e.saveWorktreeStatus(ctx, state, meta)
+					return meta, fmt.Errorf("worktree resolution failed: %w", resolveErr)
+				}
+				meta = resolved
+			}
+			return meta, nil
+		}
 		if errors.Is(err, coreports.ErrWorktreeStructural) {
 			meta.MergeStatus = corerun.WorktreeMergeFailed
 			meta.Conflicts = toWorktreeConflicts(mergeResult.Conflicts)
@@ -77,18 +95,19 @@ func (e *Executor) finalizeWorktree(ctx context.Context, state *ExecutionState) 
 			_ = e.saveConflictsArtifact(ctx, state, meta)
 			return meta, fmt.Errorf("worktree apply structural error: %w", err)
 		}
-		// Resolvable conflict or unknown -> attempt agent resolution if configured
 		meta.MergeStatus = corerun.WorktreeMergeConflict
 		meta.Conflicts = toWorktreeConflicts(mergeResult.Conflicts)
 		_ = e.saveWorktreeStatus(ctx, state, meta)
 		_ = e.saveConflictsArtifact(ctx, state, meta)
 
 		if state.plan.Workflow.Worktree.Merge.OnConflict == "agent" {
-			resolved, resolveErr := e.requestConflictResolution(ctx, state, meta, changeSet)
+			resolved, resolveErr := e.requestWorktreeResolution(ctx, state, meta, changeSet)
 			if resolveErr != nil {
+				meta = resolved
+				meta.AgentResolutionStatus = corerun.WorktreeAgentResolutionFailed
 				meta.AgentResolutionError = resolveErr.Error()
 				_ = e.saveWorktreeStatus(ctx, state, meta)
-				return meta, fmt.Errorf("worktree conflict resolution failed: %w", resolveErr)
+				return meta, fmt.Errorf("worktree resolution failed: %w", resolveErr)
 			}
 			meta = resolved
 		}
@@ -107,11 +126,13 @@ func (e *Executor) finalizeWorktree(ctx context.Context, state *ExecutionState) 
 		meta.Conflicts = toWorktreeConflicts(mergeResult.Conflicts)
 		_ = e.saveConflictsArtifact(ctx, state, meta)
 		if state.plan.Workflow.Worktree.Merge.OnConflict == "agent" {
-			resolved, resolveErr := e.requestConflictResolution(ctx, state, meta, changeSet)
+			resolved, resolveErr := e.requestWorktreeResolution(ctx, state, meta, changeSet)
 			if resolveErr != nil {
+				meta = resolved
+				meta.AgentResolutionStatus = corerun.WorktreeAgentResolutionFailed
 				meta.AgentResolutionError = resolveErr.Error()
 				_ = e.saveWorktreeStatus(ctx, state, meta)
-				return meta, fmt.Errorf("worktree conflict resolution failed: %w", resolveErr)
+				return meta, fmt.Errorf("worktree resolution failed: %w", resolveErr)
 			}
 			meta = resolved
 		}
@@ -121,21 +142,30 @@ func (e *Executor) finalizeWorktree(ctx context.Context, state *ExecutionState) 
 	return meta, nil
 }
 
-func (e *Executor) requestConflictResolution(ctx context.Context, state *ExecutionState, meta corerun.WorktreeMetadata, changeSet coreports.ChangeSet) (corerun.WorktreeMetadata, error) {
-	providerName := "pi"
-	if !e.svc.Agents.HasProvider(providerName) {
+func (e *Executor) requestWorktreeResolution(ctx context.Context, state *ExecutionState, meta corerun.WorktreeMetadata, changeSet coreports.ChangeSet) (corerun.WorktreeMetadata, error) {
+	providerName := state.worktreeAgentProvider
+	if providerName == "" {
 		providerName = "codex"
 	}
 	provider, ok := e.svc.Agents.Get(providerName)
 	if !ok {
-		return meta, fmt.Errorf("no agent provider available for conflict resolution")
+		return meta, fmt.Errorf("worktree agent provider %q not available for resolution", providerName)
 	}
 
+	meta.AgentResolutionStatus = corerun.WorktreeAgentResolutionRequested
+	meta.AgentResolutionProvider = providerName
 	prompt := buildConflictResolutionPrompt(state, meta, changeSet)
 	_ = e.emitState(ctx, state, corerun.Event{Type: "worktree.resolution_agent.requested", Data: map[string]any{
 		"provider": providerName,
 		"files":    len(meta.Conflicts),
 	}})
+	beforeStatus, beforeCommands, beforeErr := e.destinationPorcelainStatus(ctx, state.destinationWorkingDir)
+	meta.Commands = appendGitCommands(meta.Commands, beforeCommands)
+	if beforeErr != nil {
+		meta.AgentResolutionStatus = corerun.WorktreeAgentResolutionFailed
+		meta.AgentResolutionError = beforeErr.Error()
+		return meta, beforeErr
+	}
 
 	_, err := provider.Run(ctx, coreports.AgentRequest{
 		RunID:      state.runID,
@@ -146,53 +176,33 @@ func (e *Executor) requestConflictResolution(ctx context.Context, state *Executi
 		Sandbox:    coreworkflow.SandboxSpec{Mode: "workspace-write"},
 	})
 	if err != nil {
+		meta.AgentResolutionStatus = corerun.WorktreeAgentResolutionFailed
 		return meta, err
 	}
 
-	// Re-evaluate status after agent attempted resolution
-	wtProvider, _ := e.svc.Worktrees.Get(state.worktreeProvider)
-	if wtProvider == nil {
-		meta.MergeStatus = corerun.WorktreeMergeFailed
-		return meta, fmt.Errorf("worktree provider unavailable after resolution")
-	}
-
-	wtStatus, statusErr := wtProvider.Status(ctx, state.worktree)
-	if statusErr != nil {
-		meta.MergeStatus = corerun.WorktreeMergeFailed
-		return meta, fmt.Errorf("status check after resolution failed: %w", statusErr)
-	}
-
-	if wtStatus.Clean {
-		meta.MergeStatus = corerun.WorktreeMergeNoChanges
-		return meta, nil
-	}
-
-	// Re-apply after resolution
-	mergeResult, applyErr := wtProvider.Apply(ctx, coreports.ApplyWorktreeRequest{
-		Worktree:   state.worktree,
-		TargetDir:  state.destinationWorkingDir,
-		BaseCommit: state.worktreeBaseCommit,
-		Diff:       changeSet.Diff,
-	})
-	meta.Commands = appendGitCommands(meta.Commands, mergeResult.Commands)
-
-	if applyErr != nil {
-		if errors.Is(applyErr, coreports.ErrWorktreeStructural) {
+	resolved, commands, validateErr := e.validateDestinationAfterResolution(ctx, state.destinationWorkingDir, beforeStatus)
+	meta.Commands = appendGitCommands(meta.Commands, commands)
+	if validateErr != nil {
+		meta.AgentResolutionStatus = corerun.WorktreeAgentResolutionFailed
+		meta.AgentResolutionError = validateErr.Error()
+		if meta.MergeStatus == "" {
 			meta.MergeStatus = corerun.WorktreeMergeFailed
-		} else {
-			meta.MergeStatus = corerun.WorktreeMergeConflict
 		}
-		meta.Conflicts = toWorktreeConflicts(mergeResult.Conflicts)
-		return meta, applyErr
+		return meta, validateErr
 	}
-
-	if mergeResult.Success {
+	if resolved {
 		meta.MergeStatus = corerun.WorktreeMergeMerged
+		meta.AgentResolutionStatus = corerun.WorktreeAgentResolutionResolved
 		meta.Conflicts = nil
 		meta.DestinationCommitAfter = e.currentGitHead(ctx, state.destinationWorkingDir)
+		_ = e.saveMergeLogArtifact(ctx, state, meta)
+		_ = e.emitState(ctx, state, corerun.Event{Type: "worktree.merged", Data: map[string]any{
+			"changed_files": len(meta.ChangedFiles),
+			"resolved_by":   providerName,
+		}})
 	} else {
-		meta.MergeStatus = corerun.WorktreeMergeConflict
-		meta.Conflicts = toWorktreeConflicts(mergeResult.Conflicts)
+		meta.AgentResolutionStatus = corerun.WorktreeAgentResolutionFailed
+		meta.AgentResolutionError = "agent finished without leaving changes in destination"
 	}
 	return meta, nil
 }
@@ -200,12 +210,14 @@ func (e *Executor) requestConflictResolution(ctx context.Context, state *Executi
 func (e *Executor) initialWorktreeMetadata(ctx context.Context, state *ExecutionState) corerun.WorktreeMetadata {
 	meta := corerun.WorktreeMetadata{
 		Enabled:                 true,
-		Provider:                state.worktreeProvider,
+		Provider:                state.worktreeAgentProvider,
+		GitProvider:             state.worktreeProvider,
 		Name:                    state.worktree.Name,
 		BaseCommit:              state.worktreeBaseCommit,
 		DestinationCommitBefore: e.currentGitHead(ctx, state.destinationWorkingDir),
 		WorktreePath:            state.worktreePath,
 		Destination:             state.destinationWorkingDir,
+		AgentResolutionStatus:   corerun.WorktreeAgentResolutionNotAttempted,
 	}
 	if meta.Name == "" {
 		meta.Name = state.plan.Workflow.Name
@@ -225,6 +237,83 @@ func (e *Executor) currentGitHead(ctx context.Context, workingDir string) string
 		return ""
 	}
 	return strings.TrimSpace(res.Stdout)
+}
+
+func (e *Executor) validateDestinationAfterResolution(ctx context.Context, workingDir string, beforeStatus string) (bool, []coreports.GitCommand, error) {
+	if e.svc.Shell == nil || workingDir == "" {
+		return false, nil, fmt.Errorf("shell runner unavailable for resolution validation")
+	}
+	var commands []coreports.GitCommand
+
+	for _, stateFile := range []string{"MERGE_HEAD", "REBASE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"} {
+		cmd := "git rev-parse --verify " + stateFile
+		res, err := e.svc.Shell.Run(ctx, coreports.ShellRequest{Command: cmd, WorkingDir: workingDir})
+		commands = append(commands, shellResultToWorktreeCommand(cmd, res))
+		if err != nil && res.ExitCode == -1 {
+			return false, commands, fmt.Errorf("failed to validate git state: %w", err)
+		}
+		if res.ExitCode == 0 {
+			return false, commands, fmt.Errorf("destination has unresolved git state %s", stateFile)
+		}
+	}
+
+	status, statusCommands, err := e.destinationPorcelainStatus(ctx, workingDir)
+	commands = append(commands, statusCommands...)
+	if err != nil {
+		return false, commands, err
+	}
+
+	cachedCmd := "git diff --cached --name-only"
+	cached, err := e.svc.Shell.Run(ctx, coreports.ShellRequest{Command: cachedCmd, WorkingDir: workingDir})
+	commands = append(commands, shellResultToWorktreeCommand(cachedCmd, cached))
+	if err != nil || cached.ExitCode != 0 {
+		if err != nil && cached.ExitCode == -1 {
+			return false, commands, fmt.Errorf("failed to validate staged destination diff: %w", err)
+		}
+		return false, commands, fmt.Errorf("failed to validate staged destination diff: %s", cached.Stderr)
+	}
+
+	diffCmd := "git diff --name-only"
+	diff, err := e.svc.Shell.Run(ctx, coreports.ShellRequest{Command: diffCmd, WorkingDir: workingDir})
+	commands = append(commands, shellResultToWorktreeCommand(diffCmd, diff))
+	if err != nil || diff.ExitCode != 0 {
+		if err != nil && diff.ExitCode == -1 {
+			return false, commands, fmt.Errorf("failed to validate destination diff: %w", err)
+		}
+		return false, commands, fmt.Errorf("failed to validate destination diff: %s", diff.Stderr)
+	}
+
+	if strings.TrimSpace(status) == strings.TrimSpace(beforeStatus) {
+		return false, commands, nil
+	}
+	return strings.TrimSpace(status) != "" ||
+		strings.TrimSpace(cached.Stdout) != "" ||
+		strings.TrimSpace(diff.Stdout) != "", commands, nil
+}
+
+func (e *Executor) destinationPorcelainStatus(ctx context.Context, workingDir string) (string, []coreports.GitCommand, error) {
+	if e.svc.Shell == nil || workingDir == "" {
+		return "", nil, fmt.Errorf("shell runner unavailable for destination status")
+	}
+	statusCmd := "git status --porcelain=v1"
+	status, err := e.svc.Shell.Run(ctx, coreports.ShellRequest{Command: statusCmd, WorkingDir: workingDir})
+	commands := []coreports.GitCommand{shellResultToWorktreeCommand(statusCmd, status)}
+	if err != nil || status.ExitCode != 0 {
+		if err != nil && status.ExitCode == -1 {
+			return "", commands, fmt.Errorf("failed to validate destination status: %w", err)
+		}
+		return "", commands, fmt.Errorf("failed to validate destination status: %s", status.Stderr)
+	}
+	return status.Stdout, commands, nil
+}
+
+func shellResultToWorktreeCommand(command string, result coreports.ShellResult) coreports.GitCommand {
+	return coreports.GitCommand{
+		Command:  command,
+		ExitCode: result.ExitCode,
+		Stdout:   result.Stdout,
+		Stderr:   result.Stderr,
+	}
 }
 
 func buildConflictResolutionPrompt(state *ExecutionState, meta corerun.WorktreeMetadata, changeSet coreports.ChangeSet) string {

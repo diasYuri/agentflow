@@ -1,4 +1,4 @@
-package pi
+package git
 
 import (
 	"context"
@@ -20,13 +20,13 @@ const (
 
 var repeatedHyphen = regexp.MustCompile(`-+$`)
 
-// Provider implements the pi worktree provider using real Git commands.
+// Provider implements the internal worktree executor using real Git commands.
 type Provider struct {
 	shell  ports.ShellRunner
 	uuidFn func() (uuid.UUID, error)
 }
 
-// New creates a new pi worktree provider.
+// New creates a new Git worktree executor.
 func New(shell ports.ShellRunner) *Provider {
 	return &Provider{shell: shell, uuidFn: uuid.NewV7}
 }
@@ -213,7 +213,7 @@ func (p *Provider) Apply(ctx context.Context, req ports.ApplyWorktreeRequest) (p
 		return ports.MergeResult{}, fmt.Errorf("%w: unable to read target HEAD: %s", ports.ErrWorktreeStructural, r.Stderr)
 	}
 	if strings.TrimSpace(r.Stdout) != req.BaseCommit {
-		return ports.MergeResult{}, fmt.Errorf("%w: target HEAD changed since base_commit", ports.ErrWorktreeStructural)
+		return ports.MergeResult{}, fmt.Errorf("%w: target HEAD changed since base_commit", ports.ErrWorktreeRecoverable)
 	}
 
 	r, err = p.git(ctx, req.TargetDir, "status", "--porcelain=v1")
@@ -222,7 +222,7 @@ func (p *Provider) Apply(ctx context.Context, req ports.ApplyWorktreeRequest) (p
 		return ports.MergeResult{}, fmt.Errorf("%w: unable to check target status: %s", ports.ErrWorktreeStructural, r.Stderr)
 	}
 	if strings.TrimSpace(r.Stdout) != "" {
-		return ports.MergeResult{}, fmt.Errorf("%w: target working directory has local changes", ports.ErrWorktreeStructural)
+		return ports.MergeResult{}, fmt.Errorf("%w: target working directory has local changes", ports.ErrWorktreeRecoverable)
 	}
 
 	// Write diff to temporary file and apply.
