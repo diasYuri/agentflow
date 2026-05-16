@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	coreports "github.com/diasYuri/agentflow/internal/core/ports"
@@ -53,6 +54,16 @@ func (uc *RunWorkflowUseCase) DryRun(ctx context.Context, opts RunOptions) (core
 }
 
 func (uc *RunWorkflowUseCase) Run(ctx context.Context, opts RunOptions) (RunResult, error) {
+	if opts.ResumeRunID != "" {
+		if opts.DryRun {
+			return RunResult{}, fmt.Errorf("dry-run is not supported when resuming a run")
+		}
+		return handlers.Execute(ctx, uc.services(), handlers.ExecutionRequest{
+			ResumeRunID: opts.ResumeRunID,
+			WorkingDir:  opts.WorkingDir,
+			Pause:       opts.Pause,
+		})
+	}
 	prepared, err := uc.prepareRunWorkflow(ctx, opts)
 	if err != nil {
 		return RunResult{}, err
@@ -66,6 +77,7 @@ func (uc *RunWorkflowUseCase) Run(ctx context.Context, opts RunOptions) (RunResu
 		Plan:               prepared.plan,
 		Inputs:             prepared.resolvedInputs,
 		WorkingDir:         opts.WorkingDir,
+		Pause:              opts.Pause,
 	})
 }
 

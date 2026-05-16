@@ -65,13 +65,23 @@ type RunWorkflowRequest struct {
 }
 
 type WorkflowRun struct {
-	ID         string            `json:"id"`
-	Workflow   string            `json:"workflow"`
-	RunDir     string            `json:"run_dir"`
-	Status     corerun.RunStatus `json:"status"`
-	StartedAt  time.Time         `json:"started_at"`
-	FinishedAt time.Time         `json:"finished_at,omitempty"`
-	Error      string            `json:"error,omitempty"`
+	ID             string              `json:"id"`
+	Workflow       string              `json:"workflow"`
+	RunDir         string              `json:"run_dir"`
+	Status         corerun.RunStatus   `json:"status"`
+	StartedAt      time.Time           `json:"started_at"`
+	FinishedAt     time.Time           `json:"finished_at,omitempty"`
+	PausedAt       time.Time           `json:"paused_at,omitempty"`
+	PauseReason    string              `json:"pause_reason,omitempty"`
+	ResumeCount    int                 `json:"resume_count,omitempty"`
+	CurrentStep    string              `json:"current_step,omitempty"`
+	CompletedSteps []string            `json:"completed_steps,omitempty"`
+	PendingSteps   []string            `json:"pending_steps,omitempty"`
+	TotalSteps     int                 `json:"total_steps,omitempty"`
+	Error          string              `json:"error,omitempty"`
+	TerminalError  string              `json:"terminal_error,omitempty"`
+	RecentEvents   []string            `json:"recent_events,omitempty"`
+	Request        *RunWorkflowRequest `json:"-"`
 }
 
 type RunWorkflowResponse struct {
@@ -91,6 +101,14 @@ type CancelWorkflowResponse struct {
 	Run WorkflowRun `json:"run"`
 }
 
+type PauseWorkflowResponse struct {
+	Run WorkflowRun `json:"run"`
+}
+
+type ResumeWorkflowResponse struct {
+	Run WorkflowRun `json:"run"`
+}
+
 type StopResponse struct {
 	Stopping bool `json:"stopping"`
 }
@@ -104,5 +122,12 @@ func runOptions(req RunWorkflowRequest, runID string) runworkflow.RunOptions {
 		MaxConcurrency: req.MaxConcurrency,
 		WorkingDir:     req.WorkingDir,
 		DryRun:         req.DryRun,
+	}
+}
+
+func resumeOptions(req RunWorkflowRequest, runID string) runworkflow.RunOptions {
+	return runworkflow.RunOptions{
+		ResumeRunID: runID,
+		WorkingDir:  req.WorkingDir,
 	}
 }

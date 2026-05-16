@@ -15,6 +15,7 @@ defaults:
 execution:
   max_concurrency: 1
   fail_fast: true
+  pause_when_fail: true
   max_node_output_bytes: 1048576
 
 nodes:
@@ -35,10 +36,10 @@ nodes:
 
       Regras:
       - Inspecione o repositório antes de planejar.
-      - Crie `.agentflow/plans/` se ainda não existir.
+      - Crie `.agentflow/plans/<feature-name>/` se ainda não existir.
       - Cada plano deve caber em uma sessão de implementação.
       - Os planos devem ser ordenados, pequenos, objetivos e sem sobreposição desnecessária.
-      - Use nomes estáveis como `.agentflow/plans/001-slug-curto.md`.
+      - Use nomes estáveis como `.agentflow/plans/<feature-name>/001-slug-curto.md`.
       - Cada arquivo de plano deve conter: objetivo, contexto, escopo, arquivos prováveis, passos de implementação, validação e riscos.
       - Não implemente a feature neste node; apenas escreva os arquivos de plano.
       - Retorne JSON válido seguindo o schema.

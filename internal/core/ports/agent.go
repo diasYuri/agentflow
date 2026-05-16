@@ -84,6 +84,9 @@ type RunRepository interface {
 	CreateRun(ctx context.Context, meta run.RunMetadata) (run.RunHandle, error)
 	SaveWorkflow(ctx context.Context, runID string, sourcePath string, normalized any, plan any) error
 	SaveNodeResult(ctx context.Context, runID string, result run.NodeResult) error
+	SaveCheckpoint(ctx context.Context, checkpoint run.Checkpoint) error
+	LoadCheckpoint(ctx context.Context, runID string) (run.Checkpoint, error)
+	ClearCheckpoint(ctx context.Context, runID string) error
 	SaveArtifact(ctx context.Context, runID string, name string, data []byte) error
 	FinalizeRun(ctx context.Context, runID string, summary run.Summary) error
 	RunDir(runID string) (string, bool)

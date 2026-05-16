@@ -76,6 +76,18 @@ func (c *Client) CancelWorkflow(ctx context.Context, runID string) (CancelWorkfl
 	return out, err
 }
 
+func (c *Client) PauseWorkflow(ctx context.Context, runID string) (PauseWorkflowResponse, error) {
+	var out PauseWorkflowResponse
+	err := c.do(ctx, http.MethodPost, "/v1/workflows/"+runID+"/pause", nil, &out)
+	return out, err
+}
+
+func (c *Client) ResumeWorkflow(ctx context.Context, runID string) (ResumeWorkflowResponse, error) {
+	var out ResumeWorkflowResponse
+	err := c.do(ctx, http.MethodPost, "/v1/workflows/"+runID+"/resume", nil, &out)
+	return out, err
+}
+
 func (c *Client) do(ctx context.Context, method string, path string, body any, out any) error {
 	var reader io.Reader
 	if body != nil {

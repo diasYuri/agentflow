@@ -45,6 +45,20 @@ Os workflows são resolvidos primeiro em `./.agentflow/workflows` e depois em `~
 - `product-spec-to-implementation.yaml`: lê uma spec `.md` e demonstra `kind: map` aninhado para iterar por spec técnica e por plano, implementando cada plano no workspace.
 - `local-health-check.yaml`: exemplo executável sem Codex; roda comandos locais e resume outputs.
 - `claude-code-review.yaml`: exemplo mínimo com `provider: claude`, permissão somente leitura e resposta estruturada.
+- `pause-on-failure.yaml`: demonstra `execution.pause_when_fail`; o run pausa quando o node `gate` falha (arquivo de flag ausente) e pode ser retomado com `workflow resume <id>` depois de criar o arquivo.
+
+### Fluxo de pause/resume
+
+```bash
+mkdir -p .agentflow/workflows
+cp samples/workflows/pause-on-failure.yaml .agentflow/workflows/pause-on-failure.yaml
+go run ./cmd/agentflow daemon start
+go run ./cmd/agentflow workflow run pause-on-failure --input flag_file=/tmp/agentflow-resume.flag
+# o run pausa porque /tmp/agentflow-resume.flag não existe
+touch /tmp/agentflow-resume.flag
+go run ./cmd/agentflow workflow status <run-id>
+go run ./cmd/agentflow workflow resume <run-id>
+```
 
 ## Segurança
 

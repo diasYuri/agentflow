@@ -26,11 +26,20 @@ type Services struct {
 type Options struct {
 	WorkflowRef    string
 	RunID          string
+	ResumeRunID    string
 	Inputs         map[string]any
 	Vars           map[string]any
 	MaxConcurrency int
 	WorkingDir     string
 	DryRun         bool
+	Pause          PauseSignaller
+}
+
+// PauseSignaller is the subset of *runtime.PauseController used by the handlers.
+// The runtime package wires the concrete controller; the handlers stay free of
+// the import cycle.
+type PauseSignaller interface {
+	Requested() bool
 }
 
 type Result struct {
@@ -43,10 +52,12 @@ type Result struct {
 
 type ExecutionRequest struct {
 	RunID              string
+	ResumeRunID        string
 	WorkflowSourcePath string
 	Plan               coreworkflow.ExecutionPlan
 	Inputs             map[string]any
 	WorkingDir         string
+	Pause              PauseSignaller
 }
 
 func ResolveInputs(spec coreworkflow.WorkflowSpec, provided map[string]any) (map[string]any, error) {

@@ -1,6 +1,10 @@
 package run
 
-import "time"
+import (
+	"time"
+
+	"github.com/diasYuri/agentflow/internal/core/workflow"
+)
 
 type NodeStatus string
 
@@ -21,9 +25,17 @@ const (
 	RunValidating RunStatus = "validating"
 	RunPlanned    RunStatus = "planned"
 	RunRunning    RunStatus = "running"
+	RunPaused     RunStatus = "paused"
 	RunSuccess    RunStatus = "success"
 	RunFailed     RunStatus = "failed"
 	RunCancelled  RunStatus = "cancelled"
+)
+
+type PauseReason string
+
+const (
+	PauseReasonManual        PauseReason = "manual"
+	PauseReasonPauseWhenFail PauseReason = "pause_when_fail"
 )
 
 type Event struct {
@@ -79,4 +91,25 @@ type Summary struct {
 	FailedNodes int                   `json:"failed_nodes"`
 	Retries     int                   `json:"retries"`
 	Nodes       map[string]NodeResult `json:"nodes"`
+}
+
+type CheckpointMetrics struct {
+	AgentCalls int `json:"agent_calls"`
+	BashCalls  int `json:"bash_calls"`
+	Retries    int `json:"retries"`
+}
+
+type Checkpoint struct {
+	RunID        string                `json:"run_id"`
+	Workflow     workflow.WorkflowSpec `json:"workflow"`
+	WorkflowPath string                `json:"workflow_path"`
+	Status       RunStatus             `json:"status"`
+	Reason       PauseReason           `json:"reason,omitempty"`
+	Cursor       int                   `json:"cursor"`
+	RetryNodeID  string                `json:"retry_node_id,omitempty"`
+	Inputs       map[string]any        `json:"inputs,omitempty"`
+	StartedAt    time.Time             `json:"started_at"`
+	UpdatedAt    time.Time             `json:"updated_at"`
+	Metrics      CheckpointMetrics     `json:"metrics"`
+	Nodes        map[string]NodeResult `json:"nodes,omitempty"`
 }

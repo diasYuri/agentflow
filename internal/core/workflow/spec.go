@@ -32,6 +32,7 @@ type DefaultsSpec struct {
 type ExecutionSpec struct {
 	MaxConcurrency     int    `json:"max_concurrency,omitempty" yaml:"max_concurrency"`
 	FailFast           *bool  `json:"fail_fast,omitempty" yaml:"fail_fast"`
+	PauseWhenFail      bool   `json:"pause_when_fail,omitempty" yaml:"pause_when_fail"`
 	OutputDir          string `json:"output_dir,omitempty" yaml:"output_dir"`
 	MaxNodeOutputBytes int64  `json:"max_node_output_bytes,omitempty" yaml:"max_node_output_bytes"`
 }

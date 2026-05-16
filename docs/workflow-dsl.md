@@ -15,6 +15,23 @@ Em termos práticos, o workflow precisa:
 - manter dependências, referências e saltos condicionais consistentes;
 - respeitar o escopo de nós aninhados em `map`.
 
+### Execução
+
+O bloco `execution` aceita controles globais do runtime:
+
+- `max_concurrency`: limite global de nós em execução simultânea;
+- `fail_fast`: padrão usado por expansões `for_each` e `map` quando o node não define override;
+- `pause_when_fail`: quando `true`, uma falha final de node sem `continue_on_error` pausa o run e mantém um checkpoint para retomada;
+- `output_dir`: diretório de persistência do run;
+- `max_node_output_bytes`: limite de captura de saída por node.
+
+#### `pause_when_fail` versus `continue_on_error`
+
+- `continue_on_error` é configurado por node e diz "siga o resto do plano mesmo que este node falhe". O run permanece `running` e segue para o próximo node.
+- `pause_when_fail` é configurado no `execution` do workflow e diz "se um node sem `continue_on_error` esgotar os retries e falhar, pause o run em vez de finalizar como `failed`".
+- Os retries do node são tentados antes da pausa: só depois de esgotar o último retry sem sucesso o runtime pausa o run.
+- O resume re-executa o node em `retry_node_id` do checkpoint; nodes anteriores não são re-executados e continuam disponíveis em `${nodes...}`.
+
 ## Como funciona
 
 A validação acontece em duas etapas principais:

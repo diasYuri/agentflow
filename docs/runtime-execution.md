@@ -7,8 +7,8 @@ Ela resolve inputs, aplica overrides de `vars` e `max_concurrency`, carrega secr
 e prepara o estado interno usado durante o run.
 
 Na fase de execução, o runtime respeita dependências entre nós, `when`, retries, timeouts,
-`continue_on_error` e `fail_fast`. Ao final, persiste o status por nó e por run, junto com
-contadores de chamadas a agentes, bash e retries.
+`continue_on_error`, `fail_fast` e `execution.pause_when_fail`. Ao final, persiste o status por
+nó e por run, junto com contadores de chamadas a agentes, bash e retries.
 
 O mesmo fluxo também suporta `dry-run`: nesse modo, o runtime resolve inputs e monta o plano,
 mas não dispara a execução dos nós.
@@ -38,6 +38,7 @@ coordena a criação do run, grava o workflow e inicializa o estado de execuçã
 - aplica retries e timeout por nó;
 - propaga `continue_on_error` e `fail_fast` para decidir quando parar ou continuar;
 - grava resultados e eventos enquanto o run avança;
+- grava `checkpoint.json` em pontos seguros: antes do próximo nó, depois de resultados e durante atrasos de retry;
 - finaliza o run com um resumo mascarado, evitando vazar secrets.
 
 O estado do run fica centralizado em [`internal/core/runtime/handlers/state.go`](/Users/yuri/git/diasYuri/agentflow/internal/core/runtime/handlers/state.go).
@@ -48,6 +49,22 @@ Esse estado mantém:
 - o encadeamento de estados em nós expandidos ou aninhados;
 - contadores de `agentCalls`, `bashCalls` e `retries`;
 - o `failFast` efetivo e o conjunto de nós já concluídos.
+
+Quando `execution.pause_when_fail` está habilitado, uma falha final de node sem
+`continue_on_error` emite `run.pausing`, salva um checkpoint com `reason: "pause_when_fail"` e
+termina o run como `paused`. O checkpoint aponta para o node falho em `retry_node_id`, então a
+retomada reexecuta esse node e preserva os resultados anteriores no contexto `${nodes...}`. Em
+sucesso, falha definitiva ou cancelamento, o checkpoint é removido.
+
+A retomada é um contrato do runtime via `RunOptions.ResumeRunID`/`ExecutionRequest.ResumeRunID`.
+Ela recarrega `checkpoint.json`, reconstrói o plano a partir do workflow normalizado persistido,
+restaura métricas e resultados, emite `run.resumed` e continua a partir do cursor salvo. A
+retomada granular dentro de instâncias paralelas de `for_each` ou `map` ainda não é suportada; o
+ponto seguro desta versão é o node expandido como unidade.
+
+O checkpoint persistido usa os mesmos resultados mascarados do restante da persistência local.
+Assim, secrets não são gravados em claro; se um node posterior dependia exatamente do valor secreto
+emitido por um node anterior, a retomada verá o valor mascarado.
 
 Os helpers de [`internal/core/runtime/handlers/helpers.go`](/Users/yuri/git/diasYuri/agentflow/internal/core/runtime/handlers/helpers.go)
 definem as regras de apoio usadas pela execução:
@@ -80,6 +97,7 @@ mas não chama `handlers.Execute`, então nenhum nó é disparado.
 
 - `continue_on_error` permite que o run siga adiante mesmo depois de falhas de nó, enquanto o default do workflow continua sendo encerrar a execução em falha.
 - `fail_fast` controla o cancelamento de expansões e fan-outs; quando desabilitado, o runtime tenta processar todas as instâncias previstas.
+- `pause_when_fail` pausa somente depois que os retries do node se esgotam; nodes com `continue_on_error` continuam usando a semântica normal de prosseguir.
 - Retries são contabilizados separadamente das tentativas totais do nó, e cada retry emite evento próprio.
 - Timeouts por nó são aplicados via `context.WithTimeout`, e a falha resultante é marcada como `timeout`.
 - Secrets são carregados do ambiente apenas quando a variável configurada existe; o resumo e os artefatos persistidos passam por mascaramento.

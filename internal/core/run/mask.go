@@ -110,6 +110,19 @@ func (m SecretMasker) MaskSummary(summary Summary) Summary {
 	return summary
 }
 
+func (m SecretMasker) MaskCheckpoint(checkpoint Checkpoint) Checkpoint {
+	if m.Empty() {
+		return checkpoint
+	}
+	checkpoint.Inputs = maskMap(m, checkpoint.Inputs)
+	nodes := make(map[string]NodeResult, len(checkpoint.Nodes))
+	for id, result := range checkpoint.Nodes {
+		nodes[id] = m.MaskNodeResult(result)
+	}
+	checkpoint.Nodes = nodes
+	return checkpoint
+}
+
 func maskMap(masker SecretMasker, value map[string]any) map[string]any {
 	if value == nil {
 		return nil

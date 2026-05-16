@@ -548,6 +548,204 @@ nodes:
 	}
 }
 
+func TestRunWorkflowPauseWhenFailPausesAfterRetries(t *testing.T) {
+	dir := t.TempDir()
+	workflowPath := writeWorkflow(t, dir, `
+version: "1"
+name: pause-failure
+execution:
+  output_dir: "`+filepath.ToSlash(filepath.Join(dir, "runs"))+`"
+  pause_when_fail: true
+nodes:
+  - id: flaky
+    kind: bash
+    retries: 1
+    command: "flaky"
+`)
+	events := eventmemory.New()
+	shell := &scriptedShell{
+		run: func(ctx context.Context, req ports.ShellRequest, call int) (ports.ShellResult, error) {
+			return ports.ShellResult{Stderr: "boom", ExitCode: 1}, errors.New("boom")
+		},
+	}
+	uc := newTestRunWorkflowUseCase(dir, shell, events)
+
+	result, err := uc.Run(context.Background(), RunOptions{WorkflowRef: workflowPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != run.RunPaused {
+		t.Fatalf("expected run paused, got %s", result.Status)
+	}
+	if len(shell.commands()) != 2 {
+		t.Fatalf("expected initial attempt plus retry, got %#v", shell.commands())
+	}
+	if result.Summary.Nodes["flaky"].Status != run.NodeFailed {
+		t.Fatalf("expected failed node in paused summary, got %s", result.Summary.Nodes["flaky"].Status)
+	}
+	checkpoint := readCheckpoint(t, filepath.Join(result.RunDir, "checkpoint.json"))
+	if checkpoint.Status != run.RunPaused {
+		t.Fatalf("expected paused checkpoint, got %s", checkpoint.Status)
+	}
+	if checkpoint.Reason != run.PauseReasonPauseWhenFail {
+		t.Fatalf("expected pause_when_fail reason, got %s", checkpoint.Reason)
+	}
+	if checkpoint.RetryNodeID != "flaky" {
+		t.Fatalf("expected retry node flaky, got %q", checkpoint.RetryNodeID)
+	}
+	assertFileContains(t, filepath.Join(result.RunDir, "normalized.json"), `"pause_when_fail": true`)
+	if findEvent(events.Events, "run.pausing", "flaky") == nil {
+		t.Fatalf("expected run.pausing event, got %#v", events.Events)
+	}
+	if findEvent(events.Events, "run.paused", "") == nil {
+		t.Fatalf("expected run.paused event, got %#v", events.Events)
+	}
+}
+
+func TestRunWorkflowResumeReexecutesOnlyPausedNode(t *testing.T) {
+	dir := t.TempDir()
+	workflowPath := writeWorkflow(t, dir, `
+version: "1"
+name: pause-resume
+execution:
+  output_dir: "`+filepath.ToSlash(filepath.Join(dir, "runs"))+`"
+  pause_when_fail: true
+nodes:
+  - id: prepare
+    kind: bash
+    command: "prepare"
+  - id: flaky
+    kind: bash
+    depends_on: [prepare]
+    retries: 1
+    command: "flaky ${nodes.prepare.stdout}"
+  - id: after
+    kind: bash
+    depends_on: [flaky]
+    command: "after ${nodes.prepare.stdout} ${nodes.flaky.stdout}"
+`)
+	events := eventmemory.New()
+	shell := &scriptedShell{
+		run: func(ctx context.Context, req ports.ShellRequest, call int) (ports.ShellResult, error) {
+			switch req.Command {
+			case "prepare":
+				return ports.ShellResult{Stdout: "ready", ExitCode: 0}, nil
+			case "flaky ready":
+				if call <= 3 {
+					return ports.ShellResult{Stderr: "not yet", ExitCode: 1}, errors.New("not yet")
+				}
+				return ports.ShellResult{Stdout: "fixed", ExitCode: 0}, nil
+			case "after ready fixed":
+				return ports.ShellResult{Stdout: "done", ExitCode: 0}, nil
+			default:
+				return ports.ShellResult{Stderr: req.Command, ExitCode: 2}, errors.New(req.Command)
+			}
+		},
+	}
+	uc := newTestRunWorkflowUseCase(dir, shell, events)
+
+	first, err := uc.Run(context.Background(), RunOptions{WorkflowRef: workflowPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Status != run.RunPaused {
+		t.Fatalf("expected paused first run, got %s", first.Status)
+	}
+	resumed, err := uc.Run(context.Background(), RunOptions{ResumeRunID: first.RunID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resumed.Status != run.RunSuccess {
+		t.Fatalf("expected resumed success, got %s", resumed.Status)
+	}
+	commands := shell.commands()
+	if got := countString(commands, "prepare"); got != 1 {
+		t.Fatalf("expected prepare to run once, got %d commands %#v", got, commands)
+	}
+	if got := countString(commands, "flaky ready"); got != 3 {
+		t.Fatalf("expected flaky twice before pause and once after resume, got %d commands %#v", got, commands)
+	}
+	if got := countString(commands, "after ready fixed"); got != 1 {
+		t.Fatalf("expected after to run once, got %d commands %#v", got, commands)
+	}
+	if resumed.Summary.Nodes["prepare"].Stdout != "ready" {
+		t.Fatalf("expected prepare result available after resume, got %#v", resumed.Summary.Nodes["prepare"])
+	}
+	if resumed.Summary.Nodes["after"].Status != run.NodeSuccess {
+		t.Fatalf("expected after success, got %s", resumed.Summary.Nodes["after"].Status)
+	}
+	assertFileNotExists(t, filepath.Join(resumed.RunDir, "checkpoint.json"))
+	if findEvent(events.Events, "run.resumed", "") == nil {
+		t.Fatalf("expected run.resumed event, got %#v", events.Events)
+	}
+}
+
+func TestRunWorkflowWithoutPauseWhenFailStillFails(t *testing.T) {
+	dir := t.TempDir()
+	workflowPath := writeWorkflow(t, dir, `
+version: "1"
+name: no-pause-failure
+execution:
+  output_dir: "`+filepath.ToSlash(filepath.Join(dir, "runs"))+`"
+nodes:
+  - id: fail
+    kind: bash
+    retries: 1
+    command: "fail"
+`)
+	shell := &scriptedShell{
+		run: func(ctx context.Context, req ports.ShellRequest, call int) (ports.ShellResult, error) {
+			return ports.ShellResult{Stderr: "boom", ExitCode: 1}, errors.New("boom")
+		},
+	}
+	uc := newTestRunWorkflowUseCase(dir, shell, eventmemory.New())
+
+	result, err := uc.Run(context.Background(), RunOptions{WorkflowRef: workflowPath})
+	if err == nil {
+		t.Fatal("expected failed run error")
+	}
+	if result.Status != run.RunFailed {
+		t.Fatalf("expected failed run, got %s", result.Status)
+	}
+	assertFileNotExists(t, filepath.Join(result.RunDir, "checkpoint.json"))
+}
+
+func TestRunWorkflowPausedCheckpointMasksSecrets(t *testing.T) {
+	dir := t.TempDir()
+	secret := "pause-secret-token"
+	t.Setenv("agentflow_PAUSE_SECRET", secret)
+	workflowPath := writeWorkflow(t, dir, `
+version: "1"
+name: pause-secret
+secrets:
+  api_token:
+    env: agentflow_PAUSE_SECRET
+execution:
+  output_dir: "`+filepath.ToSlash(filepath.Join(dir, "runs"))+`"
+  pause_when_fail: true
+nodes:
+  - id: leak
+    kind: bash
+    command: "${secrets.api_token}"
+`)
+	shell := &scriptedShell{
+		run: func(ctx context.Context, req ports.ShellRequest, call int) (ports.ShellResult, error) {
+			return ports.ShellResult{Stdout: req.Command, Stderr: req.Command, ExitCode: 1}, errors.New(req.Command)
+		},
+	}
+	uc := newTestRunWorkflowUseCase(dir, shell, eventmemory.New())
+
+	result, err := uc.Run(context.Background(), RunOptions{WorkflowRef: workflowPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != run.RunPaused {
+		t.Fatalf("expected paused run, got %s", result.Status)
+	}
+	assertFileRedacted(t, filepath.Join(result.RunDir, "checkpoint.json"), secret)
+	assertFileRedacted(t, filepath.Join(result.RunDir, "summary.json"), secret)
+}
+
 func TestRunWorkflowPersistsRunFiles(t *testing.T) {
 	dir := t.TempDir()
 	workflowPath := writeWorkflow(t, dir, `
@@ -939,9 +1137,41 @@ func findEvent(events []run.Event, eventType string, nodeID string) *run.Event {
 	return nil
 }
 
+func readCheckpoint(t *testing.T, path string) run.Checkpoint {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var checkpoint run.Checkpoint
+	if err := json.Unmarshal(data, &checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	return checkpoint
+}
+
+func countString(values []string, want string) int {
+	count := 0
+	for _, value := range values {
+		if value == want {
+			count++
+		}
+	}
+	return count
+}
+
 func assertFileExists(t *testing.T, path string) {
 	t.Helper()
 	if _, err := os.Stat(path); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertFileNotExists(t *testing.T, path string) {
+	t.Helper()
+	if _, err := os.Stat(path); err == nil {
+		t.Fatalf("expected %s not to exist", path)
+	} else if !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
 }

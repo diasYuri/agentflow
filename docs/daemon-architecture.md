@@ -31,7 +31,10 @@ O daemon usa SQLite como índice persistente de runs. Os metadados de `workflow 
 e `workflow status` sobrevivem a restart do processo, enquanto os payloads auditáveis
 continuam no filesystem em `~/.agentflow/runs`. Se o daemon reiniciar com runs que
 estavam `created` ou `running`, eles são reidratados como `cancelled`, pois não há
-processo ativo para continuar a execução anterior.
+processo ativo para continuar a execução anterior. Runs em `paused` continuam `paused`
+após restart e podem ser retomados manualmente; o request original do run é persistido
+em coluna `request_json` para permitir a reconstrução do `WorkflowRunService` com o
+mesmo `run_id`.
 
 Endpoints:
 
@@ -42,6 +45,17 @@ Endpoints:
 - `GET /v1/workflows/{id}`
 - `GET /v1/workflows/{id}/logs`
 - `POST /v1/workflows/{id}/cancel`
+- `POST /v1/workflows/{id}/pause`
+- `POST /v1/workflows/{id}/resume`
+
+`pause` envia uma solicitação cooperativa ao runtime via `PauseController`; o run pausa
+no próximo checkpoint seguro. Retorna 409 quando o run já está em estado terminal e
+404 quando o `run_id` não é conhecido.
+
+`resume` aceita apenas runs em `paused`. Ele recarrega o request persistido, recria o
+`RunWorkflowUseCase` com as mesmas opções e adiciona um novo `WorkflowRunService` ao
+sub-supervisor com o mesmo `run_id` em modo resume. Retorna 409 para runs `success`,
+`failed` ou `cancelled`.
 
 ## CLI
 

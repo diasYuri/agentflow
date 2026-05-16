@@ -1,0 +1,45 @@
+version: "1"
+name: pause-on-failure
+description: "Demonstra execution.pause_when_fail: a primeira execução pausa quando o node falha, e o resume reexecuta o node depois que o flag é removido."
+
+inputs:
+  flag_file:
+    type: string
+    required: true
+
+defaults:
+  timeout: 60
+  retries: 0
+  working_dir: "."
+
+execution:
+  max_concurrency: 1
+  pause_when_fail: true
+
+nodes:
+  - id: prepare
+    kind: bash
+    command: |
+      echo "preparing"
+    capture:
+      stdout: true
+      exit_code: true
+
+  - id: gate
+    kind: bash
+    depends_on: [prepare]
+    command: |
+      if [ -f "${inputs.flag_file}" ]; then
+        echo "flag cleared, continuing"
+      else
+        echo "flag still present at ${inputs.flag_file}" >&2
+        exit 1
+      fi
+    capture:
+      stdout: true
+      stderr: true
+      exit_code: true
+
+  - id: finalize
+    kind: noop
+    depends_on: [gate]

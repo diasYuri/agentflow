@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -350,6 +351,190 @@ nodes:
 	}
 	if cancelled.Status != "cancelled" {
 		t.Fatalf("expected cancelled status, got %#v", cancelled)
+	}
+}
+
+func TestManagerPauseUnknownRunReturnsNotExist(t *testing.T) {
+	dir := shortTempDir(t)
+	cfg := Config{
+		SocketPath: filepath.Join(dir, "agentflowd.sock"),
+		PIDPath:    filepath.Join(dir, "agentflowd.pid"),
+		LogPath:    filepath.Join(dir, "agentflowd.log"),
+		RunRoot:    filepath.Join(dir, "runs"),
+	}
+	runSupervisor := suture.NewSimple("test-workflows")
+	manager := NewManager(cfg, runSupervisor, nil)
+
+	if _, err := manager.PauseWorkflow("missing"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected ErrNotExist, got %v", err)
+	}
+	if _, err := manager.ResumeWorkflow("missing"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected ErrNotExist, got %v", err)
+	}
+}
+
+func TestManagerPausesAndResumesWorkflowOnFailure(t *testing.T) {
+	dir := shortTempDir(t)
+	home := filepath.Join(dir, "home")
+	t.Setenv("HOME", home)
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(oldwd)
+	})
+	workflowDir := filepath.Join(dir, ".agentflow", "workflows")
+	if err := os.MkdirAll(workflowDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	flagPath := filepath.Join(dir, "fail-once.flag")
+	cmd := `if [ ! -f ` + flagPath + ` ]; then touch ` + flagPath + `; exit 1; fi; echo ok`
+	if err := os.WriteFile(filepath.Join(workflowDir, "pauseable.yaml"), []byte(`
+version: "1"
+name: pauseable
+execution:
+  pause_when_fail: true
+nodes:
+  - id: flaky
+    kind: bash
+    retries: 0
+    command: "`+cmd+`"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := Config{
+		SocketPath: filepath.Join(dir, "agentflowd.sock"),
+		PIDPath:    filepath.Join(dir, "agentflowd.pid"),
+		LogPath:    filepath.Join(dir, "agentflowd.log"),
+		RunRoot:    filepath.Join(dir, "runs"),
+		DBPath:     filepath.Join(dir, "agentflowd.sqlite"),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runSupervisor := suture.NewSimple("test-workflows")
+	done := make(chan error, 1)
+	go func() {
+		done <- runSupervisor.Serve(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+	store, err := OpenSQLiteRunStore(context.Background(), cfg.DBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = store.Close()
+	})
+	manager := NewManagerWithStore(cfg, runSupervisor, nil, store)
+	startedRun, err := manager.StartWorkflow(RunWorkflowRequest{WorkflowRef: "pauseable", WorkingDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	var paused WorkflowRun
+	for time.Now().Before(deadline) {
+		got, _ := manager.WorkflowStatus(startedRun.ID)
+		if got.Status == "paused" {
+			paused = got
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if paused.Status != "paused" {
+		t.Fatalf("workflow did not reach paused state: %#v", paused)
+	}
+	if paused.PauseReason == "" {
+		t.Fatalf("expected pause reason, got empty")
+	}
+
+	resumed, err := manager.ResumeWorkflow(startedRun.ID)
+	if err != nil {
+		t.Fatalf("resume failed: %v", err)
+	}
+	if resumed.Status != "running" {
+		t.Fatalf("expected running status after resume, got %s", resumed.Status)
+	}
+
+	deadline = time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		got, _ := manager.WorkflowStatus(startedRun.ID)
+		if got.Status == "success" {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	got, _ := manager.WorkflowStatus(startedRun.ID)
+	t.Fatalf("workflow did not complete after resume: %#v", got)
+}
+
+func TestManagerRejectsResumeOnTerminalRun(t *testing.T) {
+	dir := shortTempDir(t)
+	home := filepath.Join(dir, "home")
+	t.Setenv("HOME", home)
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(oldwd)
+	})
+	workflowDir := filepath.Join(dir, ".agentflow", "workflows")
+	if err := os.MkdirAll(workflowDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workflowDir, "ok.yaml"), []byte(`
+version: "1"
+name: ok
+nodes:
+  - id: ok
+    kind: noop
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := Config{
+		SocketPath: filepath.Join(dir, "agentflowd.sock"),
+		PIDPath:    filepath.Join(dir, "agentflowd.pid"),
+		LogPath:    filepath.Join(dir, "agentflowd.log"),
+		RunRoot:    filepath.Join(dir, "runs"),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runSupervisor := suture.NewSimple("test-workflows")
+	done := make(chan error, 1)
+	go func() {
+		done <- runSupervisor.Serve(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+	manager := NewManager(cfg, runSupervisor, nil)
+	run, err := manager.StartWorkflow(RunWorkflowRequest{WorkflowRef: "ok", WorkingDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		got, _ := manager.WorkflowStatus(run.ID)
+		if got.Status == "success" {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if _, err := manager.ResumeWorkflow(run.ID); err == nil {
+		t.Fatal("expected error resuming successful run")
 	}
 }
 

@@ -23,9 +23,12 @@ Em [`internal/cli/root.go`](/Users/yuri/git/diasYuri/agentflow/internal/cli/root
 - `dry-run <workflow>`: resolve entradas, monta o plano e imprime um JSON com `workflow`, `inputs`, `order` e `nodes`.
 - `workflow run <workflow>`: inicia o workflow no daemon e imprime `run_id`, `run_dir` e `status`.
 - `workflow list`: lista runs conhecidos pelo daemon.
-- `workflow status <id>`: mostra o estado de um run.
+- `workflow status <id>`: mostra o estado de um run. Aceita `--watch` para acompanhar até o run alcançar um estado terminal (`success`, `failed`, `cancelled`, `timeout` ou `paused`).
+- `workflow watch <id>`: forma curta do `status --watch`.
 - `workflow logs <id>`: imprime o `events.jsonl` do run.
-- `workflow cancel <id>`: cancela um run em execução.
+- `workflow cancel <id>`: cancela um run em execução ou pausado, removendo o checkpoint salvo.
+- `workflow pause <id>`: solicita pausa cooperativa no próximo checkpoint seguro do runtime. Nodes em andamento concluem antes da pausa.
+- `workflow resume <id>`: retoma um run pausado a partir do checkpoint. Usa o request original; novos `--input`/`--var` não são aceitos no resume para manter reprodutibilidade.
 - `daemon start|stop|status`: controla o processo `agentflowd`.
 
 O alias legado `run <workflow>` chama `workflow run <workflow>`. Para execução local foreground, use `run -it <workflow>` ou `workflow run -it <workflow>`.
@@ -77,3 +80,6 @@ Os workflows são resolvidos por nome/ref, seguindo a convenção documentada em
 - `provider: claude` exige Claude Code CLI disponível via `--claude-path`, `AGENTFLOW_CLAUDE_PATH`, `CLAUDE_PATH` ou `PATH`.
 - A CLI não expõe `--output-dir`; os runs são gravados no storage local padrão em `.agentflow/runs` ou `~/.agentflow/runs`, dependendo do modo de execução.
 - `run` imprime os metadados do run apenas quando a execução gera um `RunID`, o que facilita rastrear o artefato correspondente em disco.
+- `workflow watch` para automaticamente em `paused`, mostrando o hint `agentflow workflow resume <id>` para que o usuário decida quando continuar.
+- `workflow pause` é cooperativa: o runtime só pausa em pontos seguros (entre nodes, depois de gravar um resultado, durante atraso de retry). Um node ainda em execução conclui antes da pausa.
+- `workflow resume` reaproveita o request salvo no daemon. Novos `--input` ou `--var` precisam de um novo `workflow run`; o resume mantém entradas, working dir, paths de provider e demais opções do run original.

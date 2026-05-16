@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -19,11 +20,16 @@ type Executor struct {
 	svc Services
 }
 
+var errRunPaused = errors.New("run paused")
+
 func Execute(ctx context.Context, svc Services, req ExecutionRequest) (Result, error) {
 	return (&Executor{svc: svc}).execute(ctx, req)
 }
 
 func (e *Executor) execute(ctx context.Context, req ExecutionRequest) (Result, error) {
+	if req.ResumeRunID != "" {
+		return e.resume(ctx, req)
+	}
 	now := e.now()
 	runID := req.RunID
 	if runID == "" {
@@ -49,6 +55,8 @@ func (e *Executor) execute(ctx context.Context, req ExecutionRequest) (Result, e
 	}
 	state := newExecutionState(runID, req.Plan, req.Inputs, secrets, corerun.NewSecretMasker(secrets), now)
 	state.baseWorkingDir = req.WorkingDir
+	state.workflowPath = req.WorkflowSourcePath
+	state.pause = req.Pause
 	if err := e.emitState(ctx, state, corerun.Event{Type: "run.created", Data: map[string]any{"dir": handle.Dir}}); err != nil {
 		return Result{}, err
 	}
@@ -59,26 +67,118 @@ func (e *Executor) execute(ctx context.Context, req ExecutionRequest) (Result, e
 		globalLimit = 1
 	}
 	state.global = semaphore.NewWeighted(int64(globalLimit))
-	if err := e.executeNodes(ctx, state, req.Plan); err != nil {
+	if err := e.saveCheckpoint(ctx, state, true, 0, "", ""); err != nil {
+		return Result{}, err
+	}
+	if err := e.executeNodes(ctx, state, req.Plan, 0); err != nil {
 		if errors.Is(err, context.Canceled) {
 			return e.finish(ctx, req.Plan, state, corerun.RunCancelled, err)
+		}
+		if errors.Is(err, errRunPaused) {
+			return e.finish(ctx, req.Plan, state, corerun.RunPaused, nil)
 		}
 		return e.finish(ctx, req.Plan, state, corerun.RunFailed, err)
 	}
 	return e.finish(ctx, req.Plan, state, corerun.RunSuccess, nil)
 }
 
-func NewRunID(workflowName string, now time.Time) string {
-	return fmt.Sprintf("%s-%s", now.UTC().Format("2006-01-02T150405.000000000Z"), sanitizeName(workflowName))
+func (e *Executor) resume(ctx context.Context, req ExecutionRequest) (Result, error) {
+	checkpoint, err := e.svc.Runs.LoadCheckpoint(ctx, req.ResumeRunID)
+	if err != nil {
+		return Result{}, err
+	}
+	plan, err := coreworkflow.BuildPlan(checkpoint.Workflow)
+	if err != nil {
+		return Result{}, err
+	}
+	secrets, err := loadSecrets(checkpoint.Workflow)
+	if err != nil {
+		return Result{}, err
+	}
+	handle, err := e.svc.Runs.CreateRun(ctx, corerun.RunMetadata{
+		RunID: checkpoint.RunID, Workflow: checkpoint.Workflow.Name, WorkflowPath: checkpoint.WorkflowPath, StartedAt: checkpoint.StartedAt,
+	})
+	if err != nil {
+		return Result{}, err
+	}
+	if opener, ok := e.svc.Events.(interface{ Open(string) error }); ok {
+		if err := opener.Open(filepath.Join(handle.Dir, "events.jsonl")); err != nil {
+			return Result{}, err
+		}
+	}
+	state := newExecutionState(checkpoint.RunID, plan, checkpoint.Inputs, secrets, corerun.NewSecretMasker(secrets), checkpoint.StartedAt)
+	state.baseWorkingDir = req.WorkingDir
+	state.workflowPath = checkpoint.WorkflowPath
+	state.pause = req.Pause
+	state.restoreMetrics(checkpoint.Metrics)
+	for id, result := range checkpoint.Nodes {
+		state.set(id, result)
+	}
+	globalLimit := plan.Workflow.Execution.MaxConcurrency
+	if globalLimit <= 0 {
+		globalLimit = 1
+	}
+	state.global = semaphore.NewWeighted(int64(globalLimit))
+	startCursor := checkpoint.Cursor
+	if checkpoint.RetryNodeID != "" {
+		for i, nodeID := range plan.Order {
+			if nodeID == checkpoint.RetryNodeID {
+				startCursor = i
+				break
+			}
+		}
+		delete(state.results, checkpoint.RetryNodeID)
+		delete(state.nodes, checkpoint.RetryNodeID)
+	}
+	_ = e.emitState(ctx, state, corerun.Event{
+		Type: "run.resumed",
+		Data: map[string]any{"cursor": startCursor, "retry_node_id": checkpoint.RetryNodeID, "reason": checkpoint.Reason},
+	})
+	if err := e.saveCheckpoint(ctx, state, true, startCursor, "", ""); err != nil {
+		return Result{}, err
+	}
+	if err := e.executeNodes(ctx, state, plan, startCursor); err != nil {
+		if errors.Is(err, context.Canceled) {
+			return e.finish(ctx, plan, state, corerun.RunCancelled, err)
+		}
+		if errors.Is(err, errRunPaused) {
+			return e.finish(ctx, plan, state, corerun.RunPaused, nil)
+		}
+		return e.finish(ctx, plan, state, corerun.RunFailed, err)
+	}
+	return e.finish(ctx, plan, state, corerun.RunSuccess, nil)
 }
 
-func (e *Executor) executeNodes(ctx context.Context, state *ExecutionState, plan coreworkflow.ExecutionPlan) error {
+func NewRunID(workflowName string, now time.Time) string {
+	_ = workflowName
+	bucket := now.UTC().Unix() / 600
+	const alphabet = "0123456789abcdefghijklmnopqrstuvwxyz"
+	encoded := make([]byte, 5)
+	for i := len(encoded) - 1; i >= 0; i-- {
+		encoded[i] = alphabet[bucket%36]
+		bucket /= 36
+	}
+	salt := alphabet[rand.New(rand.NewSource(now.UnixNano())).Intn(36)]
+	return fmt.Sprintf("%s%c", string(encoded), salt)
+}
+
+func (e *Executor) executeNodes(ctx context.Context, state *ExecutionState, plan coreworkflow.ExecutionPlan, startCursor int) error {
 	indexByID := make(map[string]int, len(plan.Order))
 	for i, nodeID := range plan.Order {
 		indexByID[nodeID] = i
 	}
-	for pc := 0; pc < len(plan.Order); {
+	if startCursor < 0 || startCursor > len(plan.Order) {
+		return fmt.Errorf("checkpoint cursor %d is outside execution plan", startCursor)
+	}
+	for pc := startCursor; pc < len(plan.Order); {
 		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if state.parent == nil && state.pause != nil && state.pause.Requested() {
+			return e.pauseManual(ctx, state, pc)
+		}
+		state.cursor = pc
+		if err := e.saveCheckpoint(ctx, state, true, pc, "", ""); err != nil {
 			return err
 		}
 		nodeID := plan.Order[pc]
@@ -86,11 +186,13 @@ func (e *Executor) executeNodes(ctx context.Context, state *ExecutionState, plan
 		if state.failed && !node.ContinueOnError {
 			state.set(nodeID, corerun.NodeResult{RunID: state.runID, NodeID: nodeID, Status: corerun.NodeSkipped, Error: "run already failed", Path: append([]string(nil), state.path...)})
 			pc++
+			_ = e.saveCheckpoint(ctx, state, true, pc, "", "")
 			continue
 		}
 		if err := state.dependenciesReady(node); err != nil {
 			state.set(nodeID, corerun.NodeResult{RunID: state.runID, NodeID: nodeID, Status: corerun.NodeSkipped, Error: err.Error(), Path: append([]string(nil), state.path...)})
 			pc++
+			_ = e.saveCheckpoint(ctx, state, true, pc, "", "")
 			continue
 		}
 		ok, err := coreworkflow.EvalBool(node.When, state.evalContext(state.index, state.total, state.item))
@@ -98,9 +200,13 @@ func (e *Executor) executeNodes(ctx context.Context, state *ExecutionState, plan
 			result := corerun.NodeResult{RunID: state.runID, NodeID: nodeID, Status: corerun.NodeFailed, Error: err.Error(), Path: append([]string(nil), state.path...)}
 			e.recordNode(ctx, state, result)
 			if !node.ContinueOnError {
+				if plan.Workflow.Execution.PauseWhenFail {
+					return e.pauseOnFailure(ctx, state, pc, nodeID)
+				}
 				return fmt.Errorf("node %q when failed: %w", nodeID, err)
 			}
 			pc++
+			_ = e.saveCheckpoint(ctx, state, true, pc, "", "")
 			continue
 		}
 		if !ok {
@@ -108,12 +214,16 @@ func (e *Executor) executeNodes(ctx context.Context, state *ExecutionState, plan
 			e.recordNode(ctx, state, result)
 			_ = e.emitState(ctx, state, corerun.Event{Type: "node.skipped", NodeID: nodeID})
 			pc++
+			_ = e.saveCheckpoint(ctx, state, true, pc, "", "")
 			continue
 		}
 		_ = e.emitState(ctx, state, corerun.Event{Type: "node.ready", NodeID: nodeID})
 		result := e.executeNode(ctx, state, node)
 		e.recordNode(ctx, state, result)
 		if isFailure(result.Status) && !node.ContinueOnError {
+			if plan.Workflow.Execution.PauseWhenFail {
+				return e.pauseOnFailure(ctx, state, pc, nodeID)
+			}
 			return fmt.Errorf("node %q failed: %s", nodeID, result.Error)
 		}
 		if node.GoToIf != nil {
@@ -124,19 +234,41 @@ func (e *Executor) executeNodes(ctx context.Context, state *ExecutionState, plan
 				failedResult.Error = jumpErr.Error()
 				e.recordNode(ctx, state, failedResult)
 				if !node.ContinueOnError {
+					if plan.Workflow.Execution.PauseWhenFail {
+						return e.pauseOnFailure(ctx, state, pc, nodeID)
+					}
 					return fmt.Errorf("node %q go_to_if failed: %w", nodeID, jumpErr)
 				}
 				pc++
+				_ = e.saveCheckpoint(ctx, state, true, pc, "", "")
 				continue
 			}
 			if jump >= 0 {
 				pc = jump
+				_ = e.saveCheckpoint(ctx, state, true, pc, "", "")
 				continue
 			}
 		}
 		pc++
+		_ = e.saveCheckpoint(ctx, state, true, pc, "", "")
 	}
 	return nil
+}
+
+func (e *Executor) pauseOnFailure(ctx context.Context, state *ExecutionState, cursor int, nodeID string) error {
+	_ = e.emitState(ctx, state, corerun.Event{Type: "run.pausing", NodeID: nodeID, Data: map[string]any{"reason": corerun.PauseReasonPauseWhenFail}})
+	if err := e.saveCheckpoint(ctx, state, true, cursor, nodeID, corerun.PauseReasonPauseWhenFail); err != nil {
+		return err
+	}
+	return errRunPaused
+}
+
+func (e *Executor) pauseManual(ctx context.Context, state *ExecutionState, cursor int) error {
+	_ = e.emitState(ctx, state, corerun.Event{Type: "run.pausing", Data: map[string]any{"reason": corerun.PauseReasonManual, "cursor": cursor}})
+	if err := e.saveCheckpoint(ctx, state, true, cursor, "", corerun.PauseReasonManual); err != nil {
+		return err
+	}
+	return errRunPaused
 }
 
 func (e *Executor) resolveGoToIf(node coreworkflow.NodeSpec, state *ExecutionState, indexByID map[string]int) (int, error) {
@@ -291,7 +423,7 @@ func (e *Executor) executeMap(ctx context.Context, state *ExecutionState, node c
 			childState.item = item
 			childState.index = &index
 			childState.total = &total
-			err := e.executeNodes(ctx, childState, *childPlan)
+			err := e.executeNodes(ctx, childState, *childPlan, 0)
 			result := corerun.NodeResult{RunID: state.runID, NodeID: node.ID, InstanceID: instanceID, Index: &index, Path: appendPath(state.path, node.ID)}
 			if err != nil {
 				result.Status = corerun.NodeFailed
@@ -377,6 +509,7 @@ func (e *Executor) executeSingle(ctx context.Context, state *ExecutionState, nod
 					"previous_error":  last.Error,
 				},
 			})
+			_ = e.saveCheckpoint(ctx, state, true, state.cursor, "", "")
 			time.Sleep(delay)
 		}
 		last = e.executeAttempt(ctx, state, node, instanceID, index, total, item, attempt)

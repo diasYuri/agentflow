@@ -157,6 +157,24 @@ func (s *Server) handleWorkflow(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, CancelWorkflowResponse{Run: run})
 		return
 	}
+	if len(parts) == 2 && parts[1] == "pause" && r.Method == http.MethodPost {
+		run, err := s.manager.PauseWorkflow(runID)
+		if err != nil {
+			writeError(w, statusForError(err), err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, PauseWorkflowResponse{Run: run})
+		return
+	}
+	if len(parts) == 2 && parts[1] == "resume" && r.Method == http.MethodPost {
+		run, err := s.manager.ResumeWorkflow(runID)
+		if err != nil {
+			writeError(w, statusForError(err), err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, ResumeWorkflowResponse{Run: run})
+		return
+	}
 	writeError(w, http.StatusNotFound, "endpoint not found")
 }
 
@@ -173,6 +191,17 @@ func writeError(w http.ResponseWriter, status int, message string) {
 func statusForError(err error) int {
 	if errors.Is(err, os.ErrNotExist) {
 		return http.StatusNotFound
+	}
+	if err != nil {
+		msg := err.Error()
+		if strings.Contains(msg, "only paused runs can be resumed") ||
+			strings.Contains(msg, "is not active in this daemon process") ||
+			strings.Contains(msg, "has no persisted request") ||
+			strings.Contains(msg, "is already success") ||
+			strings.Contains(msg, "is already failed") ||
+			strings.Contains(msg, "is already cancelled") {
+			return http.StatusConflict
+		}
 	}
 	return http.StatusInternalServerError
 }

@@ -74,8 +74,15 @@ Se a execução for real, ele delega para [`internal/core/runtime/handlers/execu
 - [`internal/core/runtime/handlers/state.go`](/Users/yuri/git/diasYuri/agentflow/internal/core/runtime/handlers/state.go) registra o resultado de cada nó em memória e persiste o resultado mascarado no repositório de runs.
 - O helper `isFailure` considera `failed`, `timeout` e `cancelled` como falhas para fins de propagação.
 - O finalizador monta um `Summary` com contagem de chamadas, retries, nós falhos e o mapa final de resultados.
-- O evento final do run é `run.completed` em sucesso e `run.failed` quando houve erro.
+- O evento final do run é `run.completed` em sucesso, `run.failed` quando houve erro e `run.paused` quando o runtime pausa por `pause_when_fail` ou solicitação manual.
 - O sink de eventos é encerrado ao final da execução, e o resumo final é persistido no run.
+
+### Pause e resume
+
+- `execution.pause_when_fail` pausa o run quando os retries do node falham em sequência e o node não tem `continue_on_error`. O cursor, o `retry_node_id`, os resultados mascarados e as métricas são gravados em `checkpoint.json`.
+- A pausa manual via daemon usa um `PauseController` propagado pelo `RunOptions`. O runtime checa a solicitação em pontos seguros (antes de iniciar o próximo node, depois de gravar resultado, durante delay de retry); um node já em execução conclui antes da pausa.
+- O resume reabre o checkpoint e cria um novo `WorkflowRunService` reaproveitando o mesmo `run_id`. Nodes anteriores não são re-executados; em pausa por falha, o node em `retry_node_id` é re-executado e o run continua a partir do seguinte.
+- O checkpoint é removido em sucesso, falha definitiva ou cancelamento. Pause não limpa o checkpoint, então o resume funciona mesmo depois de restart do daemon.
 
 ## Arquivos principais
 

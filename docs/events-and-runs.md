@@ -45,8 +45,14 @@ cria o run, persiste o workflow e, se o sink suportar `Open(string) error`, inic
 - `run.started`
 - `node.ready`
 - `node.skipped`
+- `run.pausing`
+- `run.paused`
+- `run.resumed`
 - `run.completed`
 - `run.failed`
+
+Os eventos de pausa/retomada carregam `reason` em `data` (`manual` ou `pause_when_fail`) e o
+node ID em `node_id` quando a pausa ocorreu depois da falha de um node específico.
 
 O estado do runtime em [`internal/core/runtime/handlers/state.go`](/Users/yuri/git/diasYuri/agentflow/internal/core/runtime/handlers/state.go)
 é responsável por:
@@ -68,7 +74,8 @@ mantém um diretório por `run_id` e grava os principais artefatos:
 - `nodes/**/result.json`: resultado persistido por nó;
 - `nodes/**/stdout.txt` e `nodes/**/stderr.txt`: saída bruta de nós que produzem texto;
 - `summary.json`: resumo final do run;
-- `events.jsonl`: eventos emitidos durante a execução.
+- `events.jsonl`: eventos emitidos durante a execução;
+- `checkpoint.json`: checkpoint atual do run usado para pause/resume. É gravado de forma atômica em cada avanço relevante (antes de iniciar o próximo node, depois de gravar resultado, durante delay de retry) e removido em `success`, `failed` definitivo ou `cancelled`.
 
 O caminho base padrão fica em `.agentflow/runs/` no projeto atual, com fallback para
 `~/.agentflow/runs/` quando o diretório do usuário estiver disponível.

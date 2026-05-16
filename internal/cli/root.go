@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -39,9 +40,26 @@ type workflowRunClient interface {
 	RunWorkflow(context.Context, daemon.RunWorkflowRequest) (daemon.RunWorkflowResponse, error)
 }
 
+type workflowDaemonClient interface {
+	ListWorkflows(context.Context) (daemon.ListWorkflowsResponse, error)
+	WorkflowStatus(context.Context, string) (daemon.RunWorkflowResponse, error)
+	WorkflowLogs(context.Context, string) (daemon.LogsResponse, error)
+	CancelWorkflow(context.Context, string) (daemon.CancelWorkflowResponse, error)
+	PauseWorkflow(context.Context, string) (daemon.PauseWorkflowResponse, error)
+	ResumeWorkflow(context.Context, string) (daemon.ResumeWorkflowResponse, error)
+	Status(context.Context) (daemon.DaemonStatus, error)
+	Stop(context.Context) (daemon.StopResponse, error)
+}
+
 var newWorkflowRunClient = func(socketPath string) workflowRunClient {
 	return daemon.NewClient(socketPath)
 }
+
+var newDaemonClient = func(socketPath string) workflowDaemonClient {
+	return daemon.NewClient(socketPath)
+}
+
+var workflowWatchInterval = 5 * time.Second
 
 func NewRootCommand() *cobra.Command {
 	opts := &options{logFormat: "text"}
@@ -182,8 +200,11 @@ func newWorkflowCommand(opts *options) *cobra.Command {
 		newWorkflowRunCommand(opts),
 		newWorkflowListCommand(),
 		newWorkflowStatusCommand(),
+		newWorkflowWatchCommand(),
 		newWorkflowLogsCommand(),
 		newWorkflowCancelCommand(),
+		newWorkflowPauseCommand(),
+		newWorkflowResumeCommand(),
 	)
 	return cmd
 }
@@ -223,37 +244,64 @@ func newWorkflowRunCommand(opts *options) *cobra.Command {
 }
 
 func newWorkflowListCommand() *cobra.Command {
-	return &cobra.Command{
+	var outputFormat string
+	var noColor bool
+	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List workflow runs",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			resp, err := daemon.NewClient("").ListWorkflows(cmd.Context())
+			resp, err := newDaemonClient("").ListWorkflows(cmd.Context())
 			if err != nil {
 				return err
 			}
-			for _, run := range resp.Runs {
-				fmt.Fprintf(cmd.OutOrStdout(), "%s\t%s\t%s\t%s\n", run.ID, run.Status, run.Workflow, run.RunDir)
-			}
-			return nil
+			return renderWorkflowList(cmd.OutOrStdout(), resp.Runs, outputFormat, noColor, isInteractiveWriter(cmd.OutOrStdout()))
 		},
 	}
+	cmd.Flags().StringVar(&outputFormat, "output", "text", "output format (text or json)")
+	cmd.Flags().BoolVar(&noColor, "no-color", false, "disable color output")
+	return cmd
 }
 
 func newWorkflowStatusCommand() *cobra.Command {
-	return &cobra.Command{
+	var outputFormat string
+	var noColor bool
+	var watch bool
+	cmd := &cobra.Command{
 		Use:   "status <id>",
 		Short: "Show workflow run status",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			resp, err := daemon.NewClient("").WorkflowStatus(cmd.Context(), args[0])
+			if watch {
+				return watchWorkflow(cmd, args[0], outputFormat, noColor)
+			}
+			resp, err := newDaemonClient("").WorkflowStatus(cmd.Context(), args[0])
 			if err != nil {
 				return err
 			}
-			printRun(cmd, resp.Run)
-			return nil
+			return renderWorkflowStatus(cmd.OutOrStdout(), resp.Run, outputFormat, noColor)
 		},
 	}
+	cmd.Flags().StringVar(&outputFormat, "output", "text", "output format (text or json)")
+	cmd.Flags().BoolVar(&noColor, "no-color", false, "disable color output")
+	cmd.Flags().BoolVar(&watch, "watch", false, "watch the workflow run until it finishes")
+	return cmd
+}
+
+func newWorkflowWatchCommand() *cobra.Command {
+	var outputFormat string
+	var noColor bool
+	cmd := &cobra.Command{
+		Use:   "watch <id>",
+		Short: "Watch a workflow run until it finishes",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return watchWorkflow(cmd, args[0], outputFormat, noColor)
+		},
+	}
+	cmd.Flags().StringVar(&outputFormat, "output", "text", "output format (text or json)")
+	cmd.Flags().BoolVar(&noColor, "no-color", false, "disable color output")
+	return cmd
 }
 
 func newWorkflowLogsCommand() *cobra.Command {
@@ -262,7 +310,7 @@ func newWorkflowLogsCommand() *cobra.Command {
 		Short: "Print workflow run event logs",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			resp, err := daemon.NewClient("").WorkflowLogs(cmd.Context(), args[0])
+			resp, err := newDaemonClient("").WorkflowLogs(cmd.Context(), args[0])
 			if err != nil {
 				return err
 			}
@@ -280,7 +328,45 @@ func newWorkflowCancelCommand() *cobra.Command {
 		Short: "Cancel a running workflow",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			resp, err := daemon.NewClient("").CancelWorkflow(cmd.Context(), args[0])
+			resp, err := newDaemonClient("").CancelWorkflow(cmd.Context(), args[0])
+			if err != nil {
+				return err
+			}
+			printRun(cmd, resp.Run)
+			return nil
+		},
+	}
+}
+
+func newWorkflowPauseCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "pause <id>",
+		Short: "Request a graceful pause of a workflow run",
+		Long: "Signal the daemon to pause the run at the next checkpoint-safe boundary. " +
+			"A node currently in flight finishes (or fails) before the run halts. " +
+			"Use resume to continue from the checkpoint.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			resp, err := newDaemonClient("").PauseWorkflow(cmd.Context(), args[0])
+			if err != nil {
+				return err
+			}
+			printRun(cmd, resp.Run)
+			return nil
+		},
+	}
+}
+
+func newWorkflowResumeCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "resume <id>",
+		Short: "Resume a paused workflow run from its checkpoint",
+		Long: "Restart the run from the last recorded checkpoint. " +
+			"For runs paused via execution.pause_when_fail the failed node is re-executed before the run continues. " +
+			"Inputs and vars are reused from the original request; no overrides are accepted to keep results reproducible.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			resp, err := newDaemonClient("").ResumeWorkflow(cmd.Context(), args[0])
 			if err != nil {
 				return err
 			}
@@ -305,7 +391,7 @@ func newDaemonStartCommand(opts *options) *cobra.Command {
 		Short: "Start agentflowd in the background",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client := daemon.NewClient("")
+			client := newDaemonClient("")
 			if status, err := client.Status(cmd.Context()); err == nil && status.Running {
 				fmt.Fprintf(cmd.OutOrStdout(), "agentflowd already running\npid: %d\nsocket: %s\n", status.PID, status.Socket)
 				return nil
@@ -361,7 +447,7 @@ func newDaemonStopCommand() *cobra.Command {
 		Short: "Stop agentflowd",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if _, err := daemon.NewClient("").Stop(cmd.Context()); err != nil {
+			if _, err := newDaemonClient("").Stop(cmd.Context()); err != nil {
 				return err
 			}
 			fmt.Fprintln(cmd.OutOrStdout(), "agentflowd stopping")
@@ -376,7 +462,7 @@ func newDaemonStatusCommand() *cobra.Command {
 		Short: "Show agentflowd status",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			status, err := daemon.NewClient("").Status(cmd.Context())
+			status, err := newDaemonClient("").Status(cmd.Context())
 			if err != nil {
 				return err
 			}
@@ -447,9 +533,266 @@ func runWorkflowViaDaemon(cmd *cobra.Command, workflowRef string, opts *options)
 
 func printRun(cmd *cobra.Command, run daemon.WorkflowRun) {
 	fmt.Fprintf(cmd.OutOrStdout(), "run_id: %s\nrun_dir: %s\nstatus: %s\n", run.ID, run.RunDir, run.Status)
+	if run.CurrentStep != "" {
+		fmt.Fprintf(cmd.OutOrStdout(), "step: %s\n", run.CurrentStep)
+	}
+	if run.PauseReason != "" {
+		fmt.Fprintf(cmd.OutOrStdout(), "pause_reason: %s\n", run.PauseReason)
+	}
+	if run.ResumeCount > 0 {
+		fmt.Fprintf(cmd.OutOrStdout(), "resume_count: %d\n", run.ResumeCount)
+	}
 	if run.Error != "" {
 		fmt.Fprintf(cmd.OutOrStdout(), "error: %s\n", run.Error)
 	}
+}
+
+type workflowOutputFormat string
+
+const (
+	workflowOutputText workflowOutputFormat = "text"
+	workflowOutputJSON workflowOutputFormat = "json"
+)
+
+func renderWorkflowList(w io.Writer, runs []daemon.WorkflowRun, format string, noColor bool, interactive bool) error {
+	if workflowOutputFormat(format) == workflowOutputJSON {
+		data, err := json.Marshal(runs)
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintln(w, string(data))
+		return err
+	}
+	if len(runs) == 0 {
+		_, err := fmt.Fprintln(w, "no workflow runs")
+		return err
+	}
+	effectiveNoColor := noColor || !interactive
+	rows := make([]workflowListRow, 0, len(runs))
+	for _, run := range runs {
+		rows = append(rows, workflowListRow{
+			ID:        run.ID,
+			Status:    normalizeStatus(run.Status),
+			Workflow:  run.Workflow,
+			Step:      firstNonEmpty(run.CurrentStep, "-"),
+			Completed: fmt.Sprintf("%d", len(run.CompletedSteps)),
+			Total:     fmt.Sprintf("%d", run.TotalSteps),
+			Dir:       run.RunDir,
+			Age:       formatAge(run.StartedAt),
+		})
+	}
+	cols := []string{"ID", "WORKFLOW", "STATUS", "STEP ATUAL", "CONCLUÍDOS", "TOTAL", "IDADE", "RUN DIR"}
+	widths := []int{6, 20, 12, 18, 10, 5, 8, 0}
+	maxWidth := terminalWidth(w)
+	if !interactive {
+		maxWidth = 0
+	}
+	for i, col := range cols {
+		if len(col) > widths[i] {
+			widths[i] = len(col)
+		}
+	}
+	if maxWidth > 0 {
+		widths = fitWidths(widths, maxWidth, 2)
+	}
+	fmt.Fprintln(w, strings.Join(renderHeader(cols, widths), "  "))
+	for _, row := range rows {
+		line := []string{
+			padOrTruncate(row.ID, widths[0]),
+			padOrTruncate(row.Workflow, widths[1]),
+			padOrTruncate(colorizeStatus(row.Status, effectiveNoColor), widths[2]),
+			padOrTruncate(row.Step, widths[3]),
+			padOrTruncate(row.Completed, widths[4]),
+			padOrTruncate(row.Total, widths[5]),
+			padOrTruncate(row.Age, widths[6]),
+			padOrTruncate(row.Dir, widths[7]),
+		}
+		fmt.Fprintln(w, strings.Join(line, "  "))
+	}
+	return nil
+}
+
+type workflowListRow struct {
+	ID, Status, Workflow, Step, Completed, Total, Age, Dir string
+}
+
+func renderWorkflowStatus(w io.Writer, run daemon.WorkflowRun, format string, noColor bool) error {
+	if workflowOutputFormat(format) == workflowOutputJSON {
+		data, err := json.Marshal(run)
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintln(w, string(data))
+		return err
+	}
+	effectiveNoColor := noColor || !isInteractiveWriter(w)
+	lines := []string{
+		fmt.Sprintf("id: %s", run.ID),
+		fmt.Sprintf("workflow: %s", run.Workflow),
+		fmt.Sprintf("status: %s", colorizeStatus(normalizeStatus(run.Status), effectiveNoColor)),
+		fmt.Sprintf("step: %s", firstNonEmpty(run.CurrentStep, "-")),
+		fmt.Sprintf("completed: %d/%d", len(run.CompletedSteps), run.TotalSteps),
+		fmt.Sprintf("pending: %d", len(run.PendingSteps)),
+		fmt.Sprintf("run_dir: %s", run.RunDir),
+	}
+	if run.PauseReason != "" {
+		lines = append(lines, fmt.Sprintf("pause_reason: %s", run.PauseReason))
+	}
+	if run.ResumeCount > 0 {
+		lines = append(lines, fmt.Sprintf("resume_count: %d", run.ResumeCount))
+	}
+	if run.Error != "" {
+		lines = append(lines, fmt.Sprintf("error: %s", run.Error))
+	}
+	if run.TerminalError != "" {
+		lines = append(lines, fmt.Sprintf("terminal_error: %s", run.TerminalError))
+	}
+	for _, line := range lines {
+		if _, err := fmt.Fprintln(w, line); err != nil {
+			return err
+		}
+	}
+	if normalizeStatus(run.Status) == "paused" {
+		_, _ = fmt.Fprintln(w, "hint: run `agentflow workflow resume "+run.ID+"` to continue")
+	}
+	return nil
+}
+
+func watchWorkflow(cmd *cobra.Command, runID string, format string, noColor bool) error {
+	client := newDaemonClient("")
+	jsonMode := workflowOutputFormat(format) == workflowOutputJSON
+	firstRender := true
+	for {
+		resp, err := client.WorkflowStatus(cmd.Context(), runID)
+		if err != nil {
+			return err
+		}
+		if !jsonMode && !firstRender {
+			if err := clearWorkflowWatchOutput(cmd.OutOrStdout()); err != nil {
+				return err
+			}
+		}
+		if err := renderWorkflowStatus(cmd.OutOrStdout(), resp.Run, format, noColor); err != nil {
+			return err
+		}
+		firstRender = false
+		if isTerminalStatus(resp.Run.Status) {
+			return nil
+		}
+		select {
+		case <-cmd.Context().Done():
+			return cmd.Context().Err()
+		case <-time.After(workflowWatchInterval):
+		}
+	}
+}
+
+func clearWorkflowWatchOutput(w io.Writer) error {
+	_, err := fmt.Fprint(w, "\x1b[H\x1b[2J")
+	return err
+}
+
+func normalizeStatus(status any) string {
+	return strings.ToLower(fmt.Sprint(status))
+}
+
+func isTerminalStatus(status any) bool {
+	switch normalizeStatus(status) {
+	case "success", "failed", "cancelled", "canceled", "timeout", "paused":
+		return true
+	default:
+		return false
+	}
+}
+
+func colorizeStatus(status string, noColor bool) string {
+	if noColor {
+		return status
+	}
+	switch status {
+	case "success":
+		return "\x1b[32m" + status + "\x1b[0m"
+	case "failed", "cancelled", "canceled", "timeout":
+		return "\x1b[31m" + status + "\x1b[0m"
+	case "running":
+		return "\x1b[36m" + status + "\x1b[0m"
+	case "paused":
+		return "\x1b[33m" + status + "\x1b[0m"
+	default:
+		return status
+	}
+}
+
+func formatAge(t time.Time) string {
+	if t.IsZero() {
+		return "-"
+	}
+	d := time.Since(t).Round(time.Second)
+	if d < 0 {
+		d = 0
+	}
+	return d.String()
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func terminalWidth(w io.Writer) int {
+	if f, ok := w.(*os.File); ok {
+		if width := os.Getenv("COLUMNS"); width != "" {
+			if n, err := strconv.Atoi(width); err == nil {
+				return n
+			}
+		}
+		if info, err := f.Stat(); err == nil && (info.Mode()&os.ModeCharDevice) != 0 {
+			return 120
+		}
+	}
+	return 0
+}
+
+func isInteractiveWriter(w io.Writer) bool { return terminalWidth(w) > 0 }
+
+func fitWidths(widths []int, maxWidth int, gap int) []int {
+	result := append([]int(nil), widths...)
+	fixed := 0
+	for i, width := range result {
+		if i == len(result)-1 {
+			continue
+		}
+		fixed += width
+	}
+	fixed += gap * (len(result) - 1)
+	remaining := maxWidth - fixed
+	if remaining <= 0 {
+		return result
+	}
+	result[len(result)-1] = remaining
+	return result
+}
+
+func renderHeader(cols []string, widths []int) []string {
+	out := make([]string, len(cols))
+	for i := range cols {
+		out[i] = padOrTruncate(cols[i], widths[i])
+	}
+	return out
+}
+
+func padOrTruncate(value string, width int) string {
+	if width <= 0 || len(value) <= width {
+		return value
+	}
+	if width <= 1 {
+		return value[:width]
+	}
+	return value[:width-1] + "…"
 }
 
 func findAgentflowd() (string, error) {

@@ -15,6 +15,7 @@ import (
 
 type ExecutionState struct {
 	runID          string
+	workflowPath   string
 	plan           coreworkflow.ExecutionPlan
 	inputs         map[string]any
 	vars           map[string]any
@@ -32,6 +33,8 @@ type ExecutionState struct {
 	index          *int
 	total          *int
 	metrics        *executionMetrics
+	cursor         int
+	pause          PauseSignaller
 }
 
 type executionMetrics struct {
@@ -83,6 +86,14 @@ func (s *ExecutionState) retries() int {
 	s.metrics.mu.Lock()
 	defer s.metrics.mu.Unlock()
 	return s.metrics.retries
+}
+
+func (s *ExecutionState) restoreMetrics(metrics corerun.CheckpointMetrics) {
+	s.metrics.mu.Lock()
+	defer s.metrics.mu.Unlock()
+	s.metrics.agentCalls = metrics.AgentCalls
+	s.metrics.bashCalls = metrics.BashCalls
+	s.metrics.retries = metrics.Retries
 }
 
 func (s *ExecutionState) set(id string, result corerun.NodeResult) {
@@ -157,6 +168,7 @@ func (s *ExecutionState) mergedNodes() map[string]any {
 func (s *ExecutionState) spawn(plan coreworkflow.ExecutionPlan, path []string) *ExecutionState {
 	return &ExecutionState{
 		runID:          s.runID,
+		workflowPath:   s.workflowPath,
 		plan:           plan,
 		inputs:         s.inputs,
 		vars:           s.vars,
@@ -170,6 +182,7 @@ func (s *ExecutionState) spawn(plan coreworkflow.ExecutionPlan, path []string) *
 		path:           append([]string(nil), path...),
 		baseWorkingDir: s.baseWorkingDir,
 		metrics:        s.metrics,
+		pause:          s.pause,
 	}
 }
 
@@ -182,6 +195,39 @@ func (e *Executor) recordNode(ctx context.Context, state *ExecutionState, result
 		state.failed = true
 	}
 	_ = e.svc.Runs.SaveNodeResult(ctx, state.runID, state.masker.MaskNodeResult(result))
+	_ = e.saveCheckpoint(ctx, state, state.plan.Workflow.Execution.PauseWhenFail, state.cursor, "", corerun.PauseReason(""))
+}
+
+func (e *Executor) saveCheckpoint(ctx context.Context, state *ExecutionState, enabled bool, cursor int, retryNodeID string, reason corerun.PauseReason) error {
+	if !enabled || state == nil || state.parent != nil {
+		return nil
+	}
+	nodes := make(map[string]corerun.NodeResult, len(state.results))
+	for id, result := range state.results {
+		nodes[id] = result
+	}
+	checkpoint := corerun.Checkpoint{
+		RunID:        state.runID,
+		Workflow:     state.plan.Workflow,
+		WorkflowPath: state.workflowPath,
+		Status:       corerun.RunRunning,
+		Reason:       reason,
+		Cursor:       cursor,
+		RetryNodeID:  retryNodeID,
+		Inputs:       state.inputs,
+		StartedAt:    state.startedAt,
+		UpdatedAt:    e.now(),
+		Metrics: corerun.CheckpointMetrics{
+			AgentCalls: state.agentCalls(),
+			BashCalls:  state.bashCalls(),
+			Retries:    state.retries(),
+		},
+		Nodes: nodes,
+	}
+	if reason != "" {
+		checkpoint.Status = corerun.RunPaused
+	}
+	return e.svc.Runs.SaveCheckpoint(ctx, state.masker.MaskCheckpoint(checkpoint))
 }
 
 func (e *Executor) finish(ctx context.Context, plan coreworkflow.ExecutionPlan, state *ExecutionState, status corerun.RunStatus, finalErr error) (Result, error) {
@@ -195,12 +241,24 @@ func (e *Executor) finish(ctx context.Context, plan coreworkflow.ExecutionPlan, 
 	publicSummary := state.masker.MaskSummary(summary)
 	_ = e.svc.Runs.FinalizeRun(persistCtx, state.runID, publicSummary)
 	eventType := "run.completed"
-	if status != corerun.RunSuccess {
+	switch status {
+	case corerun.RunSuccess:
+		_ = e.svc.Runs.ClearCheckpoint(persistCtx, state.runID)
+	case corerun.RunPaused:
+		eventType = "run.paused"
+	case corerun.RunFailed, corerun.RunCancelled:
 		eventType = "run.failed"
+		_ = e.svc.Runs.ClearCheckpoint(persistCtx, state.runID)
+	default:
+		eventType = "run.failed"
+		_ = e.svc.Runs.ClearCheckpoint(persistCtx, state.runID)
 	}
 	_ = e.emitState(persistCtx, state, corerun.Event{Type: eventType, Data: map[string]any{"status": status}})
 	_ = e.svc.Events.Close(persistCtx)
 	dir, _ := e.svc.Runs.RunDir(state.runID)
+	if status == corerun.RunPaused {
+		finalErr = nil
+	}
 	return Result{RunID: state.runID, RunDir: dir, Status: status, Summary: publicSummary, Plan: plan}, maskError(state.masker, finalErr)
 }
 
