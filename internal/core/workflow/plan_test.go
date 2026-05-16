@@ -11,7 +11,7 @@ func TestValidateRejectsCycle(t *testing.T) {
 			{ID: "b", Kind: NodeKindNoop, DependsOn: []string{"a"}},
 		},
 	}
-	if err := Validate(spec, DefaultProviders()); err == nil {
+	if err := Validate(spec, DefaultProviders(), nil); err == nil {
 		t.Fatal("expected cycle validation error")
 	}
 }

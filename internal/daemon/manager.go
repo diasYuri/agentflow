@@ -414,6 +414,9 @@ func (m *Manager) refreshRun(run WorkflowRun) WorkflowRun {
 
 func (m *Manager) markRunning(runID string) {
 	m.mark(runID, func(run *WorkflowRun) {
+		if isTerminalRunStatus(run.Status) {
+			return
+		}
 		run.Status = corerun.RunRunning
 		run.CurrentStep = ""
 		run.TerminalError = ""
@@ -422,8 +425,23 @@ func (m *Manager) markRunning(runID string) {
 
 func (m *Manager) finish(runID string, result runworkflow.RunResult, err error) {
 	m.mark(runID, func(run *WorkflowRun) {
+		wasCancelled := run.Status == corerun.RunCancelled
 		if result.RunDir != "" {
 			run.RunDir = result.RunDir
+		}
+		if wasCancelled {
+			applyProgress(run, result.Summary)
+			run.Status = corerun.RunCancelled
+			if run.FinishedAt.IsZero() {
+				run.FinishedAt = time.Now()
+			}
+			run.PausedAt = time.Time{}
+			run.PauseReason = ""
+			if err != nil && run.Error == "" {
+				run.Error = err.Error()
+				run.TerminalError = err.Error()
+			}
+			return
 		}
 		if result.Status != "" {
 			run.Status = result.Status
@@ -462,6 +480,10 @@ func (m *Manager) finish(runID string, result runworkflow.RunResult, err error) 
 		return
 	}
 	m.logger.Info("workflow finished", "run_id", runID, "status", result.Status)
+}
+
+func isTerminalRunStatus(status corerun.RunStatus) bool {
+	return status == corerun.RunSuccess || status == corerun.RunFailed || status == corerun.RunCancelled
 }
 
 func (m *Manager) mark(runID string, update func(*WorkflowRun)) {

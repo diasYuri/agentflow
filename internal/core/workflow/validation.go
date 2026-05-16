@@ -14,7 +14,7 @@ type ProviderLookup interface {
 
 var nodeOutputReference = regexp.MustCompile(`\bnodes\.([A-Za-z_][A-Za-z0-9_-]*)\.(outputs|output)\b`)
 
-func Validate(spec *WorkflowSpec, providers ProviderLookup) error {
+func Validate(spec *WorkflowSpec, agentProviders ProviderLookup, worktreeProviders ProviderLookup) error {
 	if spec == nil {
 		return fmt.Errorf("workflow is nil")
 	}
@@ -30,11 +30,52 @@ func Validate(spec *WorkflowSpec, providers ProviderLookup) error {
 	if err := validateInputSpecs(spec.Inputs); err != nil {
 		return err
 	}
-	if err := validateWorkflowScope(*spec, providers, nil); err != nil {
+	if err := validateWorktree(spec.Worktree, worktreeProviders); err != nil {
+		return err
+	}
+	if err := validateWorkflowScope(*spec, agentProviders, nil); err != nil {
 		return err
 	}
 	if _, err := BuildPlan(*spec); err != nil {
 		return err
+	}
+	return nil
+}
+
+func validateWorktree(w WorktreeSpec, providers ProviderLookup) error {
+	if !w.Enabled {
+		return nil
+	}
+	if providers != nil {
+		if !providers.HasProvider(w.Provider) {
+			return fmt.Errorf("unknown worktree provider %q", w.Provider)
+		}
+	} else {
+		switch w.Provider {
+		case "pi":
+		default:
+			return fmt.Errorf("unsupported worktree provider %q", w.Provider)
+		}
+	}
+	switch w.Base {
+	case "current":
+	default:
+		return fmt.Errorf("unsupported worktree base %q", w.Base)
+	}
+	switch w.Merge.Strategy {
+	case "deterministic":
+	default:
+		return fmt.Errorf("unsupported worktree merge.strategy %q", w.Merge.Strategy)
+	}
+	switch w.Merge.OnConflict {
+	case "agent":
+	default:
+		return fmt.Errorf("unsupported worktree merge.on_conflict %q", w.Merge.OnConflict)
+	}
+	switch w.Cleanup.OnFailure {
+	case "keep":
+	default:
+		return fmt.Errorf("unsupported worktree cleanup.on_failure %q", w.Cleanup.OnFailure)
 	}
 	return nil
 }

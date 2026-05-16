@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -17,6 +18,7 @@ import (
 	eventmulti "github.com/diasYuri/agentflow/internal/adapters/events/multi"
 	runrepo "github.com/diasYuri/agentflow/internal/adapters/runrepo/local"
 	"github.com/diasYuri/agentflow/internal/adapters/shell"
+	worktreefake "github.com/diasYuri/agentflow/internal/adapters/worktree/fake"
 	yamlrepo "github.com/diasYuri/agentflow/internal/adapters/yaml"
 	"github.com/diasYuri/agentflow/internal/core/ports"
 	"github.com/diasYuri/agentflow/internal/core/run"
@@ -1085,6 +1087,18 @@ func newTestRunWorkflowUseCase(dir string, shellRunner ports.ShellRunner, events
 	}
 }
 
+func newTestRunWorkflowUseCaseWithWorktree(dir string, shellRunner ports.ShellRunner, events ports.EventSink, worktrees ports.WorktreeProviderRegistry) *RunWorkflowUseCase {
+	return &RunWorkflowUseCase{
+		Workflows: newTestWorkflowRepository(dir),
+		Runs:      runrepo.New(filepath.Join(dir, "runs")),
+		Events:    events,
+		Agents:    ports.NewStaticAgentProviderRegistry(map[string]ports.AgentProvider{"codex": agentfake.New()}),
+		Shell:     shellRunner,
+		Worktrees: worktrees,
+		Now:       func() time.Time { return time.Unix(1, 0).UTC() },
+	}
+}
+
 func writeWorkflow(t *testing.T, dir string, content string) string {
 	t.Helper()
 	var spec struct {
@@ -1199,5 +1213,601 @@ func assertFileRedacted(t *testing.T, path string, secret string) {
 	}
 	if !strings.Contains(content, run.MaskReplacement) {
 		t.Fatalf("%s does not contain mask replacement: %s", path, content)
+	}
+}
+
+func initGitRepo(t *testing.T, dir string) string {
+	t.Helper()
+	runGit := func(args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("git %s failed: %v", strings.Join(args, " "), err)
+		}
+	}
+	runGit("init")
+	runGit("config", "user.email", "test@agentflow")
+	runGit("config", "user.name", "Test")
+	if err := os.WriteFile(filepath.Join(dir, "init.txt"), []byte("init"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit("add", ".")
+	runGit("commit", "-m", "initial")
+	out, err := exec.Command("git", "-C", dir, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatalf("git rev-parse failed: %v", err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func TestRunWorkflowWorktreeCreatesWorktreeBeforeFirstNode(t *testing.T) {
+	dir := t.TempDir()
+	initGitRepo(t, dir)
+	worktreeBase := t.TempDir()
+	workflowPath := writeWorkflow(t, dir, `
+version: "1"
+name: worktree-bash
+worktree:
+  enabled: true
+  provider: fake
+  base: current
+execution:
+  output_dir: "`+filepath.ToSlash(filepath.Join(dir, "runs"))+`"
+nodes:
+  - id: shell
+    kind: bash
+    command: "pwd"
+`)
+	worktrees := ports.NewStaticWorktreeProviderRegistry(map[string]ports.WorktreeProvider{
+		"fake": worktreefake.New(worktreeBase),
+	})
+	uc := newTestRunWorkflowUseCaseWithWorktree(dir, shell.NewRunner(), eventmemory.New(), worktrees)
+
+	result, err := uc.Run(context.Background(), RunOptions{
+		WorkflowRef: workflowPath,
+		WorkingDir:  dir,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != run.RunSuccess {
+		t.Fatalf("expected success, got %s", result.Status)
+	}
+	stdout := result.Summary.Nodes["shell"].Stdout
+	if !strings.Contains(stdout, worktreeBase) {
+		t.Fatalf("expected shell stdout inside worktree base %q, got %q", worktreeBase, stdout)
+	}
+	if strings.HasPrefix(result.RunDir, worktreeBase) {
+		t.Fatalf("expected run dir outside worktree, got %q", result.RunDir)
+	}
+	assertFileExists(t, filepath.Join(result.RunDir, "artifacts", "worktree", "status.json"))
+}
+
+func TestRunWorkflowWorktreeAgentReceivesWorktreeDir(t *testing.T) {
+	dir := t.TempDir()
+	initGitRepo(t, dir)
+	worktreeBase := t.TempDir()
+	workflowPath := writeWorkflow(t, dir, `
+version: "1"
+name: worktree-agent
+worktree:
+  enabled: true
+  provider: fake
+  base: current
+execution:
+  output_dir: "`+filepath.ToSlash(filepath.Join(dir, "runs"))+`"
+nodes:
+  - id: agent
+    kind: agent
+    prompt: "hello"
+`)
+	agent := &recordingAgentProvider{}
+	worktrees := ports.NewStaticWorktreeProviderRegistry(map[string]ports.WorktreeProvider{
+		"fake": worktreefake.New(worktreeBase),
+	})
+	uc := &RunWorkflowUseCase{
+		Workflows: newTestWorkflowRepository(dir),
+		Runs:      runrepo.New(filepath.Join(dir, "runs")),
+		Events:    eventmemory.New(),
+		Agents:    ports.NewStaticAgentProviderRegistry(map[string]ports.AgentProvider{"codex": agent}),
+		Shell:     &scriptedShell{},
+		Worktrees: worktrees,
+		Now:       func() time.Time { return time.Unix(1, 0).UTC() },
+	}
+
+	result, err := uc.Run(context.Background(), RunOptions{
+		WorkflowRef: workflowPath,
+		WorkingDir:  dir,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != run.RunSuccess {
+		t.Fatalf("expected success, got %s", result.Status)
+	}
+	dirs := agent.workingDirs()
+	if len(dirs) != 1 {
+		t.Fatalf("expected 1 agent request, got %d", len(dirs))
+	}
+	if !strings.HasPrefix(dirs[0], worktreeBase) {
+		t.Fatalf("expected agent working dir inside worktree base %q, got %q", worktreeBase, dirs[0])
+	}
+}
+
+func TestRunWorkflowWorktreeUnknownProviderFailsEarly(t *testing.T) {
+	dir := t.TempDir()
+	workflowPath := writeWorkflow(t, dir, `
+version: "1"
+name: unknown-provider
+worktree:
+  enabled: true
+  provider: missing
+execution:
+  output_dir: "`+filepath.ToSlash(filepath.Join(dir, "runs"))+`"
+nodes:
+  - id: shell
+    kind: bash
+    command: "echo hi"
+`)
+	uc := newTestRunWorkflowUseCaseWithWorktree(dir, &scriptedShell{}, eventmemory.New(), ports.NewStaticWorktreeProviderRegistry(map[string]ports.WorktreeProvider{}))
+
+	_, err := uc.Run(context.Background(), RunOptions{WorkflowRef: workflowPath})
+	if err == nil {
+		t.Fatal("expected error for unknown worktree provider")
+	}
+	if !strings.Contains(err.Error(), `unknown worktree provider "missing"`) {
+		t.Fatalf("expected unknown provider error, got %v", err)
+	}
+}
+
+func TestRunWorkflowWorktreePreservesMetadataOnFailure(t *testing.T) {
+	dir := t.TempDir()
+	initGitRepo(t, dir)
+	worktreeBase := t.TempDir()
+	workflowPath := writeWorkflow(t, dir, `
+version: "1"
+name: worktree-fail
+worktree:
+  enabled: true
+  provider: fake
+  base: current
+execution:
+  output_dir: "`+filepath.ToSlash(filepath.Join(dir, "runs"))+`"
+nodes:
+  - id: shell
+    kind: bash
+    command: "false"
+`)
+	worktrees := ports.NewStaticWorktreeProviderRegistry(map[string]ports.WorktreeProvider{
+		"fake": worktreefake.New(worktreeBase),
+	})
+	uc := newTestRunWorkflowUseCaseWithWorktree(dir, shell.NewRunner(), eventmemory.New(), worktrees)
+
+	result, err := uc.Run(context.Background(), RunOptions{WorkflowRef: workflowPath})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if result.Status != run.RunFailed {
+		t.Fatalf("expected failed run, got %s", result.Status)
+	}
+	assertFileExists(t, filepath.Join(result.RunDir, "artifacts", "worktree", "status.json"))
+	status := readWorktreeStatus(t, result.RunDir)
+	if !status.Enabled || status.Provider != "fake" || status.Name == "" || status.WorktreePath == "" || status.BaseCommit == "" {
+		t.Fatalf("expected complete worktree metadata, got %+v", status)
+	}
+	if status.MergeStatus != run.WorktreeMergeFailed {
+		t.Fatalf("expected failed merge status on failed run, got %s", status.MergeStatus)
+	}
+}
+
+func TestRunWorkflowWorktreeNoChanges(t *testing.T) {
+	dir := t.TempDir()
+	initGitRepo(t, dir)
+	worktreeBase := t.TempDir()
+	wtProvider := worktreefake.New(worktreeBase)
+	workflowPath := writeWorkflow(t, dir, `
+version: "1"
+name: worktree-no-changes
+worktree:
+  enabled: true
+  provider: fake
+  base: current
+execution:
+  output_dir: "`+filepath.ToSlash(filepath.Join(dir, "runs"))+`"
+nodes:
+  - id: shell
+    kind: bash
+    command: "echo ok"
+`)
+	worktrees := ports.NewStaticWorktreeProviderRegistry(map[string]ports.WorktreeProvider{
+		"fake": wtProvider,
+	})
+	uc := newTestRunWorkflowUseCaseWithWorktree(dir, shell.NewRunner(), eventmemory.New(), worktrees)
+
+	result, err := uc.Run(context.Background(), RunOptions{WorkflowRef: workflowPath, WorkingDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != run.RunSuccess {
+		t.Fatalf("expected success, got %s", result.Status)
+	}
+	status := readWorktreeStatus(t, result.RunDir)
+	if status.MergeStatus != run.WorktreeMergeNoChanges {
+		t.Fatalf("expected no_changes, got %s", status.MergeStatus)
+	}
+	if status.CleanupStatus != run.WorktreeCleanupRemoved {
+		t.Fatalf("expected cleanup removed, got %s", status.CleanupStatus)
+	}
+	assertFileNotExists(t, filepath.Join(result.RunDir, "artifacts", "worktree", "diff.patch"))
+}
+
+func TestRunWorkflowWorktreeWithChanges(t *testing.T) {
+	dir := t.TempDir()
+	initGitRepo(t, dir)
+	worktreeBase := t.TempDir()
+	wtProvider := worktreefake.New(worktreeBase)
+	wtProvider.StatusResult = &ports.WorktreeStatus{Clean: false, Files: []ports.FileStatus{{Path: "a.txt", Status: "M"}}}
+	wtProvider.DiffResult = &ports.ChangeSet{
+		Empty: false,
+		Files: []ports.FileChange{{Path: "a.txt", Status: "M"}},
+		Diff:  "diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-old\n+new\n",
+	}
+	wtProvider.ApplyResult = &ports.MergeResult{Success: true}
+	workflowPath := writeWorkflow(t, dir, `
+version: "1"
+name: worktree-with-changes
+worktree:
+  enabled: true
+  provider: fake
+  base: current
+execution:
+  output_dir: "`+filepath.ToSlash(filepath.Join(dir, "runs"))+`"
+nodes:
+  - id: shell
+    kind: bash
+    command: "echo ok"
+`)
+	worktrees := ports.NewStaticWorktreeProviderRegistry(map[string]ports.WorktreeProvider{
+		"fake": wtProvider,
+	})
+	uc := newTestRunWorkflowUseCaseWithWorktree(dir, shell.NewRunner(), eventmemory.New(), worktrees)
+
+	result, err := uc.Run(context.Background(), RunOptions{WorkflowRef: workflowPath, WorkingDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != run.RunSuccess {
+		t.Fatalf("expected success, got %s", result.Status)
+	}
+	status := readWorktreeStatus(t, result.RunDir)
+	if status.MergeStatus != run.WorktreeMergeMerged {
+		t.Fatalf("expected merged, got %s", status.MergeStatus)
+	}
+	if !status.Enabled || status.Provider != "fake" || status.Name != "wt-worktree-with-changes" {
+		t.Fatalf("expected enabled/provider/name metadata, got %+v", status)
+	}
+	if status.WorktreePath == "" || status.BaseCommit == "" || status.DestinationCommitBefore == "" || status.DestinationCommitAfter == "" {
+		t.Fatalf("expected path and commit metadata, got %+v", status)
+	}
+	if len(status.ChangedFiles) != 1 || status.ChangedFiles[0].Path != "a.txt" {
+		t.Fatalf("expected changed file a.txt, got %+v", status.ChangedFiles)
+	}
+	assertFileExists(t, filepath.Join(result.RunDir, "artifacts", "worktree", "diff.patch"))
+	assertFileContains(t, filepath.Join(result.RunDir, "artifacts", "worktree", "diff.patch"), "diff --git")
+	assertFileExists(t, filepath.Join(result.RunDir, "artifacts", "worktree", "merge.log"))
+}
+
+func TestRunWorkflowWorktreeConflictKeepsWorktree(t *testing.T) {
+	dir := t.TempDir()
+	initGitRepo(t, dir)
+	worktreeBase := t.TempDir()
+	wtProvider := worktreefake.New(worktreeBase)
+	wtProvider.StatusResult = &ports.WorktreeStatus{Clean: false, Files: []ports.FileStatus{{Path: "a.txt", Status: "M"}}}
+	wtProvider.DiffResult = &ports.ChangeSet{
+		Empty: false,
+		Files: []ports.FileChange{{Path: "a.txt", Status: "M"}},
+		Diff:  "diff...",
+	}
+	wtProvider.ApplyResult = &ports.MergeResult{
+		Success:   false,
+		Conflicts: []ports.Conflict{{Path: "a.txt", Reason: "content conflict"}},
+	}
+	wtProvider.ApplyError = ports.ErrWorktreeResolvable
+	workflowPath := writeWorkflow(t, dir, `
+version: "1"
+name: worktree-conflict
+worktree:
+  enabled: true
+  provider: fake
+  base: current
+execution:
+  output_dir: "`+filepath.ToSlash(filepath.Join(dir, "runs"))+`"
+nodes:
+  - id: shell
+    kind: bash
+    command: "echo ok"
+`)
+	worktrees := ports.NewStaticWorktreeProviderRegistry(map[string]ports.WorktreeProvider{
+		"fake": wtProvider,
+	})
+	uc := newTestRunWorkflowUseCaseWithWorktree(dir, shell.NewRunner(), eventmemory.New(), worktrees)
+
+	result, err := uc.Run(context.Background(), RunOptions{WorkflowRef: workflowPath, WorkingDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != run.RunSuccess {
+		t.Fatalf("expected run success even with conflict (recorded in metadata), got %s", result.Status)
+	}
+	status := readWorktreeStatus(t, result.RunDir)
+	if status.MergeStatus != run.WorktreeMergeConflict {
+		t.Fatalf("expected conflict, got %s", status.MergeStatus)
+	}
+	if len(status.Conflicts) != 1 || status.Conflicts[0].Path != "a.txt" {
+		t.Fatalf("expected conflict a.txt, got %+v", status.Conflicts)
+	}
+	assertFileExists(t, filepath.Join(result.RunDir, "artifacts", "worktree", "conflicts.json"))
+	assertFileContains(t, filepath.Join(result.RunDir, "artifacts", "worktree", "conflicts.json"), "a.txt")
+	if status.CleanupStatus != run.WorktreeCleanupKept {
+		t.Fatalf("expected cleanup kept on conflict, got %s", status.CleanupStatus)
+	}
+}
+
+func TestRunWorkflowWorktreeStructuralErrorNoAgent(t *testing.T) {
+	dir := t.TempDir()
+	initGitRepo(t, dir)
+	worktreeBase := t.TempDir()
+	wtProvider := worktreefake.New(worktreeBase)
+	wtProvider.StatusResult = &ports.WorktreeStatus{Clean: false, Files: []ports.FileStatus{{Path: "a.txt", Status: "M"}}}
+	wtProvider.DiffResult = &ports.ChangeSet{
+		Empty: false,
+		Files: []ports.FileChange{{Path: "a.txt", Status: "M"}},
+		Diff:  "diff...",
+	}
+	wtProvider.ApplyResult = &ports.MergeResult{
+		Success:   false,
+		Conflicts: []ports.Conflict{{Path: "a.txt", Reason: "structural"}},
+	}
+	wtProvider.ApplyError = ports.ErrWorktreeStructural
+	agent := &recordingAgentProvider{}
+	workflowPath := writeWorkflow(t, dir, `
+version: "1"
+name: worktree-structural
+worktree:
+  enabled: true
+  provider: fake
+  base: current
+execution:
+  output_dir: "`+filepath.ToSlash(filepath.Join(dir, "runs"))+`"
+nodes:
+  - id: shell
+    kind: bash
+    command: "echo ok"
+`)
+	worktrees := ports.NewStaticWorktreeProviderRegistry(map[string]ports.WorktreeProvider{
+		"fake": wtProvider,
+	})
+	uc := &RunWorkflowUseCase{
+		Workflows: newTestWorkflowRepository(dir),
+		Runs:      runrepo.New(filepath.Join(dir, "runs")),
+		Events:    eventmemory.New(),
+		Agents:    ports.NewStaticAgentProviderRegistry(map[string]ports.AgentProvider{"codex": agent}),
+		Shell:     shell.NewRunner(),
+		Worktrees: worktrees,
+		Now:       func() time.Time { return time.Unix(1, 0).UTC() },
+	}
+
+	result, err := uc.Run(context.Background(), RunOptions{WorkflowRef: workflowPath, WorkingDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != run.RunSuccess {
+		t.Fatalf("expected run success (structural error in metadata), got %s", result.Status)
+	}
+	status := readWorktreeStatus(t, result.RunDir)
+	if status.MergeStatus != run.WorktreeMergeFailed {
+		t.Fatalf("expected failed, got %s", status.MergeStatus)
+	}
+	if len(agent.requests) != 0 {
+		t.Fatalf("expected no agent calls for structural error, got %d", len(agent.requests))
+	}
+	assertFileExists(t, filepath.Join(result.RunDir, "artifacts", "worktree", "conflicts.json"))
+}
+
+func TestRunWorkflowWorktreeCleanupOnSuccessFalse(t *testing.T) {
+	dir := t.TempDir()
+	initGitRepo(t, dir)
+	worktreeBase := t.TempDir()
+	wtProvider := worktreefake.New(worktreeBase)
+	workflowPath := writeWorkflow(t, dir, `
+version: "1"
+name: worktree-keep
+worktree:
+  enabled: true
+  provider: fake
+  base: current
+  cleanup:
+    on_success: false
+execution:
+  output_dir: "`+filepath.ToSlash(filepath.Join(dir, "runs"))+`"
+nodes:
+  - id: shell
+    kind: bash
+    command: "echo ok"
+`)
+	worktrees := ports.NewStaticWorktreeProviderRegistry(map[string]ports.WorktreeProvider{
+		"fake": wtProvider,
+	})
+	uc := newTestRunWorkflowUseCaseWithWorktree(dir, shell.NewRunner(), eventmemory.New(), worktrees)
+
+	result, err := uc.Run(context.Background(), RunOptions{WorkflowRef: workflowPath, WorkingDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != run.RunSuccess {
+		t.Fatalf("expected success, got %s", result.Status)
+	}
+	status := readWorktreeStatus(t, result.RunDir)
+	if status.CleanupStatus != run.WorktreeCleanupKept {
+		t.Fatalf("expected cleanup kept when on_success=false, got %s", status.CleanupStatus)
+	}
+}
+
+func TestRunWorkflowWorktreeRenameInMetadata(t *testing.T) {
+	dir := t.TempDir()
+	initGitRepo(t, dir)
+	worktreeBase := t.TempDir()
+	wtProvider := worktreefake.New(worktreeBase)
+	wtProvider.StatusResult = &ports.WorktreeStatus{Clean: false, Files: []ports.FileStatus{{Path: "b.txt", Status: "R"}}}
+	wtProvider.DiffResult = &ports.ChangeSet{
+		Empty: false,
+		Files: []ports.FileChange{{Path: "b.txt", Status: "R", OldPath: "a.txt"}},
+		Diff:  "diff...",
+	}
+	wtProvider.ApplyResult = &ports.MergeResult{Success: true}
+	workflowPath := writeWorkflow(t, dir, `
+version: "1"
+name: worktree-rename
+worktree:
+  enabled: true
+  provider: fake
+  base: current
+execution:
+  output_dir: "`+filepath.ToSlash(filepath.Join(dir, "runs"))+`"
+nodes:
+  - id: shell
+    kind: bash
+    command: "echo ok"
+`)
+	worktrees := ports.NewStaticWorktreeProviderRegistry(map[string]ports.WorktreeProvider{
+		"fake": wtProvider,
+	})
+	uc := newTestRunWorkflowUseCaseWithWorktree(dir, shell.NewRunner(), eventmemory.New(), worktrees)
+
+	result, err := uc.Run(context.Background(), RunOptions{WorkflowRef: workflowPath, WorkingDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := readWorktreeStatus(t, result.RunDir)
+	if len(status.ChangedFiles) != 1 {
+		t.Fatalf("expected 1 changed file, got %d", len(status.ChangedFiles))
+	}
+	if status.ChangedFiles[0].Path != "b.txt" || status.ChangedFiles[0].OldPath != "a.txt" || status.ChangedFiles[0].Status != "R" {
+		t.Fatalf("expected renamed file metadata, got %+v", status.ChangedFiles[0])
+	}
+}
+
+func TestRunWorkflowWorktreeConflictRequestsAgent(t *testing.T) {
+	dir := t.TempDir()
+	initGitRepo(t, dir)
+	worktreeBase := t.TempDir()
+	wtProvider := worktreefake.New(worktreeBase)
+	wtProvider.StatusResult = &ports.WorktreeStatus{Clean: false, Files: []ports.FileStatus{{Path: "a.txt", Status: "M"}}}
+	wtProvider.DiffResult = &ports.ChangeSet{
+		Empty: false,
+		Files: []ports.FileChange{{Path: "a.txt", Status: "M"}},
+		Diff:  "diff...",
+	}
+	wtProvider.ApplyResult = &ports.MergeResult{
+		Success:   false,
+		Conflicts: []ports.Conflict{{Path: "a.txt", Reason: "content conflict"}},
+	}
+	wtProvider.ApplyError = ports.ErrWorktreeResolvable
+	agent := &recordingAgentProvider{}
+	workflowPath := writeWorkflow(t, dir, `
+version: "1"
+name: worktree-agent-conflict
+worktree:
+  enabled: true
+  provider: fake
+  base: current
+execution:
+  output_dir: "`+filepath.ToSlash(filepath.Join(dir, "runs"))+`"
+nodes:
+  - id: shell
+    kind: bash
+    command: "echo ok"
+`)
+	worktrees := ports.NewStaticWorktreeProviderRegistry(map[string]ports.WorktreeProvider{
+		"fake": wtProvider,
+	})
+	uc := &RunWorkflowUseCase{
+		Workflows: newTestWorkflowRepository(dir),
+		Runs:      runrepo.New(filepath.Join(dir, "runs")),
+		Events:    eventmemory.New(),
+		Agents:    ports.NewStaticAgentProviderRegistry(map[string]ports.AgentProvider{"codex": agent}),
+		Shell:     shell.NewRunner(),
+		Worktrees: worktrees,
+		Now:       func() time.Time { return time.Unix(1, 0).UTC() },
+	}
+
+	result, err := uc.Run(context.Background(), RunOptions{WorkflowRef: workflowPath, WorkingDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != run.RunSuccess {
+		t.Fatalf("expected run success, got %s", result.Status)
+	}
+	if len(agent.requests) != 1 {
+		t.Fatalf("expected 1 agent call for conflict resolution, got %d", len(agent.requests))
+	}
+	if agent.requests[0].NodeID != "worktree-resolution" {
+		t.Fatalf("expected agent node_id worktree-resolution, got %s", agent.requests[0].NodeID)
+	}
+	if agent.requests[0].Sandbox.Mode != "workspace-write" {
+		t.Fatalf("expected workspace-write sandbox, got %s", agent.requests[0].Sandbox.Mode)
+	}
+}
+
+func readWorktreeStatus(t *testing.T, runDir string) run.WorktreeMetadata {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(runDir, "artifacts", "worktree", "status.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var status run.WorktreeMetadata
+	if err := json.Unmarshal(data, &status); err != nil {
+		t.Fatal(err)
+	}
+	return status
+}
+
+func TestRunWorkflowWorktreeResumeBlocked(t *testing.T) {
+	dir := t.TempDir()
+	initGitRepo(t, dir)
+	worktreeBase := t.TempDir()
+	workflowPath := writeWorkflow(t, dir, `
+version: "1"
+name: worktree-resume
+worktree:
+  enabled: true
+  provider: fake
+  base: current
+execution:
+  output_dir: "`+filepath.ToSlash(filepath.Join(dir, "runs"))+`"
+  pause_when_fail: true
+nodes:
+  - id: shell
+    kind: bash
+    command: "false"
+`)
+	worktrees := ports.NewStaticWorktreeProviderRegistry(map[string]ports.WorktreeProvider{
+		"fake": worktreefake.New(worktreeBase),
+	})
+	uc := newTestRunWorkflowUseCaseWithWorktree(dir, shell.NewRunner(), eventmemory.New(), worktrees)
+
+	first, err := uc.Run(context.Background(), RunOptions{WorkflowRef: workflowPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Status != run.RunPaused {
+		t.Fatalf("expected paused, got %s", first.Status)
+	}
+	_, err = uc.Run(context.Background(), RunOptions{ResumeRunID: first.RunID})
+	if err == nil {
+		t.Fatal("expected resume blocked error")
+	}
+	if !strings.Contains(err.Error(), "resume is not supported for workflows with worktree enabled") {
+		t.Fatalf("expected resume blocked error, got %v", err)
 	}
 }

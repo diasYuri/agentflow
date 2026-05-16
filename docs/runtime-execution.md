@@ -48,7 +48,8 @@ Esse estado mantém:
 - resultados por nó, usados para compor o contexto de avaliação;
 - o encadeamento de estados em nós expandidos ou aninhados;
 - contadores de `agentCalls`, `bashCalls` e `retries`;
-- o `failFast` efetivo e o conjunto de nós já concluídos.
+- o `failFast` efetivo e o conjunto de nós já concluídos;
+- quando `worktree.enabled` é true, mantém o caminho do worktree, commit base, provider e diretório de destino.
 
 Quando `execution.pause_when_fail` está habilitado, uma falha final de node sem
 `continue_on_error` emite `run.pausing`, salva um checkpoint com `reason: "pause_when_fail"` e
@@ -65,6 +66,38 @@ ponto seguro desta versão é o node expandido como unidade.
 O checkpoint persistido usa os mesmos resultados mascarados do restante da persistência local.
 Assim, secrets não são gravados em claro; se um node posterior dependia exatamente do valor secreto
 emitido por um node anterior, a retomada verá o valor mascarado.
+
+### Ciclo de worktree: merge, conflitos e cleanup
+
+Quando o workflow tem `worktree.enabled: true`, ao final de um run bem-sucedido o runtime
+executa um ciclo determinístico de merge antes de finalizar:
+
+1. **Status** — `provider.Status` verifica se o worktree tem mudanças. Se estiver clean,
+   registra `merge_status: no_changes`, salva `worktree/status.json` e pula o apply.
+2. **Diff** — `provider.Diff` gera o diff e a lista de arquivos alterados. O diff é salvo em
+   `worktree/diff.patch` e a lista ordenada de arquivos (adicionados, modificados, removidos,
+   renomeados) vai para os metadados.
+3. **Apply** — `provider.Apply` aplica o diff no diretório de destino, validando que o
+   `HEAD` do destino ainda corresponde ao `base_commit`. Se tiver sucesso, registra
+   `merge_status: merged`, salva `worktree/merge.log` e emite `worktree.merged`.
+4. **Conflitos** — se o apply retornar erro classificado como `ErrWorktreeResolvable`, o runtime
+   registra `merge_status: conflict`, salva `worktree/conflicts.json` e, quando
+   `worktree.merge.on_conflict` é `"agent"`, solicita um agente de resolução. O agente recebe
+   um prompt com workflow, base commit, arquivos alterados, conflitos e logs. Após a resolução,
+   o runtime reavalia status e reexecuta apply. Se o agente resolver e a validação subsequente
+   passar, o status vira `merged`; se continuar conflitando, permanece `conflict`.
+5. **Erros estruturais** — erros classificados como `ErrWorktreeStructural` (Git ausente,
+   destino não é repo, HEAD mudou, permissão negada) registram `merge_status: failed` e
+   **não** disparam agente.
+6. **Cleanup** — após o merge/cleanup, `provider.Cleanup` é chamado conforme política:
+   - sucesso com `cleanup.on_success: true` (default): remove o worktree;
+   - `no_changes` com `on_success: true`: remove se a política permitir;
+   - conflito, falha de merge ou `on_success: false`: preserva o worktree;
+   - falha do run com `cleanup.on_failure: "cleanup"`: remove; caso contrário, preserva.
+
+O evento `worktree.resolution_agent.requested` deixa claro que a resolução de conflitos é uma
+etapa de runtime fora do grafo de nodes. O `FinalizeRun` só é chamado após o ciclo completo
+de merge e cleanup, garantindo que o `summary.json` reflita o estado auditável final.
 
 Os helpers de [`internal/core/runtime/handlers/helpers.go`](/Users/yuri/git/diasYuri/agentflow/internal/core/runtime/handlers/helpers.go)
 definem as regras de apoio usadas pela execução:
@@ -91,7 +124,8 @@ mas não chama `handlers.Execute`, então nenhum nó é disparado.
 - [`internal/core/runtime/handlers/execution.go`](/Users/yuri/git/diasYuri/agentflow/internal/core/runtime/handlers/execution.go): orquestração da execução, fan-out, retries, timeouts, eventos e finalização do run.
 - [`internal/core/runtime/handlers/state.go`](/Users/yuri/git/diasYuri/agentflow/internal/core/runtime/handlers/state.go): estado compartilhado do run, métricas e composição do resumo final.
 - [`internal/core/runtime/handlers/helpers.go`](/Users/yuri/git/diasYuri/agentflow/internal/core/runtime/handlers/helpers.go): resolução de inputs, overrides, secrets e helpers de configuração efetiva.
-- [`internal/core/runtime/run_workflow_test.go`](/Users/yuri/git/diasYuri/agentflow/internal/core/runtime/run_workflow_test.go): cobertura de fan-out, `when`, `continue_on_error`, `fail_fast`, timeouts, retries, secrets, working dir e persistência.
+- [`internal/core/runtime/handlers/worktree.go`](/Users/yuri/git/diasYuri/agentflow/internal/core/runtime/handlers/worktree.go): ciclo de merge determinístico, detecção de conflitos, agente de resolução e cleanup de worktree.
+- [`internal/core/runtime/run_workflow_test.go`](/Users/yuri/git/diasYuri/agentflow/internal/core/runtime/run_workflow_test.go): cobertura de fan-out, `when`, `continue_on_error`, `fail_fast`, timeouts, retries, secrets, working dir, persistência e ciclo de worktree.
 
 ## Observações relevantes
 
@@ -103,3 +137,5 @@ mas não chama `handlers.Execute`, então nenhum nó é disparado.
 - Secrets são carregados do ambiente apenas quando a variável configurada existe; o resumo e os artefatos persistidos passam por mascaramento.
 - O resumo final inclui status do run, métricas agregadas e o mapa de resultados por nó, o que facilita auditoria e debug.
 - `dry-run` resolve a mesma preparação usada no run real, então é útil para validar efeitos de overrides e entradas sem executar comandos locais ou chamar agentes.
+- O ciclo de worktree ocorre **após** a execução dos nodes, então falhas de merge ou conflitos não alteram o `run_status` do workflow; eles são registrados em `worktree/status.json`.
+- O agente de resolução de conflitos é uma etapa de runtime, não um node do grafo. Isso garante que métricas e eventos não confundam a execução normal com a resolução de merge.

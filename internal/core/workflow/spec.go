@@ -10,6 +10,25 @@ type WorkflowSpec struct {
 	Defaults    DefaultsSpec          `json:"defaults,omitempty" yaml:"defaults"`
 	Execution   ExecutionSpec         `json:"execution,omitempty" yaml:"execution"`
 	Nodes       []NodeSpec            `json:"nodes" yaml:"nodes"`
+	Worktree    WorktreeSpec          `json:"worktree,omitempty" yaml:"worktree"`
+}
+
+type WorktreeSpec struct {
+	Enabled  bool                `json:"enabled,omitempty" yaml:"enabled"`
+	Provider string              `json:"provider,omitempty" yaml:"provider"`
+	Base     string              `json:"base,omitempty" yaml:"base"`
+	Merge    WorktreeMergeSpec   `json:"merge,omitempty" yaml:"merge"`
+	Cleanup  WorktreeCleanupSpec `json:"cleanup,omitempty" yaml:"cleanup"`
+}
+
+type WorktreeMergeSpec struct {
+	Strategy   string `json:"strategy,omitempty" yaml:"strategy"`
+	OnConflict string `json:"on_conflict,omitempty" yaml:"on_conflict"`
+}
+
+type WorktreeCleanupSpec struct {
+	OnSuccess *bool  `json:"on_success,omitempty" yaml:"on_success"`
+	OnFailure string `json:"on_failure,omitempty" yaml:"on_failure"`
 }
 
 type InputSpec struct {
@@ -107,4 +126,31 @@ func (s WorkflowSpec) NodeByID(id string) (NodeSpec, bool) {
 		}
 	}
 	return NodeSpec{}, false
+}
+
+// ApplyWorktreeDefaults preenche os valores padrão de worktree quando enabled é true
+// mas campos opcionais estão vazios.
+func ApplyWorktreeDefaults(spec *WorkflowSpec) {
+	if !spec.Worktree.Enabled {
+		return
+	}
+	if spec.Worktree.Provider == "" {
+		spec.Worktree.Provider = "pi"
+	}
+	if spec.Worktree.Base == "" {
+		spec.Worktree.Base = "current"
+	}
+	if spec.Worktree.Merge.Strategy == "" {
+		spec.Worktree.Merge.Strategy = "deterministic"
+	}
+	if spec.Worktree.Merge.OnConflict == "" {
+		spec.Worktree.Merge.OnConflict = "agent"
+	}
+	if spec.Worktree.Cleanup.OnFailure == "" {
+		spec.Worktree.Cleanup.OnFailure = "keep"
+	}
+	if spec.Worktree.Cleanup.OnSuccess == nil {
+		v := true
+		spec.Worktree.Cleanup.OnSuccess = &v
+	}
 }

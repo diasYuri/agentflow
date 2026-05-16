@@ -14,6 +14,7 @@ import (
 	"github.com/thejerf/suture/v4"
 
 	corerun "github.com/diasYuri/agentflow/internal/core/run"
+	runworkflow "github.com/diasYuri/agentflow/internal/core/runtime"
 )
 
 func TestServerStatusOverUnixSocket(t *testing.T) {
@@ -355,6 +356,58 @@ nodes:
 	}
 	if cancelled.Status != "cancelled" {
 		t.Fatalf("expected cancelled status, got %#v", cancelled)
+	}
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		got, _ := manager.WorkflowStatus(run.ID)
+		if got.Status != "cancelled" {
+			t.Fatalf("expected cancellation to remain terminal, got %#v", got)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func TestManagerCancelWinsOverLatePausedFinish(t *testing.T) {
+	dir := shortTempDir(t)
+	manager := NewManager(Config{RunRoot: filepath.Join(dir, "runs")}, nil, nil)
+	runID := "run-cancel-race"
+	manager.records[runID] = &runRecord{run: WorkflowRun{
+		ID:          runID,
+		Workflow:    "race",
+		RunDir:      filepath.Join(dir, "runs", runID),
+		Status:      corerun.RunPaused,
+		StartedAt:   time.Now(),
+		PausedAt:    time.Now(),
+		PauseReason: string(corerun.PauseReasonManual),
+	}}
+
+	cancelled, err := manager.CancelWorkflow(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cancelled.Status != corerun.RunCancelled {
+		t.Fatalf("expected cancelled status, got %#v", cancelled)
+	}
+
+	manager.finish(runID, runworkflow.RunResult{
+		RunID:  runID,
+		RunDir: filepath.Join(dir, "runs", runID),
+		Status: corerun.RunPaused,
+		Summary: corerun.Summary{
+			RunID:  runID,
+			Status: corerun.RunPaused,
+			Nodes: map[string]corerun.NodeResult{
+				"wait": {RunID: runID, NodeID: "wait", Status: corerun.NodeSuccess},
+			},
+		},
+	}, nil)
+
+	got, _ := manager.WorkflowStatus(runID)
+	if got.Status != corerun.RunCancelled {
+		t.Fatalf("expected cancelled status to survive late paused finish, got %#v", got)
+	}
+	if !got.PausedAt.IsZero() || got.PauseReason != "" {
+		t.Fatalf("expected pause metadata to be cleared after cancel, got %#v", got)
 	}
 }
 

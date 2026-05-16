@@ -524,12 +524,16 @@ func runWorkflowViaDaemon(cmd *cobra.Command, workflowRef string, opts *options)
 	if err != nil {
 		return err
 	}
+	workingDir, err := daemonWorkingDir(opts.workingDir)
+	if err != nil {
+		return err
+	}
 	resp, err := newWorkflowRunClient("").RunWorkflow(cmd.Context(), daemon.RunWorkflowRequest{
 		WorkflowRef:    workflowRef,
 		Inputs:         inputs,
 		Vars:           vars,
 		MaxConcurrency: opts.maxConcurrency,
-		WorkingDir:     opts.workingDir,
+		WorkingDir:     workingDir,
 		CodexPath:      opts.codexPath,
 		ClaudePath:     opts.claudePath,
 		PiPath:         opts.piPath,
@@ -542,6 +546,20 @@ func runWorkflowViaDaemon(cmd *cobra.Command, workflowRef string, opts *options)
 	}
 	printRun(cmd, resp.Run)
 	return nil
+}
+
+func daemonWorkingDir(workingDir string) (string, error) {
+	if workingDir == "" {
+		return "", nil
+	}
+	if filepath.IsAbs(workingDir) {
+		return filepath.Clean(workingDir), nil
+	}
+	abs, err := filepath.Abs(workingDir)
+	if err != nil {
+		return "", fmt.Errorf("resolve working dir %q: %w", workingDir, err)
+	}
+	return abs, nil
 }
 
 func printRun(cmd *cobra.Command, run daemon.WorkflowRun) {
@@ -591,10 +609,10 @@ func renderWorkflowList(w io.Writer, runs []daemon.WorkflowRun, format string, n
 			Completed: fmt.Sprintf("%d", len(run.CompletedSteps)),
 			Total:     fmt.Sprintf("%d", run.TotalSteps),
 			Dir:       run.RunDir,
-			Age:       formatAge(run.StartedAt),
+			Age:       formatWorkflowElapsed(run),
 		})
 	}
-	cols := []string{"ID", "WORKFLOW", "STATUS", "STEP ATUAL", "CONCLUÍDOS", "TOTAL", "IDADE", "RUN DIR"}
+	cols := []string{"ID", "WORKFLOW", "STATUS", "STEP ATUAL", "CONCLUÍDOS", "TOTAL", "TEMPO", "RUN DIR"}
 	widths := []int{6, 20, 12, 18, 10, 5, 8, 0}
 	maxWidth := terminalWidth(w)
 	if !interactive {
@@ -745,6 +763,20 @@ func formatAge(t time.Time) string {
 		d = 0
 	}
 	return d.String()
+}
+
+func formatWorkflowElapsed(run daemon.WorkflowRun) string {
+	if run.StartedAt.IsZero() {
+		return "-"
+	}
+	if isTerminalStatus(run.Status) && !run.FinishedAt.IsZero() {
+		d := run.FinishedAt.Sub(run.StartedAt).Round(time.Second)
+		if d < 0 {
+			d = 0
+		}
+		return d.String()
+	}
+	return formatAge(run.StartedAt)
 }
 
 func firstNonEmpty(values ...string) string {

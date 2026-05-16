@@ -13,6 +13,20 @@ import (
 	"github.com/diasYuri/agentflow/internal/core/workflow"
 )
 
+type rawWorkflowSpec struct {
+	Version          string                         `yaml:"version"`
+	Name             string                         `yaml:"name"`
+	Description      string                         `yaml:"description"`
+	Inputs           map[string]workflow.InputSpec  `yaml:"inputs"`
+	Vars             map[string]any                 `yaml:"vars"`
+	Secrets          map[string]workflow.SecretSpec `yaml:"secrets"`
+	Defaults         workflow.DefaultsSpec          `yaml:"defaults"`
+	Execution        workflow.ExecutionSpec         `yaml:"execution"`
+	Nodes            []workflow.NodeSpec            `yaml:"nodes"`
+	Worktree         yaml.Node                      `yaml:"worktree"`
+	WorktreeProvider string                         `yaml:"worktree-provider"`
+}
+
 type WorkflowRepository struct {
 	localRoot  string
 	globalRoot string
@@ -149,10 +163,27 @@ func decodeWorkflow(path string) (*workflow.WorkflowSpec, error) {
 
 	decoder := yaml.NewDecoder(file)
 	decoder.KnownFields(true)
-	var spec workflow.WorkflowSpec
-	if err := decoder.Decode(&spec); err != nil {
+	var raw rawWorkflowSpec
+	if err := decoder.Decode(&raw); err != nil {
 		return nil, fmt.Errorf("decode workflow yaml: %w", err)
 	}
+
+	spec := workflow.WorkflowSpec{
+		Version:     raw.Version,
+		Name:        raw.Name,
+		Description: raw.Description,
+		Inputs:      raw.Inputs,
+		Vars:        raw.Vars,
+		Secrets:     raw.Secrets,
+		Defaults:    raw.Defaults,
+		Execution:   raw.Execution,
+		Nodes:       raw.Nodes,
+	}
+
+	if err := normalizeWorktree(&spec, raw.Worktree, raw.WorktreeProvider); err != nil {
+		return nil, fmt.Errorf("decode workflow yaml: %w", err)
+	}
+
 	if spec.Inputs == nil {
 		spec.Inputs = map[string]workflow.InputSpec{}
 	}
@@ -160,6 +191,52 @@ func decodeWorkflow(path string) (*workflow.WorkflowSpec, error) {
 		spec.Vars = map[string]any{}
 	}
 	return &spec, nil
+}
+
+func normalizeWorktree(spec *workflow.WorkflowSpec, worktreeNode yaml.Node, worktreeProvider string) error {
+	// No worktree field at all
+	if worktreeNode.IsZero() && worktreeProvider == "" {
+		return nil
+	}
+
+	var structured workflow.WorktreeSpec
+	var hasStructured bool
+
+	if !worktreeNode.IsZero() {
+		switch worktreeNode.Kind {
+		case yaml.ScalarNode:
+			var enabled bool
+			if err := worktreeNode.Decode(&enabled); err != nil {
+				return fmt.Errorf("worktree: %w", err)
+			}
+			structured.Enabled = enabled
+			hasStructured = true
+		case yaml.MappingNode:
+			if err := worktreeNode.Decode(&structured); err != nil {
+				return fmt.Errorf("worktree: %w", err)
+			}
+			hasStructured = true
+		default:
+			return fmt.Errorf("worktree: must be boolean or object")
+		}
+	}
+
+	if worktreeProvider != "" {
+		if hasStructured && structured.Provider != "" && structured.Provider != worktreeProvider {
+			return fmt.Errorf("worktree.provider %q conflicts with worktree-provider %q", structured.Provider, worktreeProvider)
+		}
+		if !hasStructured {
+			structured.Enabled = true
+			hasStructured = true
+		}
+		structured.Provider = worktreeProvider
+	}
+
+	if hasStructured {
+		spec.Worktree = structured
+		workflow.ApplyWorktreeDefaults(spec)
+	}
+	return nil
 }
 
 func defaultWorkflowRoots() (string, string) {

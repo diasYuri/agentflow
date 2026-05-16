@@ -2,9 +2,11 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/rand"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -12,6 +14,7 @@ import (
 
 	"golang.org/x/sync/semaphore"
 
+	coreports "github.com/diasYuri/agentflow/internal/core/ports"
 	corerun "github.com/diasYuri/agentflow/internal/core/run"
 	coreworkflow "github.com/diasYuri/agentflow/internal/core/workflow"
 )
@@ -54,9 +57,21 @@ func (e *Executor) execute(ctx context.Context, req ExecutionRequest) (Result, e
 		}
 	}
 	state := newExecutionState(runID, req.Plan, req.Inputs, secrets, corerun.NewSecretMasker(secrets), now)
-	state.baseWorkingDir = req.WorkingDir
 	state.workflowPath = req.WorkflowSourcePath
 	state.pause = req.Pause
+
+	destinationDir := req.WorkingDir
+	if destinationDir == "" {
+		wd, err := os.Getwd()
+		if err != nil {
+			return Result{}, fmt.Errorf("unable to determine working directory: %w", err)
+		}
+		destinationDir = wd
+	}
+	destinationDir = filepath.Clean(destinationDir)
+	state.destinationWorkingDir = destinationDir
+	state.baseWorkingDir = destinationDir
+
 	if err := e.emitState(ctx, state, corerun.Event{Type: "run.created", Data: map[string]any{"dir": handle.Dir}}); err != nil {
 		return Result{}, err
 	}
@@ -70,6 +85,9 @@ func (e *Executor) execute(ctx context.Context, req ExecutionRequest) (Result, e
 	if err := e.saveCheckpoint(ctx, state, true, 0, "", ""); err != nil {
 		return Result{}, err
 	}
+	if err := e.setupWorktree(ctx, state, req.Plan, destinationDir); err != nil {
+		return e.finish(ctx, req.Plan, state, corerun.RunFailed, err)
+	}
 	if err := e.executeNodes(ctx, state, req.Plan, 0); err != nil {
 		if errors.Is(err, context.Canceled) {
 			return e.finish(ctx, req.Plan, state, corerun.RunCancelled, err)
@@ -82,10 +100,90 @@ func (e *Executor) execute(ctx context.Context, req ExecutionRequest) (Result, e
 	return e.finish(ctx, req.Plan, state, corerun.RunSuccess, nil)
 }
 
+func (e *Executor) setupWorktree(ctx context.Context, state *ExecutionState, plan coreworkflow.ExecutionPlan, destinationDir string) error {
+	if !plan.Workflow.Worktree.Enabled {
+		return nil
+	}
+	if e.svc.Worktrees == nil {
+		return fmt.Errorf("worktree enabled but no worktree registry configured")
+	}
+	providerName := plan.Workflow.Worktree.Provider
+	provider, ok := e.svc.Worktrees.Get(providerName)
+	if !ok {
+		return fmt.Errorf("unknown worktree provider %q", providerName)
+	}
+	state.worktreeEnabled = true
+	state.worktreeProvider = providerName
+
+	baseCommit, err := e.resolveBaseCommit(ctx, destinationDir, plan.Workflow.Worktree.Base)
+	if err != nil {
+		return err
+	}
+	state.worktreeBaseCommit = baseCommit
+
+	wt, err := provider.Create(ctx, coreports.CreateWorktreeRequest{
+		WorkflowName: plan.Workflow.Name,
+		BaseCommit:   baseCommit,
+		WorkingDir:   destinationDir,
+		CleanPolicy:  coreports.WorktreeCleanRequire,
+	})
+	if err != nil {
+		return err
+	}
+	state.worktree = wt
+	state.worktreePath = wt.Path
+	state.baseWorkingDir = wt.Path
+
+	artifact := map[string]any{
+		"enabled":     true,
+		"provider":    providerName,
+		"name":        wt.Name,
+		"path":        wt.Path,
+		"base_commit": baseCommit,
+		"destination": destinationDir,
+	}
+	data, err := json.MarshalIndent(artifact, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal worktree artifact: %w", err)
+	}
+	maskedData := []byte(state.masker.MaskString(string(data)))
+	if err := e.svc.Runs.SaveArtifact(ctx, state.runID, "worktree/status.json", maskedData); err != nil {
+		return fmt.Errorf("failed to save worktree status artifact: %w", err)
+	}
+
+	eventData := map[string]any{
+		"enabled":     true,
+		"provider":    providerName,
+		"name":        wt.Name,
+		"path":        wt.Path,
+		"base_commit": baseCommit,
+		"destination": destinationDir,
+	}
+	_ = e.emitState(ctx, state, corerun.Event{Type: "worktree.created", Data: eventData})
+	return nil
+}
+
+func (e *Executor) resolveBaseCommit(ctx context.Context, workingDir string, base string) (string, error) {
+	if base != "current" {
+		return base, nil
+	}
+	res, err := e.svc.Shell.Run(ctx, coreports.ShellRequest{
+		Command:    "git rev-parse HEAD",
+		WorkingDir: workingDir,
+	})
+	if err != nil || res.ExitCode != 0 {
+		return "", fmt.Errorf("unable to resolve current HEAD: %w", err)
+	}
+	return strings.TrimSpace(res.Stdout), nil
+}
+
 func (e *Executor) resume(ctx context.Context, req ExecutionRequest) (Result, error) {
 	checkpoint, err := e.svc.Runs.LoadCheckpoint(ctx, req.ResumeRunID)
 	if err != nil {
 		return Result{}, err
+	}
+	if checkpoint.Workflow.Worktree.Enabled {
+		return Result{}, fmt.Errorf("resume is not supported for workflows with worktree enabled")
 	}
 	plan, err := coreworkflow.BuildPlan(checkpoint.Workflow)
 	if err != nil {

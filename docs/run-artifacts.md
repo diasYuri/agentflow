@@ -35,6 +35,26 @@ Isso permite que o artefato seja gravado com um nome simples (`report.html`) ou 
 aninhada (`reports/final.html`). A sanitização por `filepath.Clean` evita paths que escapem do
 diretório do run.
 
+### Artefatos de worktree
+
+Quando um workflow tem `worktree.enabled: true`, o runtime produz artefatos adicionais sob
+`<run_dir>/artifacts/worktree/`:
+
+- `worktree/status.json` — metadados finais do worktree, incluindo `enabled`, `provider`, `name`,
+  `path`, `base_commit`, `destination_commit_before_merge`, `destination_commit_after_merge`,
+  `merge_status`, `cleanup_status`, `changed_files`, `conflicts` e `commands`. Esse arquivo é
+  atualizado a cada etapa do ciclo de merge/cleanup.
+- `worktree/diff.patch` — diff determinístico gerado pelo provider entre o worktree e o
+  `base_commit`, persistido somente quando há mudanças.
+- `worktree/merge.log` — registro do merge bem-sucedido, com lista de arquivos alterados e
+  comandos Git executados.
+- `worktree/conflicts.json` — estruturado quando o apply encontra conflitos de conteúdo ou
+  falha de merge. Contém os arquivos em conflito, `base_commit`, commits do destino antes/depois
+  do merge, caminho do worktree preservado, comandos Git relevantes e resumo das mudanças.
+
+Esses artefatos passam pelo mascaramento de secrets antes da persistência, garantindo que
+valores sensíveis não sejam gravados em claro.
+
 ### Estado atual da integração
 
 A capability existe na camada de portas e na implementação local, mas **ainda não há**:
@@ -55,8 +75,10 @@ para gerenciar artefatos.
 - [`internal/adapters/runrepo/local/repository.go`](/Users/yuri/git/diasYuri/agentflow/internal/adapters/runrepo/local/repository.go):
   implementa `SaveArtifact` no repositório local, com criação de diretórios e sanitização de path.
 - [`internal/core/run/types.go`](/Users/yuri/git/diasYuri/agentflow/internal/core/run/types.go):
-  define os tipos compartilhados do domínio de run, como `RunHandle` e `RunMetadata`, usados pelo
-  repositório durante a criação do diretório base.
+  define os tipos compartilhados do domínio de run, como `RunHandle`, `RunMetadata`,
+  `WorktreeMetadata`, `WorktreeChangedFile`, `WorktreeConflict` e `WorktreeGitCommand`.
+- [`internal/core/runtime/handlers/worktree.go`](/Users/yuri/git/diasYuri/agentflow/internal/core/runtime/handlers/worktree.go):
+  orquestra a geração e persistência dos artefatos de worktree durante a finalização do run.
 
 ## Observações relevantes
 

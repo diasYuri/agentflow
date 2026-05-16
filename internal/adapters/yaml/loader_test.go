@@ -146,8 +146,139 @@ func TestClaudeSampleWorkflowValidates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := workflow.Validate(spec, workflow.DefaultProviders()); err != nil {
+	if err := workflow.Validate(spec, workflow.DefaultProviders(), nil); err != nil {
 		t.Fatalf("expected claude sample to validate: %v", err)
+	}
+}
+
+func TestDecodeWorktreeTrue(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "worktree-true.yaml")
+	content := []byte(`version: "1"
+name: worktree-true
+nodes:
+  - id: ok
+    kind: noop
+worktree: true
+`)
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	spec, err := decodeWorkflow(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !spec.Worktree.Enabled {
+		t.Fatal("expected worktree enabled")
+	}
+	if spec.Worktree.Provider != "pi" {
+		t.Fatalf("expected provider pi, got %q", spec.Worktree.Provider)
+	}
+	if spec.Worktree.Base != "current" {
+		t.Fatalf("expected base current, got %q", spec.Worktree.Base)
+	}
+	if spec.Worktree.Merge.Strategy != "deterministic" {
+		t.Fatalf("expected merge strategy deterministic, got %q", spec.Worktree.Merge.Strategy)
+	}
+	if spec.Worktree.Merge.OnConflict != "agent" {
+		t.Fatalf("expected merge on_conflict agent, got %q", spec.Worktree.Merge.OnConflict)
+	}
+	if spec.Worktree.Cleanup.OnSuccess == nil || !*spec.Worktree.Cleanup.OnSuccess {
+		t.Fatal("expected cleanup on_success true")
+	}
+	if spec.Worktree.Cleanup.OnFailure != "keep" {
+		t.Fatalf("expected cleanup on_failure keep, got %q", spec.Worktree.Cleanup.OnFailure)
+	}
+}
+
+func TestDecodeWorktreeProviderShortcut(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "worktree-provider.yaml")
+	content := []byte(`version: "1"
+name: worktree-provider
+nodes:
+  - id: ok
+    kind: noop
+worktree-provider: pi
+`)
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	spec, err := decodeWorkflow(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !spec.Worktree.Enabled {
+		t.Fatal("expected worktree enabled")
+	}
+	if spec.Worktree.Provider != "pi" {
+		t.Fatalf("expected provider pi, got %q", spec.Worktree.Provider)
+	}
+}
+
+func TestDecodeWorktreeStructured(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "worktree-structured.yaml")
+	content := []byte(`version: "1"
+name: worktree-structured
+nodes:
+  - id: ok
+    kind: noop
+worktree:
+  enabled: true
+  provider: pi
+  base: current
+  merge:
+    strategy: deterministic
+    on_conflict: agent
+  cleanup:
+    on_success: false
+    on_failure: keep
+`)
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	spec, err := decodeWorkflow(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !spec.Worktree.Enabled {
+		t.Fatal("expected worktree enabled")
+	}
+	if spec.Worktree.Provider != "pi" {
+		t.Fatalf("expected provider pi, got %q", spec.Worktree.Provider)
+	}
+	if spec.Worktree.Cleanup.OnSuccess != nil && *spec.Worktree.Cleanup.OnSuccess {
+		t.Fatal("expected cleanup on_success false")
+	}
+}
+
+func TestDecodeWorktreeConflict(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "worktree-conflict.yaml")
+	content := []byte(`version: "1"
+name: worktree-conflict
+nodes:
+  - id: ok
+    kind: noop
+worktree:
+  enabled: true
+  provider: codex
+worktree-provider: pi
+`)
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := decodeWorkflow(path)
+	if err == nil {
+		t.Fatal("expected conflict error")
+	}
+	if !strings.Contains(err.Error(), "conflicts with worktree-provider") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

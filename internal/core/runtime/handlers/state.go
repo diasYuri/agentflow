@@ -9,32 +9,39 @@ import (
 
 	"golang.org/x/sync/semaphore"
 
+	coreports "github.com/diasYuri/agentflow/internal/core/ports"
 	corerun "github.com/diasYuri/agentflow/internal/core/run"
 	coreworkflow "github.com/diasYuri/agentflow/internal/core/workflow"
 )
 
 type ExecutionState struct {
-	runID          string
-	workflowPath   string
-	plan           coreworkflow.ExecutionPlan
-	inputs         map[string]any
-	vars           map[string]any
-	secrets        map[string]any
-	masker         corerun.SecretMasker
-	nodes          map[string]any
-	results        map[string]corerun.NodeResult
-	global         *semaphore.Weighted
-	startedAt      time.Time
-	failed         bool
-	parent         *ExecutionState
-	path           []string
-	baseWorkingDir string
-	item           any
-	index          *int
-	total          *int
-	metrics        *executionMetrics
-	cursor         int
-	pause          PauseSignaller
+	runID                 string
+	workflowPath          string
+	plan                  coreworkflow.ExecutionPlan
+	inputs                map[string]any
+	vars                  map[string]any
+	secrets               map[string]any
+	masker                corerun.SecretMasker
+	nodes                 map[string]any
+	results               map[string]corerun.NodeResult
+	global                *semaphore.Weighted
+	startedAt             time.Time
+	failed                bool
+	parent                *ExecutionState
+	path                  []string
+	baseWorkingDir        string
+	item                  any
+	index                 *int
+	total                 *int
+	metrics               *executionMetrics
+	cursor                int
+	pause                 PauseSignaller
+	worktreeEnabled       bool
+	worktreeProvider      string
+	worktreePath          string
+	destinationWorkingDir string
+	worktreeBaseCommit    string
+	worktree              coreports.Worktree
 }
 
 type executionMetrics struct {
@@ -167,22 +174,28 @@ func (s *ExecutionState) mergedNodes() map[string]any {
 
 func (s *ExecutionState) spawn(plan coreworkflow.ExecutionPlan, path []string) *ExecutionState {
 	return &ExecutionState{
-		runID:          s.runID,
-		workflowPath:   s.workflowPath,
-		plan:           plan,
-		inputs:         s.inputs,
-		vars:           s.vars,
-		secrets:        s.secrets,
-		masker:         s.masker,
-		nodes:          map[string]any{},
-		results:        map[string]corerun.NodeResult{},
-		global:         s.global,
-		startedAt:      s.startedAt,
-		parent:         s,
-		path:           append([]string(nil), path...),
-		baseWorkingDir: s.baseWorkingDir,
-		metrics:        s.metrics,
-		pause:          s.pause,
+		runID:                 s.runID,
+		workflowPath:          s.workflowPath,
+		plan:                  plan,
+		inputs:                s.inputs,
+		vars:                  s.vars,
+		secrets:               s.secrets,
+		masker:                s.masker,
+		nodes:                 map[string]any{},
+		results:               map[string]corerun.NodeResult{},
+		global:                s.global,
+		startedAt:             s.startedAt,
+		parent:                s,
+		path:                  append([]string(nil), path...),
+		baseWorkingDir:        s.baseWorkingDir,
+		metrics:               s.metrics,
+		pause:                 s.pause,
+		worktreeEnabled:       s.worktreeEnabled,
+		worktreeProvider:      s.worktreeProvider,
+		worktreePath:          s.worktreePath,
+		destinationWorkingDir: s.destinationWorkingDir,
+		worktreeBaseCommit:    s.worktreeBaseCommit,
+		worktree:              s.worktree,
 	}
 }
 
@@ -232,6 +245,36 @@ func (e *Executor) saveCheckpoint(ctx context.Context, state *ExecutionState, en
 
 func (e *Executor) finish(ctx context.Context, plan coreworkflow.ExecutionPlan, state *ExecutionState, status corerun.RunStatus, finalErr error) (Result, error) {
 	persistCtx := context.WithoutCancel(ctx)
+	var wtMeta corerun.WorktreeMetadata
+	if state.worktreeEnabled && e.svc.Worktrees != nil && state.worktree.Path != "" {
+		switch status {
+		case corerun.RunSuccess:
+			meta, wtErr := e.finalizeWorktree(persistCtx, state)
+			wtMeta = meta
+			if wtErr != nil {
+				// Worktree finalize failure does not change run status to failed;
+				// it is recorded in metadata and artifacts.
+				_ = e.emitState(persistCtx, state, corerun.Event{Type: "worktree.finalize_failed", Data: map[string]any{"error": wtErr.Error()}})
+			}
+			e.cleanupWorktree(persistCtx, state, &wtMeta, status)
+			_ = e.saveWorktreeStatus(persistCtx, state, wtMeta)
+		case corerun.RunFailed, corerun.RunCancelled, corerun.RunPaused:
+			meta := e.initialWorktreeMetadata(persistCtx, state)
+			meta.MergeStatus = corerun.WorktreeMergeFailed
+			if provider, ok := e.svc.Worktrees.Get(state.worktreeProvider); ok {
+				wtStatus, _ := provider.Status(persistCtx, state.worktree)
+				meta.Commands = appendGitCommands(meta.Commands, wtStatus.Commands)
+				for _, file := range wtStatus.Files {
+					meta.ChangedFiles = append(meta.ChangedFiles, corerun.WorktreeChangedFile{
+						Path:   file.Path,
+						Status: file.Status,
+					})
+				}
+			}
+			e.cleanupWorktree(persistCtx, state, &meta, status)
+			_ = e.saveWorktreeStatus(persistCtx, state, meta)
+		}
+	}
 	finished := e.now()
 	summary := corerun.Summary{
 		RunID: state.runID, Workflow: plan.Workflow.Name, Status: status, StartedAt: state.startedAt,

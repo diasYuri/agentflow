@@ -99,6 +99,57 @@ type CheckpointMetrics struct {
 	Retries    int `json:"retries"`
 }
 
+type WorktreeMergeStatus string
+
+const (
+	WorktreeMergeNoChanges WorktreeMergeStatus = "no_changes"
+	WorktreeMergeMerged    WorktreeMergeStatus = "merged"
+	WorktreeMergeConflict  WorktreeMergeStatus = "conflict"
+	WorktreeMergeFailed    WorktreeMergeStatus = "failed"
+)
+
+type WorktreeCleanupStatus string
+
+const (
+	WorktreeCleanupRemoved WorktreeCleanupStatus = "removed"
+	WorktreeCleanupKept    WorktreeCleanupStatus = "kept"
+)
+
+type WorktreeChangedFile struct {
+	Path    string `json:"path"`
+	Status  string `json:"status"`
+	OldPath string `json:"old_path,omitempty"`
+}
+
+type WorktreeConflict struct {
+	Path   string `json:"path"`
+	Reason string `json:"reason"`
+}
+
+type WorktreeGitCommand struct {
+	Command  string `json:"command"`
+	ExitCode int    `json:"exit_code"`
+	Stdout   string `json:"stdout,omitempty"`
+	Stderr   string `json:"stderr,omitempty"`
+}
+
+type WorktreeMetadata struct {
+	Enabled                 bool                  `json:"enabled"`
+	Provider                string                `json:"provider"`
+	Name                    string                `json:"name"`
+	MergeStatus             WorktreeMergeStatus   `json:"merge_status"`
+	CleanupStatus           WorktreeCleanupStatus `json:"cleanup_status"`
+	ChangedFiles            []WorktreeChangedFile `json:"changed_files,omitempty"`
+	BaseCommit              string                `json:"base_commit"`
+	DestinationCommitBefore string                `json:"destination_commit_before_merge,omitempty"`
+	DestinationCommitAfter  string                `json:"destination_commit_after_merge,omitempty"`
+	WorktreePath            string                `json:"path"`
+	Destination             string                `json:"destination"`
+	Conflicts               []WorktreeConflict    `json:"conflicts,omitempty"`
+	Commands                []WorktreeGitCommand  `json:"commands,omitempty"`
+	AgentResolutionError    string                `json:"agent_resolution_error,omitempty"`
+}
+
 type Checkpoint struct {
 	RunID        string                `json:"run_id"`
 	Workflow     workflow.WorkflowSpec `json:"workflow"`

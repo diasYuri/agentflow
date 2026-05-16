@@ -5,6 +5,8 @@ import (
 	"testing"
 )
 
+func ptr[T any](v T) *T { return &v }
+
 func TestValidateRejectsInvalidInputDefaultType(t *testing.T) {
 	spec := &WorkflowSpec{
 		Version: "1",
@@ -15,7 +17,7 @@ func TestValidateRejectsInvalidInputDefaultType(t *testing.T) {
 		Nodes: []NodeSpec{{ID: "start", Kind: NodeKindNoop}},
 	}
 
-	err := Validate(spec, DefaultProviders())
+	err := Validate(spec, DefaultProviders(), nil)
 	if err == nil {
 		t.Fatal("expected validation error")
 	}
@@ -53,7 +55,7 @@ func TestValidateRejectsExpandedNodeOutputReference(t *testing.T) {
 		},
 	}
 
-	err := Validate(spec, DefaultProviders())
+	err := Validate(spec, DefaultProviders(), nil)
 	if err == nil {
 		t.Fatal("expected validation error")
 	}
@@ -72,7 +74,7 @@ func TestValidateRejectsNonExpandedNodeOutputsReference(t *testing.T) {
 		},
 	}
 
-	err := Validate(spec, DefaultProviders())
+	err := Validate(spec, DefaultProviders(), nil)
 	if err == nil {
 		t.Fatal("expected validation error")
 	}
@@ -91,7 +93,7 @@ func TestValidateAllowsAgentPermissionWrite(t *testing.T) {
 		},
 	}
 
-	if err := Validate(spec, DefaultProviders()); err != nil {
+	if err := Validate(spec, DefaultProviders(), nil); err != nil {
 		t.Fatalf("expected permission to validate, got %v", err)
 	}
 }
@@ -105,7 +107,7 @@ func TestValidateAllowsClaudeAgentProvider(t *testing.T) {
 		},
 	}
 
-	if err := Validate(spec, DefaultProviders()); err != nil {
+	if err := Validate(spec, DefaultProviders(), nil); err != nil {
 		t.Fatalf("expected claude provider to validate, got %v", err)
 	}
 }
@@ -119,7 +121,7 @@ func TestValidateAllowsPiAgentProvider(t *testing.T) {
 		},
 	}
 
-	if err := Validate(spec, DefaultProviders()); err != nil {
+	if err := Validate(spec, DefaultProviders(), nil); err != nil {
 		t.Fatalf("expected pi provider to validate, got %v", err)
 	}
 }
@@ -134,7 +136,7 @@ func TestValidateRejectsPermissionOnNonAgentNode(t *testing.T) {
 		},
 	}
 
-	err := Validate(spec, DefaultProviders())
+	err := Validate(spec, DefaultProviders(), nil)
 	if err == nil {
 		t.Fatal("expected validation error")
 	}
@@ -152,7 +154,7 @@ func TestValidateRejectsIncompletePermissionBlock(t *testing.T) {
 		},
 	}
 
-	err := Validate(spec, DefaultProviders())
+	err := Validate(spec, DefaultProviders(), nil)
 	if err == nil {
 		t.Fatal("expected validation error")
 	}
@@ -181,7 +183,7 @@ func TestValidateAllowsNestedMapChildReferences(t *testing.T) {
 		},
 	}
 
-	if err := Validate(spec, DefaultProviders()); err != nil {
+	if err := Validate(spec, DefaultProviders(), nil); err != nil {
 		t.Fatalf("expected nested map validation to succeed, got %v", err)
 	}
 }
@@ -203,11 +205,145 @@ func TestValidateRejectsForwardGoToIfTarget(t *testing.T) {
 		},
 	}
 
-	err := Validate(spec, DefaultProviders())
+	err := Validate(spec, DefaultProviders(), nil)
 	if err == nil {
 		t.Fatal("expected validation error")
 	}
 	if !strings.Contains(err.Error(), "go_to_if.target must point to the current node or an earlier node") {
 		t.Fatalf("expected forward jump validation error, got %v", err)
+	}
+}
+
+func TestValidateRejectsUnknownWorktreeProvider(t *testing.T) {
+	spec := &WorkflowSpec{
+		Version: "1",
+		Name:    "worktree-provider",
+		Nodes:   []NodeSpec{{ID: "ok", Kind: NodeKindNoop}},
+		Worktree: WorktreeSpec{
+			Enabled:  true,
+			Provider: "unknown",
+			Base:     "current",
+			Merge:    WorktreeMergeSpec{Strategy: "deterministic", OnConflict: "agent"},
+			Cleanup:  WorktreeCleanupSpec{OnSuccess: ptr(true), OnFailure: "keep"},
+		},
+	}
+
+	err := Validate(spec, DefaultProviders(), nil)
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+	if !strings.Contains(err.Error(), "unsupported worktree provider") {
+		t.Fatalf("expected worktree provider error, got %v", err)
+	}
+}
+
+func TestValidateRejectsUnknownWorktreeBase(t *testing.T) {
+	spec := &WorkflowSpec{
+		Version: "1",
+		Name:    "worktree-base",
+		Nodes:   []NodeSpec{{ID: "ok", Kind: NodeKindNoop}},
+		Worktree: WorktreeSpec{
+			Enabled:  true,
+			Provider: "pi",
+			Base:     "other",
+			Merge:    WorktreeMergeSpec{Strategy: "deterministic", OnConflict: "agent"},
+			Cleanup:  WorktreeCleanupSpec{OnSuccess: ptr(true), OnFailure: "keep"},
+		},
+	}
+
+	err := Validate(spec, DefaultProviders(), nil)
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+	if !strings.Contains(err.Error(), "unsupported worktree base") {
+		t.Fatalf("expected worktree base error, got %v", err)
+	}
+}
+
+func TestValidateRejectsUnknownWorktreeMergeStrategy(t *testing.T) {
+	spec := &WorkflowSpec{
+		Version: "1",
+		Name:    "worktree-merge",
+		Nodes:   []NodeSpec{{ID: "ok", Kind: NodeKindNoop}},
+		Worktree: WorktreeSpec{
+			Enabled:  true,
+			Provider: "pi",
+			Base:     "current",
+			Merge:    WorktreeMergeSpec{Strategy: "auto", OnConflict: "agent"},
+			Cleanup:  WorktreeCleanupSpec{OnSuccess: ptr(true), OnFailure: "keep"},
+		},
+	}
+
+	err := Validate(spec, DefaultProviders(), nil)
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+	if !strings.Contains(err.Error(), "unsupported worktree merge.strategy") {
+		t.Fatalf("expected worktree merge strategy error, got %v", err)
+	}
+}
+
+func TestValidateRejectsUnknownWorktreeOnConflict(t *testing.T) {
+	spec := &WorkflowSpec{
+		Version: "1",
+		Name:    "worktree-conflict",
+		Nodes:   []NodeSpec{{ID: "ok", Kind: NodeKindNoop}},
+		Worktree: WorktreeSpec{
+			Enabled:  true,
+			Provider: "pi",
+			Base:     "current",
+			Merge:    WorktreeMergeSpec{Strategy: "deterministic", OnConflict: "abort"},
+			Cleanup:  WorktreeCleanupSpec{OnSuccess: ptr(true), OnFailure: "keep"},
+		},
+	}
+
+	err := Validate(spec, DefaultProviders(), nil)
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+	if !strings.Contains(err.Error(), "unsupported worktree merge.on_conflict") {
+		t.Fatalf("expected worktree on_conflict error, got %v", err)
+	}
+}
+
+func TestValidateRejectsUnknownWorktreeCleanupOnFailure(t *testing.T) {
+	spec := &WorkflowSpec{
+		Version: "1",
+		Name:    "worktree-cleanup",
+		Nodes:   []NodeSpec{{ID: "ok", Kind: NodeKindNoop}},
+		Worktree: WorktreeSpec{
+			Enabled:  true,
+			Provider: "pi",
+			Base:     "current",
+			Merge:    WorktreeMergeSpec{Strategy: "deterministic", OnConflict: "agent"},
+			Cleanup:  WorktreeCleanupSpec{OnSuccess: ptr(true), OnFailure: "delete"},
+		},
+	}
+
+	err := Validate(spec, DefaultProviders(), nil)
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+	if !strings.Contains(err.Error(), "unsupported worktree cleanup.on_failure") {
+		t.Fatalf("expected worktree cleanup.on_failure error, got %v", err)
+	}
+}
+
+func TestValidateAllowsValidWorktree(t *testing.T) {
+	spec := &WorkflowSpec{
+		Version: "1",
+		Name:    "worktree-valid",
+		Nodes:   []NodeSpec{{ID: "ok", Kind: NodeKindNoop}},
+		Worktree: WorktreeSpec{
+			Enabled:  true,
+			Provider: "pi",
+			Base:     "current",
+			Merge:    WorktreeMergeSpec{Strategy: "deterministic", OnConflict: "agent"},
+			Cleanup:  WorktreeCleanupSpec{OnSuccess: ptr(true), OnFailure: "keep"},
+		},
+	}
+
+	if err := Validate(spec, DefaultProviders(), nil); err != nil {
+		t.Fatalf("expected valid worktree, got %v", err)
 	}
 }

@@ -18,6 +18,17 @@ execution:
   pause_when_fail: true
   max_node_output_bytes: 1048576
 
+worktree:
+  enabled: true
+  provider: pi
+  base: current
+  merge:
+    strategy: deterministic
+    on_conflict: agent
+  cleanup:
+    on_success: true
+    on_failure: keep
+
 nodes:
   - id: create_implementation_plans
     kind: agent

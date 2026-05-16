@@ -116,6 +116,67 @@ func TestWorkflowListRendersTableAndJson(t *testing.T) {
 	}
 }
 
+func TestWorkflowListRendersElapsedTime(t *testing.T) {
+	started := time.Date(2026, 5, 16, 12, 0, 0, 0, time.UTC)
+	runningStarted := time.Now().Add(-2 * time.Hour)
+	runs := []daemon.WorkflowRun{
+		{
+			ID:         "run-success",
+			Workflow:   "build",
+			Status:     "success",
+			RunDir:     "/tmp/run-success",
+			StartedAt:  started,
+			FinishedAt: started.Add(5 * time.Minute),
+		},
+		{
+			ID:         "run-failed",
+			Workflow:   "deploy",
+			Status:     "failed",
+			RunDir:     "/tmp/run-failed",
+			StartedAt:  started,
+			FinishedAt: started.Add(7 * time.Second),
+		},
+		{
+			ID:         "run-paused",
+			Workflow:   "review",
+			Status:     "paused",
+			RunDir:     "/tmp/run-paused",
+			StartedAt:  started,
+			FinishedAt: started.Add(3 * time.Second),
+		},
+		{
+			ID:        "run-live",
+			Workflow:  "test",
+			Status:    "running",
+			RunDir:    "/tmp/run-live",
+			StartedAt: runningStarted,
+		},
+	}
+
+	var out bytes.Buffer
+	if err := renderWorkflowList(&out, runs, string(workflowOutputText), true, false); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	for _, want := range []string{"TEMPO", "5m0s", "7s", "3s", "2h0m0s"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected %q in output: %q", want, got)
+		}
+	}
+	if strings.Contains(got, "IDADE") {
+		t.Fatalf("expected IDADE header to be renamed, got %q", got)
+	}
+
+	out.Reset()
+	if err := renderWorkflowList(&out, runs[:1], string(workflowOutputJSON), true, false); err != nil {
+		t.Fatal(err)
+	}
+	got = out.String()
+	if strings.Contains(got, "elapsed") || !strings.Contains(got, `"started_at"`) || !strings.Contains(got, `"finished_at"`) {
+		t.Fatalf("unexpected json output: %q", got)
+	}
+}
+
 func TestWorkflowStatusAndWatchRenderProgress(t *testing.T) {
 	oldClient := newDaemonClient
 	oldInterval := workflowWatchInterval
@@ -248,6 +309,49 @@ func TestRunCommandSendsRuntimeOptionsToDaemon(t *testing.T) {
 	}
 	if got.WorkingDir != "/tmp/work" {
 		t.Fatalf("working dir mismatch: got %q", got.WorkingDir)
+	}
+}
+
+func TestRunCommandSendsAbsoluteDefaultWorkingDirToDaemon(t *testing.T) {
+	dir := t.TempDir()
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(oldwd)
+	})
+
+	var got daemon.RunWorkflowRequest
+	oldClient := newWorkflowRunClient
+	newWorkflowRunClient = func(socketPath string) workflowRunClient {
+		return workflowRunClientFunc(func(ctx context.Context, req daemon.RunWorkflowRequest) (daemon.RunWorkflowResponse, error) {
+			got = req
+			return daemon.RunWorkflowResponse{Run: daemon.WorkflowRun{ID: "run-1", RunDir: "/tmp/run-1", Status: "created"}}, nil
+		})
+	}
+	t.Cleanup(func() {
+		newWorkflowRunClient = oldClient
+	})
+
+	cmd := NewRootCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"run", "daemon-run"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	want, err := filepath.Abs(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.WorkingDir != want {
+		t.Fatalf("working dir mismatch: got %q want %q", got.WorkingDir, want)
 	}
 }
 

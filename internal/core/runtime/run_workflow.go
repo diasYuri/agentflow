@@ -17,6 +17,7 @@ type RunWorkflowUseCase struct {
 	Events    coreports.EventSink
 	Agents    coreports.AgentProviderRegistry
 	Shell     coreports.ShellRunner
+	Worktrees coreports.WorktreeProviderRegistry
 	Now       func() time.Time
 }
 
@@ -39,7 +40,7 @@ func (uc *RunWorkflowUseCase) Validate(ctx context.Context, ref string) (corewor
 	if err != nil {
 		return coreworkflow.ExecutionPlan{}, err
 	}
-	if err := coreworkflow.Validate(spec, uc.Agents); err != nil {
+	if err := coreworkflow.Validate(spec, uc.Agents, uc.Worktrees); err != nil {
 		return coreworkflow.ExecutionPlan{}, err
 	}
 	return coreworkflow.BuildPlan(*spec)
@@ -94,7 +95,7 @@ func (uc *RunWorkflowUseCase) prepareRunWorkflow(ctx context.Context, opts RunOp
 		return workflowPreparation{}, err
 	}
 	handlers.ApplyWorkflowOverrides(spec, opts)
-	if err := coreworkflow.Validate(spec, uc.Agents); err != nil {
+	if err := coreworkflow.Validate(spec, uc.Agents, uc.Worktrees); err != nil {
 		return workflowPreparation{}, err
 	}
 	plan, err := coreworkflow.BuildPlan(*spec)
@@ -111,6 +112,7 @@ func (uc *RunWorkflowUseCase) services() handlers.Services {
 		Events:    uc.Events,
 		Agents:    uc.Agents,
 		Shell:     uc.Shell,
+		Worktrees: uc.Worktrees,
 		Now:       uc.Now,
 	}
 }

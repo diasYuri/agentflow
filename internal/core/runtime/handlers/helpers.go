@@ -20,6 +20,7 @@ type Services struct {
 	Events    coreports.EventSink
 	Agents    coreports.AgentProviderRegistry
 	Shell     coreports.ShellRunner
+	Worktrees coreports.WorktreeProviderRegistry
 	Now       func() time.Time
 }
 
