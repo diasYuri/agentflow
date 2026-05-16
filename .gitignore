@@ -6,3 +6,7 @@
 .codex
 .idea
 .DS_Store
+node_modules
+frontend/desktop/node_modules
+/agentflow-desktop
+/agentflowd

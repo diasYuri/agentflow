@@ -250,6 +250,28 @@ agentflow dry-run <workflow>
 
 Revise especialmente nodes `bash`, permissões de agents, `--working-dir`, `--codex-path`, `--claude-path`, `--pi-path` e qualquer workflow vindo de fora do seu repositório.
 
+## Aplicação Desktop
+
+O Agentflow possui uma aplicação desktop construída com [Wails v3](https://v3.wails.io/), oferecendo uma interface gráfica para carregar, editar, validar, visualizar e executar workflows.
+
+Build do app desktop:
+
+```bash
+cd frontend/desktop && npm run build
+go build ./cmd/agentflow-desktop
+./agentflow-desktop
+```
+
+Funcionalidades da UI:
+
+- Editor de workflow YAML e input JSON.
+- Validação, grafo Mermaid e dry-run interativos.
+- Execução de runs com timeline de eventos, logs e artefatos.
+- Lista de runs com detalhes, cancelamento e acompanhamento de progresso.
+- Configurações locais (tema, caminhos de agentes, workspace).
+
+Para mais detalhes, consulte [`docs/desktop.md`](docs/desktop.md).
+
 ## Documentação
 
 A pasta [`docs/`](docs/) detalha CLI, runtime, DSL, validação, transformações, fan-out, daemon, eventos e persistência.
