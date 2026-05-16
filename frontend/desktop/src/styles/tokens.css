@@ -1,0 +1,25 @@
+:root {
+	--surface: rgba(255, 255, 255, 0.72);
+	--surface-solid: #ffffff;
+	--background: rgba(245, 245, 247, 0.92);
+	--text: #1d1d1f;
+	--text-secondary: #6e6e73;
+	--border: rgba(0, 0, 0, 0.08);
+	--border-strong: rgba(0, 0, 0, 0.12);
+	--accent: rgba(0, 122, 255, 0.9);
+	--accent-hover: rgba(0, 122, 255, 1);
+	--accent-soft: rgba(0, 122, 255, 0.12);
+	--error: #ff3b30;
+	--error-soft: rgba(255, 59, 48, 0.1);
+	--success: #34c759;
+	--success-soft: rgba(52, 199, 89, 0.12);
+	--warning: #ff9500;
+	--shadow: 0 8px 32px rgba(0, 0, 0, 0.06);
+	--shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.04);
+	--radius: 0.75rem;
+	--radius-sm: 0.5rem;
+	--font-sans:
+		-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial,
+		sans-serif;
+	--font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
