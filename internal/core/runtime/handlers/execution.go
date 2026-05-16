@@ -88,6 +88,9 @@ func (e *Executor) execute(ctx context.Context, req ExecutionRequest) (Result, e
 	if err := e.setupWorktree(ctx, state, req.Plan, destinationDir); err != nil {
 		return e.finish(ctx, req.Plan, state, corerun.RunFailed, err)
 	}
+	if err := e.saveCheckpoint(ctx, state, true, 0, "", ""); err != nil {
+		return Result{}, err
+	}
 	if err := e.executeNodes(ctx, state, req.Plan, 0); err != nil {
 		if errors.Is(err, context.Canceled) {
 			return e.finish(ctx, req.Plan, state, corerun.RunCancelled, err)
@@ -177,13 +180,72 @@ func (e *Executor) resolveBaseCommit(ctx context.Context, workingDir string, bas
 	return strings.TrimSpace(res.Stdout), nil
 }
 
+func (e *Executor) restoreWorktree(ctx context.Context, state *ExecutionState, checkpoint corerun.Checkpoint) error {
+	if checkpoint.Worktree == nil || !checkpoint.Worktree.Enabled {
+		return fmt.Errorf("checkpoint for worktree-enabled workflow is missing worktree state")
+	}
+	wtCheckpoint := checkpoint.Worktree
+	if e.svc.Worktrees == nil {
+		return fmt.Errorf("worktree enabled but no worktree registry configured")
+	}
+	providerName := wtCheckpoint.Provider
+	provider, ok := e.svc.Worktrees.Get(providerName)
+	if !ok {
+		return fmt.Errorf("unknown worktree provider %q", providerName)
+	}
+	if wtCheckpoint.Path == "" {
+		return fmt.Errorf("checkpoint worktree path is empty")
+	}
+	info, err := os.Stat(wtCheckpoint.Path)
+	if err != nil {
+		return fmt.Errorf("checkpoint worktree path %q is not usable: %w", wtCheckpoint.Path, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("checkpoint worktree path %q is not a directory", wtCheckpoint.Path)
+	}
+	if wtCheckpoint.DestinationWorkingDir == "" {
+		return fmt.Errorf("checkpoint worktree destination is empty")
+	}
+	currentHead := e.currentGitHead(ctx, wtCheckpoint.DestinationWorkingDir)
+	if currentHead == "" {
+		return fmt.Errorf("unable to resolve destination HEAD for %q", wtCheckpoint.DestinationWorkingDir)
+	}
+	if currentHead != wtCheckpoint.BaseCommit {
+		return fmt.Errorf("destination HEAD changed since checkpoint: expected %s, got %s", wtCheckpoint.BaseCommit, currentHead)
+	}
+
+	wt := coreports.Worktree{
+		ID:           wtCheckpoint.ID,
+		Name:         wtCheckpoint.Name,
+		Path:         wtCheckpoint.Path,
+		Branch:       wtCheckpoint.Branch,
+		BaseCommit:   wtCheckpoint.BaseCommit,
+		WorkflowName: wtCheckpoint.WorkflowName,
+	}
+	if wt.WorkflowName == "" {
+		wt.WorkflowName = checkpoint.Workflow.Name
+	}
+	if wt.BaseCommit == "" {
+		wt.BaseCommit = wtCheckpoint.BaseCommit
+	}
+	if _, err := provider.Status(ctx, wt); err != nil {
+		return fmt.Errorf("worktree status failed during resume: %w", err)
+	}
+
+	state.worktreeEnabled = true
+	state.worktreeProvider = providerName
+	state.worktree = wt
+	state.worktreePath = wt.Path
+	state.worktreeBaseCommit = wtCheckpoint.BaseCommit
+	state.destinationWorkingDir = wtCheckpoint.DestinationWorkingDir
+	state.baseWorkingDir = wt.Path
+	return nil
+}
+
 func (e *Executor) resume(ctx context.Context, req ExecutionRequest) (Result, error) {
 	checkpoint, err := e.svc.Runs.LoadCheckpoint(ctx, req.ResumeRunID)
 	if err != nil {
 		return Result{}, err
-	}
-	if checkpoint.Workflow.Worktree.Enabled {
-		return Result{}, fmt.Errorf("resume is not supported for workflows with worktree enabled")
 	}
 	plan, err := coreworkflow.BuildPlan(checkpoint.Workflow)
 	if err != nil {
@@ -209,6 +271,11 @@ func (e *Executor) resume(ctx context.Context, req ExecutionRequest) (Result, er
 	state.workflowPath = checkpoint.WorkflowPath
 	state.pause = req.Pause
 	state.restoreMetrics(checkpoint.Metrics)
+	if checkpoint.Workflow.Worktree.Enabled {
+		if err := e.restoreWorktree(ctx, state, checkpoint); err != nil {
+			return Result{}, err
+		}
+	}
 	for id, result := range checkpoint.Nodes {
 		state.set(id, result)
 	}
@@ -228,10 +295,12 @@ func (e *Executor) resume(ctx context.Context, req ExecutionRequest) (Result, er
 		delete(state.results, checkpoint.RetryNodeID)
 		delete(state.nodes, checkpoint.RetryNodeID)
 	}
-	_ = e.emitState(ctx, state, corerun.Event{
-		Type: "run.resumed",
-		Data: map[string]any{"cursor": startCursor, "retry_node_id": checkpoint.RetryNodeID, "reason": checkpoint.Reason},
-	})
+	resumeData := map[string]any{"cursor": startCursor, "retry_node_id": checkpoint.RetryNodeID, "reason": checkpoint.Reason}
+	if state.worktreeEnabled {
+		resumeData["worktree_path"] = state.worktreePath
+		resumeData["worktree_provider"] = state.worktreeProvider
+	}
+	_ = e.emitState(ctx, state, corerun.Event{Type: "run.resumed", Data: resumeData})
 	if err := e.saveCheckpoint(ctx, state, true, startCursor, "", ""); err != nil {
 		return Result{}, err
 	}

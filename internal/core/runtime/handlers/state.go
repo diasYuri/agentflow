@@ -237,6 +237,19 @@ func (e *Executor) saveCheckpoint(ctx context.Context, state *ExecutionState, en
 		},
 		Nodes: nodes,
 	}
+	if state.worktreeEnabled {
+		checkpoint.Worktree = &corerun.WorktreeCheckpoint{
+			Enabled:               true,
+			Provider:              state.worktreeProvider,
+			ID:                    state.worktree.ID,
+			Name:                  state.worktree.Name,
+			Path:                  state.worktree.Path,
+			Branch:                state.worktree.Branch,
+			BaseCommit:            state.worktreeBaseCommit,
+			WorkflowName:          state.worktree.WorkflowName,
+			DestinationWorkingDir: state.destinationWorkingDir,
+		}
+	}
 	if reason != "" {
 		checkpoint.Status = corerun.RunPaused
 	}

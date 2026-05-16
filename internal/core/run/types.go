@@ -150,6 +150,18 @@ type WorktreeMetadata struct {
 	AgentResolutionError    string                `json:"agent_resolution_error,omitempty"`
 }
 
+type WorktreeCheckpoint struct {
+	Enabled               bool   `json:"enabled"`
+	Provider              string `json:"provider"`
+	ID                    string `json:"id,omitempty"`
+	Name                  string `json:"name"`
+	Path                  string `json:"path"`
+	Branch                string `json:"branch,omitempty"`
+	BaseCommit            string `json:"base_commit"`
+	WorkflowName          string `json:"workflow_name"`
+	DestinationWorkingDir string `json:"destination_working_dir"`
+}
+
 type Checkpoint struct {
 	RunID        string                `json:"run_id"`
 	Workflow     workflow.WorkflowSpec `json:"workflow"`
@@ -163,4 +175,5 @@ type Checkpoint struct {
 	UpdatedAt    time.Time             `json:"updated_at"`
 	Metrics      CheckpointMetrics     `json:"metrics"`
 	Nodes        map[string]NodeResult `json:"nodes,omitempty"`
+	Worktree     *WorktreeCheckpoint   `json:"worktree,omitempty"`
 }

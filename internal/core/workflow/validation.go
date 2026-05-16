@@ -73,7 +73,7 @@ func validateWorktree(w WorktreeSpec, providers ProviderLookup) error {
 		return fmt.Errorf("unsupported worktree merge.on_conflict %q", w.Merge.OnConflict)
 	}
 	switch w.Cleanup.OnFailure {
-	case "keep":
+	case "keep", "cleanup":
 	default:
 		return fmt.Errorf("unsupported worktree cleanup.on_failure %q", w.Cleanup.OnFailure)
 	}

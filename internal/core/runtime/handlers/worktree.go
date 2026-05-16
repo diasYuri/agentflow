@@ -275,10 +275,12 @@ func (e *Executor) cleanupWorktree(ctx context.Context, state *ExecutionState, m
 		if meta.MergeStatus == corerun.WorktreeMergeNoChanges && state.plan.Workflow.Worktree.Cleanup.OnSuccess != nil && *state.plan.Workflow.Worktree.Cleanup.OnSuccess {
 			shouldRemove = true
 		}
-	case corerun.RunFailed, corerun.RunCancelled, corerun.RunPaused:
+	case corerun.RunFailed, corerun.RunCancelled:
 		if state.plan.Workflow.Worktree.Cleanup.OnFailure == "cleanup" {
 			shouldRemove = true
 		}
+	case corerun.RunPaused:
+		shouldRemove = false
 	}
 
 	if shouldRemove {

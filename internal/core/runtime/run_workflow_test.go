@@ -1164,6 +1164,17 @@ func readCheckpoint(t *testing.T, path string) run.Checkpoint {
 	return checkpoint
 }
 
+func writeCheckpoint(t *testing.T, path string, checkpoint run.Checkpoint) {
+	t.Helper()
+	data, err := json.MarshalIndent(checkpoint, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func countString(values []string, want string) int {
 	count := 0
 	for _, value := range values {
@@ -1216,6 +1227,14 @@ func assertFileRedacted(t *testing.T, path string, secret string) {
 	}
 }
 
+func normalizeMacTempPath(path string) string {
+	path = filepath.Clean(path)
+	if strings.HasPrefix(path, "/var/") {
+		return "/private" + path
+	}
+	return path
+}
+
 func initGitRepo(t *testing.T, dir string) string {
 	t.Helper()
 	runGit := func(args ...string) {
@@ -1233,6 +1252,24 @@ func initGitRepo(t *testing.T, dir string) string {
 	}
 	runGit("add", ".")
 	runGit("commit", "-m", "initial")
+	out, err := exec.Command("git", "-C", dir, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatalf("git rev-parse failed: %v", err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func commitFile(t *testing.T, dir string, name string, content string) string {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"add", name}, {"commit", "-m", "change " + name}} {
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("git %s failed: %v", strings.Join(args, " "), err)
+		}
+	}
 	out, err := exec.Command("git", "-C", dir, "rev-parse", "HEAD").Output()
 	if err != nil {
 		t.Fatalf("git rev-parse failed: %v", err)
@@ -1772,13 +1809,141 @@ func readWorktreeStatus(t *testing.T, runDir string) run.WorktreeMetadata {
 	return status
 }
 
-func TestRunWorkflowWorktreeResumeBlocked(t *testing.T) {
+func TestRunWorkflowWorktreeResumeReusesPausedWorktree(t *testing.T) {
+	dir := t.TempDir()
+	initGitRepo(t, dir)
+	worktreeBase := t.TempDir()
+	events := eventmemory.New()
+	workflowPath := writeWorkflow(t, dir, `
+version: "1"
+name: worktree-resume
+worktree:
+  enabled: true
+  provider: fake
+  base: current
+execution:
+  output_dir: "`+filepath.ToSlash(filepath.Join(dir, "runs"))+`"
+  pause_when_fail: true
+nodes:
+  - id: prepare
+    kind: bash
+    command: "printf prepared >> prepare.log"
+  - id: flaky
+    kind: bash
+    depends_on: [prepare]
+    command: "if [ -f flaky.marker ]; then pwd; else touch flaky.marker; false; fi"
+  - id: after
+    kind: bash
+    depends_on: [flaky]
+    command: "test -f prepare.log && printf done"
+`)
+	worktrees := ports.NewStaticWorktreeProviderRegistry(map[string]ports.WorktreeProvider{
+		"fake": worktreefake.New(worktreeBase),
+	})
+	uc := newTestRunWorkflowUseCaseWithWorktree(dir, shell.NewRunner(), events, worktrees)
+
+	first, err := uc.Run(context.Background(), RunOptions{WorkflowRef: workflowPath, WorkingDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Status != run.RunPaused {
+		t.Fatalf("expected paused, got %s", first.Status)
+	}
+	checkpoint := readCheckpoint(t, filepath.Join(first.RunDir, "checkpoint.json"))
+	if checkpoint.Worktree == nil || checkpoint.Worktree.Path == "" {
+		t.Fatalf("expected worktree checkpoint state, got %+v", checkpoint.Worktree)
+	}
+	pausedWorktreePath := checkpoint.Worktree.Path
+	prepareLog := filepath.Join(pausedWorktreePath, "prepare.log")
+	assertFileContains(t, prepareLog, "prepared")
+
+	resumed, err := uc.Run(context.Background(), RunOptions{ResumeRunID: first.RunID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resumed.Status != run.RunSuccess {
+		t.Fatalf("expected resumed success, got %s", resumed.Status)
+	}
+	if resumed.Summary.Nodes["prepare"].Status != run.NodeSuccess {
+		t.Fatalf("expected prepare result restored, got %s", resumed.Summary.Nodes["prepare"].Status)
+	}
+	if resumed.Summary.Nodes["flaky"].Status != run.NodeSuccess {
+		t.Fatalf("expected flaky success, got %s", resumed.Summary.Nodes["flaky"].Status)
+	}
+	resumedFlakyDir := normalizeMacTempPath(strings.TrimSpace(resumed.Summary.Nodes["flaky"].Stdout))
+	pausedWorktreeRealPath := normalizeMacTempPath(pausedWorktreePath)
+	if resumedFlakyDir != pausedWorktreeRealPath {
+		t.Fatalf("expected resumed flaky node in %q, got %q", pausedWorktreePath, resumed.Summary.Nodes["flaky"].Stdout)
+	}
+	if resumed.Summary.Nodes["after"].Stdout != "done" {
+		t.Fatalf("expected after node to run, got %#v", resumed.Summary.Nodes["after"])
+	}
+	assertFileNotExists(t, filepath.Join(resumed.RunDir, "checkpoint.json"))
+	assertFileNotExists(t, pausedWorktreePath)
+	resumedEvent := findEvent(events.Events, "run.resumed", "")
+	if resumedEvent == nil {
+		t.Fatalf("expected run.resumed event, got %#v", events.Events)
+	}
+	if resumedEvent.Data["worktree_path"] != pausedWorktreePath || resumedEvent.Data["worktree_provider"] != "fake" {
+		t.Fatalf("expected worktree resume event data, got %#v", resumedEvent.Data)
+	}
+}
+
+func TestRunWorkflowWorktreePausedCleanupAlwaysKeepsWorktree(t *testing.T) {
 	dir := t.TempDir()
 	initGitRepo(t, dir)
 	worktreeBase := t.TempDir()
 	workflowPath := writeWorkflow(t, dir, `
 version: "1"
-name: worktree-resume
+name: worktree-paused-cleanup
+worktree:
+  enabled: true
+  provider: fake
+  base: current
+  cleanup:
+    on_failure: cleanup
+execution:
+  output_dir: "`+filepath.ToSlash(filepath.Join(dir, "runs"))+`"
+  pause_when_fail: true
+nodes:
+  - id: flaky
+    kind: bash
+    command: "if [ -f flaky.marker ]; then true; else touch flaky.marker; false; fi"
+`)
+	worktrees := ports.NewStaticWorktreeProviderRegistry(map[string]ports.WorktreeProvider{
+		"fake": worktreefake.New(worktreeBase),
+	})
+	uc := newTestRunWorkflowUseCaseWithWorktree(dir, shell.NewRunner(), eventmemory.New(), worktrees)
+
+	first, err := uc.Run(context.Background(), RunOptions{WorkflowRef: workflowPath, WorkingDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Status != run.RunPaused {
+		t.Fatalf("expected paused, got %s", first.Status)
+	}
+	status := readWorktreeStatus(t, first.RunDir)
+	if status.CleanupStatus != run.WorktreeCleanupKept {
+		t.Fatalf("expected paused cleanup kept, got %s", status.CleanupStatus)
+	}
+	assertFileExists(t, status.WorktreePath)
+
+	resumed, err := uc.Run(context.Background(), RunOptions{ResumeRunID: first.RunID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resumed.Status != run.RunSuccess {
+		t.Fatalf("expected resumed success, got %s", resumed.Status)
+	}
+}
+
+func TestRunWorkflowWorktreeResumeRequiresCheckpointState(t *testing.T) {
+	dir := t.TempDir()
+	initGitRepo(t, dir)
+	worktreeBase := t.TempDir()
+	workflowPath := writeWorkflow(t, dir, `
+version: "1"
+name: worktree-missing-checkpoint-state
 worktree:
   enabled: true
   provider: fake
@@ -1796,18 +1961,104 @@ nodes:
 	})
 	uc := newTestRunWorkflowUseCaseWithWorktree(dir, shell.NewRunner(), eventmemory.New(), worktrees)
 
-	first, err := uc.Run(context.Background(), RunOptions{WorkflowRef: workflowPath})
+	first, err := uc.Run(context.Background(), RunOptions{WorkflowRef: workflowPath, WorkingDir: dir})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.Status != run.RunPaused {
-		t.Fatalf("expected paused, got %s", first.Status)
-	}
+	checkpointPath := filepath.Join(first.RunDir, "checkpoint.json")
+	checkpoint := readCheckpoint(t, checkpointPath)
+	checkpoint.Worktree = nil
+	writeCheckpoint(t, checkpointPath, checkpoint)
+
 	_, err = uc.Run(context.Background(), RunOptions{ResumeRunID: first.RunID})
 	if err == nil {
-		t.Fatal("expected resume blocked error")
+		t.Fatal("expected missing worktree checkpoint state error")
 	}
-	if !strings.Contains(err.Error(), "resume is not supported for workflows with worktree enabled") {
-		t.Fatalf("expected resume blocked error, got %v", err)
+	if !strings.Contains(err.Error(), "missing worktree state") {
+		t.Fatalf("expected missing worktree checkpoint state error, got %v", err)
+	}
+}
+
+func TestRunWorkflowWorktreeResumeFailsWhenWorktreePathRemoved(t *testing.T) {
+	dir := t.TempDir()
+	initGitRepo(t, dir)
+	worktreeBase := t.TempDir()
+	workflowPath := writeWorkflow(t, dir, `
+version: "1"
+name: worktree-path-removed
+worktree:
+  enabled: true
+  provider: fake
+  base: current
+execution:
+  output_dir: "`+filepath.ToSlash(filepath.Join(dir, "runs"))+`"
+  pause_when_fail: true
+nodes:
+  - id: shell
+    kind: bash
+    command: "false"
+`)
+	worktrees := ports.NewStaticWorktreeProviderRegistry(map[string]ports.WorktreeProvider{
+		"fake": worktreefake.New(worktreeBase),
+	})
+	uc := newTestRunWorkflowUseCaseWithWorktree(dir, shell.NewRunner(), eventmemory.New(), worktrees)
+
+	first, err := uc.Run(context.Background(), RunOptions{WorkflowRef: workflowPath, WorkingDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkpoint := readCheckpoint(t, filepath.Join(first.RunDir, "checkpoint.json"))
+	if checkpoint.Worktree == nil {
+		t.Fatal("expected worktree checkpoint state")
+	}
+	if err := os.RemoveAll(checkpoint.Worktree.Path); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = uc.Run(context.Background(), RunOptions{ResumeRunID: first.RunID})
+	if err == nil {
+		t.Fatal("expected removed worktree path error")
+	}
+	if !strings.Contains(err.Error(), "worktree path") {
+		t.Fatalf("expected worktree path error, got %v", err)
+	}
+}
+
+func TestRunWorkflowWorktreeResumeFailsWhenDestinationHeadChanged(t *testing.T) {
+	dir := t.TempDir()
+	initGitRepo(t, dir)
+	worktreeBase := t.TempDir()
+	workflowPath := writeWorkflow(t, dir, `
+version: "1"
+name: worktree-destination-changed
+worktree:
+  enabled: true
+  provider: fake
+  base: current
+execution:
+  output_dir: "`+filepath.ToSlash(filepath.Join(dir, "runs"))+`"
+  pause_when_fail: true
+nodes:
+  - id: shell
+    kind: bash
+    command: "false"
+`)
+	worktrees := ports.NewStaticWorktreeProviderRegistry(map[string]ports.WorktreeProvider{
+		"fake": worktreefake.New(worktreeBase),
+	})
+	uc := newTestRunWorkflowUseCaseWithWorktree(dir, shell.NewRunner(), eventmemory.New(), worktrees)
+
+	first, err := uc.Run(context.Background(), RunOptions{WorkflowRef: workflowPath, WorkingDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitFile(t, dir, "changed.txt", "changed")
+
+	_, err = uc.Run(context.Background(), RunOptions{ResumeRunID: first.RunID})
+	if err == nil {
+		t.Fatal("expected destination HEAD changed error")
+	}
+	if !strings.Contains(err.Error(), "destination HEAD changed") {
+		t.Fatalf("expected destination HEAD changed error, got %v", err)
 	}
 }
