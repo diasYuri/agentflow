@@ -99,6 +99,98 @@ type LogsResponse struct {
 	Lines []string `json:"lines"`
 }
 
+type WorkflowEventDTO struct {
+	Cursor     int            `json:"cursor"`
+	Timestamp  time.Time      `json:"timestamp"`
+	RunID      string         `json:"run_id"`
+	Type       string         `json:"type"`
+	NodeID     string         `json:"node_id,omitempty"`
+	InstanceID string         `json:"instance_id,omitempty"`
+	Path       []string       `json:"path,omitempty"`
+	Attempt    int            `json:"attempt,omitempty"`
+	Data       map[string]any `json:"data,omitempty"`
+	Error      string         `json:"error,omitempty"`
+}
+
+type WorkflowEventsResponse struct {
+	RunID      string             `json:"run_id"`
+	Events     []WorkflowEventDTO `json:"events"`
+	NextCursor int                `json:"next_cursor"`
+	HasMore    bool               `json:"has_more"`
+}
+
+type APIError struct {
+	Error   string `json:"error"`
+	Code    string `json:"code,omitempty"`
+	Message string `json:"message,omitempty"`
+}
+
+type WorkflowArtifactsResponse struct {
+	RunID      string                `json:"run_id"`
+	Artifacts  []WorkflowArtifactDTO `json:"artifacts"`
+	NextCursor string                `json:"next_cursor,omitempty"`
+	HasMore    bool                  `json:"has_more,omitempty"`
+}
+
+type WorkflowArtifactDTO struct {
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	Path        string    `json:"path"`
+	Size        int64     `json:"size"`
+	ContentType string    `json:"content_type,omitempty"`
+	ModifiedAt  time.Time `json:"modified_at,omitempty"`
+}
+
+type WorkflowArtifactResponse struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Path        string `json:"path"`
+	Size        int64  `json:"size"`
+	ContentType string `json:"content_type,omitempty"`
+	Encoding    string `json:"encoding,omitempty"`
+	Content     string `json:"content"`
+}
+
+type WorkflowNodesResponse struct {
+	RunID string                  `json:"run_id"`
+	Nodes []WorkflowNodeResultDTO `json:"nodes"`
+}
+
+type WorkflowNodeResponse struct {
+	RunID     string                  `json:"run_id"`
+	NodeID    string                  `json:"node_id"`
+	Instances []WorkflowNodeResultDTO `json:"instances,omitempty"`
+}
+
+type WorkflowNodeResultDTO struct {
+	NodeID     string   `json:"node_id"`
+	InstanceID string   `json:"instance_id,omitempty"`
+	Path       []string `json:"path,omitempty"`
+	Index      *int     `json:"index,omitempty"`
+	Status     string   `json:"status"`
+	Output     any      `json:"output,omitempty"`
+	Outputs    []any    `json:"outputs,omitempty"`
+	Stdout     string   `json:"stdout,omitempty"`
+	Stderr     string   `json:"stderr,omitempty"`
+	Error      string   `json:"error,omitempty"`
+	ExitCode   *int     `json:"exit_code,omitempty"`
+	Duration   int64    `json:"duration_ms,omitempty"`
+	Attempts   int      `json:"attempts,omitempty"`
+}
+
+type WorkflowPlanResponse struct {
+	RunID      string         `json:"run_id"`
+	Workflow   string         `json:"workflow,omitempty"`
+	Metadata   map[string]any `json:"metadata,omitempty"`
+	Normalized map[string]any `json:"normalized,omitempty"`
+	Plan       map[string]any `json:"plan,omitempty"`
+}
+
+const (
+	defaultEventLimit = 100
+	maxEventLimit     = 1000
+)
+
 type CancelWorkflowResponse struct {
 	Run WorkflowRun `json:"run"`
 }

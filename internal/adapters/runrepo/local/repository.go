@@ -3,8 +3,10 @@ package local
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/diasYuri/agentflow/internal/core/run"
 )
@@ -123,11 +125,37 @@ func (r *Repository) ClearCheckpoint(ctx context.Context, runID string) error {
 
 func (r *Repository) SaveArtifact(ctx context.Context, runID string, name string, data []byte) error {
 	_ = ctx
-	path := filepath.Join(r.ensureRunDir(runID), "artifacts", filepath.Clean(name))
+	dir := r.ensureRunDir(runID)
+	path, err := safeArtifactPath(dir, name)
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
 	return os.WriteFile(path, data, 0o644)
+}
+
+func safeArtifactPath(baseDir, name string) (string, error) {
+	if name == "" {
+		return "", fmt.Errorf("artifact name is empty")
+	}
+	clean := filepath.Clean(name)
+	if filepath.IsAbs(clean) {
+		return "", fmt.Errorf("artifact name is absolute")
+	}
+	if strings.Contains(clean, "..") {
+		return "", fmt.Errorf("artifact name contains ..")
+	}
+	full := filepath.Join(baseDir, "artifacts", clean)
+	rel, err := filepath.Rel(baseDir, full)
+	if err != nil {
+		return "", err
+	}
+	if strings.HasPrefix(rel, "..") {
+		return "", fmt.Errorf("artifact path escapes base directory")
+	}
+	return full, nil
 }
 
 func (r *Repository) FinalizeRun(ctx context.Context, runID string, summary run.Summary) error {

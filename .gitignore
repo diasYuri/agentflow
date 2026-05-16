@@ -1,2 +1,8 @@
 .agentflow/plans/
 .agentflow/specs/
+.pi-lens
+.pi
+.claude
+.codex
+.idea
+.DS_Store

@@ -3,13 +3,17 @@ package daemon
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -135,6 +139,16 @@ func (m *Manager) WorkflowStatus(runID string) (WorkflowRun, bool) {
 		return WorkflowRun{}, false
 	}
 	record.run = m.refreshRun(record.run)
+	return record.run, true
+}
+
+func (m *Manager) workflowRunSnapshot(runID string) (WorkflowRun, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	record, ok := m.records[runID]
+	if !ok {
+		return WorkflowRun{}, false
+	}
 	return record.run, true
 }
 
@@ -272,6 +286,100 @@ func (m *Manager) WorkflowLogs(runID string) ([]string, error) {
 		lines = append(lines, scanner.Text())
 	}
 	return lines, scanner.Err()
+}
+
+func (m *Manager) WorkflowEvents(runID string, cursor int, limit int) (WorkflowEventsResponse, error) {
+	if limit <= 0 {
+		limit = defaultEventLimit
+	}
+	if limit > maxEventLimit {
+		limit = maxEventLimit
+	}
+	if cursor < 0 {
+		cursor = 0
+	}
+
+	run, ok := m.workflowRunSnapshot(runID)
+	if !ok {
+		return WorkflowEventsResponse{}, os.ErrNotExist
+	}
+
+	response := WorkflowEventsResponse{
+		RunID:      runID,
+		NextCursor: cursor,
+		Events:     make([]WorkflowEventDTO, 0, limit),
+	}
+
+	eventsPath := filepath.Join(run.RunDir, "events.jsonl")
+	file, err := os.Open(eventsPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return response, nil
+		}
+		return WorkflowEventsResponse{}, err
+	}
+	defer file.Close()
+
+	var masker *corerun.SecretMasker
+	if run.Request != nil && len(run.Request.Vars) > 0 {
+		m := corerun.NewSecretMasker(run.Request.Vars)
+		masker = &m
+	}
+
+	scanner := bufio.NewScanner(file)
+	const maxCapacity = 1024 * 1024
+	buf := make([]byte, maxCapacity)
+	scanner.Buffer(buf, maxCapacity)
+
+	lineIndex := 0
+	collected := 0
+
+	for scanner.Scan() {
+		if lineIndex < cursor {
+			lineIndex++
+			continue
+		}
+
+		if collected >= limit {
+			response.HasMore = true
+			response.NextCursor = lineIndex
+			break
+		}
+
+		line := scanner.Bytes()
+		var event corerun.Event
+		if err := json.Unmarshal(line, &event); err != nil {
+			lineIndex++
+			response.NextCursor = lineIndex
+			continue
+		}
+
+		if masker != nil {
+			event = masker.MaskEvent(event)
+		}
+
+		dto := WorkflowEventDTO{
+			Cursor:     lineIndex,
+			Timestamp:  event.Timestamp,
+			RunID:      event.RunID,
+			Type:       event.Type,
+			NodeID:     event.NodeID,
+			InstanceID: event.InstanceID,
+			Path:       event.Path,
+			Attempt:    event.Attempt,
+			Data:       event.Data,
+		}
+		response.Events = append(response.Events, dto)
+		collected++
+		lineIndex++
+		response.NextCursor = lineIndex
+	}
+
+	if err := scanner.Err(); err != nil {
+		return WorkflowEventsResponse{}, err
+	}
+
+	return response, nil
 }
 
 func (m *Manager) refreshRun(run WorkflowRun) WorkflowRun {
@@ -639,4 +747,339 @@ func sortedNodeIDs(nodes map[string]corerun.NodeResult) []string {
 	}
 	sort.Strings(ids)
 	return ids
+}
+
+func safeJoin(base, rel string) (string, error) {
+	if rel == "" {
+		return "", fmt.Errorf("path is empty")
+	}
+	clean := filepath.Clean(rel)
+	if filepath.IsAbs(clean) {
+		return "", fmt.Errorf("path is absolute")
+	}
+	if strings.Contains(clean, "..") {
+		return "", fmt.Errorf("path contains ..")
+	}
+	full := filepath.Join(base, clean)
+	relOut, err := filepath.Rel(base, full)
+	if err != nil {
+		return "", err
+	}
+	if strings.HasPrefix(relOut, "..") {
+		return "", fmt.Errorf("path escapes base directory")
+	}
+	return full, nil
+}
+
+func isSymlink(path string) bool {
+	fi, err := os.Lstat(path)
+	if err != nil {
+		return false
+	}
+	return fi.Mode()&os.ModeSymlink != 0
+}
+
+func detectFileContentType(path string) string {
+	file, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer file.Close()
+	var sample [512]byte
+	n, err := file.Read(sample[:])
+	if err != nil && n == 0 {
+		return ""
+	}
+	return http.DetectContentType(sample[:n])
+}
+
+func (m *Manager) maskerForRun(run WorkflowRun) *corerun.SecretMasker {
+	if run.Request != nil && len(run.Request.Vars) > 0 {
+		masker := corerun.NewSecretMasker(run.Request.Vars)
+		return &masker
+	}
+	return nil
+}
+
+func (m *Manager) WorkflowArtifacts(runID string) (WorkflowArtifactsResponse, error) {
+	run, ok := m.WorkflowStatus(runID)
+	if !ok {
+		return WorkflowArtifactsResponse{}, os.ErrNotExist
+	}
+	resp := WorkflowArtifactsResponse{
+		RunID:     runID,
+		Artifacts: []WorkflowArtifactDTO{},
+	}
+	artifactsDir := filepath.Join(run.RunDir, "artifacts")
+	if err := filepath.WalkDir(artifactsDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if isSymlink(path) {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(artifactsDir, path)
+		if err != nil {
+			return err
+		}
+		resp.Artifacts = append(resp.Artifacts, WorkflowArtifactDTO{
+			ID:          rel,
+			Name:        filepath.Base(rel),
+			Path:        rel,
+			Size:        info.Size(),
+			ContentType: detectFileContentType(path),
+			ModifiedAt:  info.ModTime(),
+		})
+		return nil
+	}); err != nil {
+		return WorkflowArtifactsResponse{}, err
+	}
+	return resp, nil
+}
+
+func (m *Manager) WorkflowArtifact(runID, artifactID string) (WorkflowArtifactResponse, error) {
+	run, ok := m.WorkflowStatus(runID)
+	if !ok {
+		return WorkflowArtifactResponse{}, os.ErrNotExist
+	}
+	artifactsDir := filepath.Join(run.RunDir, "artifacts")
+	path, err := safeJoin(artifactsDir, artifactID)
+	if err != nil {
+		return WorkflowArtifactResponse{}, fmt.Errorf("invalid artifact id: %w", err)
+	}
+	if isSymlink(path) {
+		return WorkflowArtifactResponse{}, fmt.Errorf("symlink not allowed")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return WorkflowArtifactResponse{}, os.ErrNotExist
+		}
+		return WorkflowArtifactResponse{}, err
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return WorkflowArtifactResponse{}, err
+	}
+	masker := m.maskerForRun(run)
+	if masker != nil {
+		data = []byte(masker.MaskString(string(data)))
+	}
+	content := base64.StdEncoding.EncodeToString(data)
+	return WorkflowArtifactResponse{
+		ID:          artifactID,
+		Name:        filepath.Base(artifactID),
+		Path:        artifactID,
+		Size:        info.Size(),
+		ContentType: http.DetectContentType(data),
+		Encoding:    "base64",
+		Content:     content,
+	}, nil
+}
+
+func nodeResultToDTO(result corerun.NodeResult) WorkflowNodeResultDTO {
+	dto := WorkflowNodeResultDTO{
+		NodeID:     result.NodeID,
+		InstanceID: result.InstanceID,
+		Path:       result.Path,
+		Index:      result.Index,
+		Status:     string(result.Status),
+		Output:     result.Output,
+		Outputs:    result.Outputs,
+		Stdout:     result.Stdout,
+		Stderr:     result.Stderr,
+		Error:      result.Error,
+		ExitCode:   result.ExitCode,
+		Attempts:   result.Attempts,
+	}
+	if result.Duration > 0 {
+		dto.Duration = result.Duration.Milliseconds()
+	}
+	return dto
+}
+
+func (m *Manager) WorkflowNodes(runID string) (WorkflowNodesResponse, error) {
+	run, ok := m.WorkflowStatus(runID)
+	if !ok {
+		return WorkflowNodesResponse{}, os.ErrNotExist
+	}
+	resp := WorkflowNodesResponse{
+		RunID: runID,
+		Nodes: []WorkflowNodeResultDTO{},
+	}
+	nodesDir := filepath.Join(run.RunDir, "nodes")
+	masker := m.maskerForRun(run)
+	if err := filepath.WalkDir(nodesDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
+			return err
+		}
+		if d.IsDir() || d.Name() != "result.json" {
+			return nil
+		}
+		if isSymlink(path) {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		var result corerun.NodeResult
+		if err := json.Unmarshal(data, &result); err != nil {
+			return nil
+		}
+		if masker != nil {
+			result = masker.MaskNodeResult(result)
+		}
+		resp.Nodes = append(resp.Nodes, nodeResultToDTO(result))
+		return nil
+	}); err != nil {
+		return WorkflowNodesResponse{}, err
+	}
+	sort.Slice(resp.Nodes, func(i, j int) bool {
+		if resp.Nodes[i].NodeID != resp.Nodes[j].NodeID {
+			return resp.Nodes[i].NodeID < resp.Nodes[j].NodeID
+		}
+		if resp.Nodes[i].InstanceID != resp.Nodes[j].InstanceID {
+			return resp.Nodes[i].InstanceID < resp.Nodes[j].InstanceID
+		}
+		ii, ji := -1, -1
+		if resp.Nodes[i].Index != nil {
+			ii = *resp.Nodes[i].Index
+		}
+		if resp.Nodes[j].Index != nil {
+			ji = *resp.Nodes[j].Index
+		}
+		return ii < ji
+	})
+	return resp, nil
+}
+
+func (m *Manager) WorkflowNode(runID, nodeID string) (WorkflowNodeResponse, error) {
+	run, ok := m.WorkflowStatus(runID)
+	if !ok {
+		return WorkflowNodeResponse{}, os.ErrNotExist
+	}
+	resp := WorkflowNodeResponse{
+		RunID:  runID,
+		NodeID: nodeID,
+	}
+	nodesDir := filepath.Join(run.RunDir, "nodes")
+	masker := m.maskerForRun(run)
+	found := false
+	if err := filepath.WalkDir(nodesDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
+			return err
+		}
+		if d.IsDir() || d.Name() != "result.json" {
+			return nil
+		}
+		if isSymlink(path) {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		var result corerun.NodeResult
+		if err := json.Unmarshal(data, &result); err != nil {
+			return nil
+		}
+		if result.NodeID != nodeID {
+			return nil
+		}
+		found = true
+		if masker != nil {
+			result = masker.MaskNodeResult(result)
+		}
+		resp.Instances = append(resp.Instances, nodeResultToDTO(result))
+		return nil
+	}); err != nil {
+		return WorkflowNodeResponse{}, err
+	}
+	if !found {
+		return WorkflowNodeResponse{}, os.ErrNotExist
+	}
+	sort.Slice(resp.Instances, func(i, j int) bool {
+		if resp.Instances[i].InstanceID != resp.Instances[j].InstanceID {
+			return resp.Instances[i].InstanceID < resp.Instances[j].InstanceID
+		}
+		ii, ji := -1, -1
+		if resp.Instances[i].Index != nil {
+			ii = *resp.Instances[i].Index
+		}
+		if resp.Instances[j].Index != nil {
+			ji = *resp.Instances[j].Index
+		}
+		return ii < ji
+	})
+	return resp, nil
+}
+
+func (m *Manager) WorkflowPlan(runID string) (WorkflowPlanResponse, error) {
+	run, ok := m.WorkflowStatus(runID)
+	if !ok {
+		return WorkflowPlanResponse{}, os.ErrNotExist
+	}
+	resp := WorkflowPlanResponse{RunID: runID}
+	masker := m.maskerForRun(run)
+
+	if data, err := os.ReadFile(filepath.Join(run.RunDir, "run.json")); err == nil {
+		var meta map[string]any
+		if err := json.Unmarshal(data, &meta); err == nil {
+			resp.Metadata = meta
+		}
+	}
+	if data, err := os.ReadFile(filepath.Join(run.RunDir, "workflow.yaml")); err == nil {
+		workflow := string(data)
+		if masker != nil {
+			workflow = masker.MaskString(workflow)
+		}
+		resp.Workflow = workflow
+	}
+	if data, err := os.ReadFile(filepath.Join(run.RunDir, "normalized.json")); err == nil {
+		var norm map[string]any
+		if err := json.Unmarshal(data, &norm); err == nil {
+			if masker != nil {
+				norm = maskMap(*masker, norm)
+			}
+			resp.Normalized = norm
+		}
+	}
+	if data, err := os.ReadFile(filepath.Join(run.RunDir, "plan.json")); err == nil {
+		var plan map[string]any
+		if err := json.Unmarshal(data, &plan); err == nil {
+			if masker != nil {
+				plan = maskMap(*masker, plan)
+			}
+			resp.Plan = plan
+		}
+	}
+	return resp, nil
+}
+
+func maskMap(masker corerun.SecretMasker, value map[string]any) map[string]any {
+	if value == nil {
+		return nil
+	}
+	out := make(map[string]any, len(value))
+	for key, item := range value {
+		out[key] = masker.MaskValue(item)
+	}
+	return out
 }

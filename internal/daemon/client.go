@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -70,6 +71,13 @@ func (c *Client) WorkflowLogs(ctx context.Context, runID string) (LogsResponse, 
 	return out, err
 }
 
+func (c *Client) WorkflowEvents(ctx context.Context, runID string, cursor int, limit int) (WorkflowEventsResponse, error) {
+	var out WorkflowEventsResponse
+	query := fmt.Sprintf("?cursor=%d&limit=%d", cursor, limit)
+	err := c.do(ctx, http.MethodGet, "/v1/workflows/"+runID+"/events"+query, nil, &out)
+	return out, err
+}
+
 func (c *Client) CancelWorkflow(ctx context.Context, runID string) (CancelWorkflowResponse, error) {
 	var out CancelWorkflowResponse
 	err := c.do(ctx, http.MethodPost, "/v1/workflows/"+runID+"/cancel", nil, &out)
@@ -85,6 +93,38 @@ func (c *Client) PauseWorkflow(ctx context.Context, runID string) (PauseWorkflow
 func (c *Client) ResumeWorkflow(ctx context.Context, runID string) (ResumeWorkflowResponse, error) {
 	var out ResumeWorkflowResponse
 	err := c.do(ctx, http.MethodPost, "/v1/workflows/"+runID+"/resume", nil, &out)
+	return out, err
+}
+
+func (c *Client) WorkflowArtifacts(ctx context.Context, runID string) (WorkflowArtifactsResponse, error) {
+	var out WorkflowArtifactsResponse
+	err := c.do(ctx, http.MethodGet, "/v1/workflows/"+runID+"/artifacts", nil, &out)
+	return out, err
+}
+
+func (c *Client) WorkflowArtifact(ctx context.Context, runID string, artifactID string) (WorkflowArtifactResponse, error) {
+	var out WorkflowArtifactResponse
+	path := "/v1/workflows/" + runID + "/artifacts/" + url.PathEscape(artifactID)
+	err := c.do(ctx, http.MethodGet, path, nil, &out)
+	return out, err
+}
+
+func (c *Client) WorkflowNodes(ctx context.Context, runID string) (WorkflowNodesResponse, error) {
+	var out WorkflowNodesResponse
+	err := c.do(ctx, http.MethodGet, "/v1/workflows/"+runID+"/nodes", nil, &out)
+	return out, err
+}
+
+func (c *Client) WorkflowNode(ctx context.Context, runID string, nodeID string) (WorkflowNodeResponse, error) {
+	var out WorkflowNodeResponse
+	path := "/v1/workflows/" + runID + "/nodes/" + url.PathEscape(nodeID)
+	err := c.do(ctx, http.MethodGet, path, nil, &out)
+	return out, err
+}
+
+func (c *Client) WorkflowPlan(ctx context.Context, runID string) (WorkflowPlanResponse, error) {
+	var out WorkflowPlanResponse
+	err := c.do(ctx, http.MethodGet, "/v1/workflows/"+runID+"/plan", nil, &out)
 	return out, err
 }
 

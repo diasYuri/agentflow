@@ -1,5 +1,5 @@
 version: "1"
-name: feat-plan-impl
+name: feat
 description: "Recebe uma descrição de feature, gera planos em .agentflow/plans, implementa cada plano em ordem, revisa e aplica ajustes finais."
 
 inputs:
@@ -74,7 +74,7 @@ nodes:
     nodes:
       - id: implement_plan
         kind: agent
-        provider: codex
+        provider: pi
         permission:
           write: true
         prompt: |

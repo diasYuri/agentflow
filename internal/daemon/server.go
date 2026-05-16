@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -148,6 +149,26 @@ func (s *Server) handleWorkflow(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, LogsResponse{RunID: runID, Lines: lines})
 		return
 	}
+	if len(parts) == 2 && parts[1] == "events" && r.Method == http.MethodGet {
+		cursor, _ := strconv.Atoi(r.URL.Query().Get("cursor"))
+		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		if limit <= 0 {
+			limit = defaultEventLimit
+		}
+		if limit > maxEventLimit {
+			limit = maxEventLimit
+		}
+		if cursor < 0 {
+			cursor = 0
+		}
+		resp, err := s.manager.WorkflowEvents(runID, cursor, limit)
+		if err != nil {
+			writeError(w, statusForError(err), err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
 	if len(parts) == 2 && parts[1] == "cancel" && r.Method == http.MethodPost {
 		run, err := s.manager.CancelWorkflow(runID)
 		if err != nil {
@@ -173,6 +194,53 @@ func (s *Server) handleWorkflow(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, ResumeWorkflowResponse{Run: run})
+		return
+	}
+	if len(parts) == 2 && parts[1] == "artifacts" && r.Method == http.MethodGet {
+		resp, err := s.manager.WorkflowArtifacts(runID)
+		if err != nil {
+			writeError(w, statusForError(err), err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+	if len(parts) >= 3 && parts[1] == "artifacts" && r.Method == http.MethodGet {
+		artifactID := strings.Join(parts[2:], "/")
+		resp, err := s.manager.WorkflowArtifact(runID, artifactID)
+		if err != nil {
+			writeError(w, statusForError(err), err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+	if len(parts) == 2 && parts[1] == "nodes" && r.Method == http.MethodGet {
+		resp, err := s.manager.WorkflowNodes(runID)
+		if err != nil {
+			writeError(w, statusForError(err), err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+	if len(parts) >= 3 && parts[1] == "nodes" && r.Method == http.MethodGet {
+		nodeID := strings.Join(parts[2:], "/")
+		resp, err := s.manager.WorkflowNode(runID, nodeID)
+		if err != nil {
+			writeError(w, statusForError(err), err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+	if len(parts) == 2 && parts[1] == "plan" && r.Method == http.MethodGet {
+		resp, err := s.manager.WorkflowPlan(runID)
+		if err != nil {
+			writeError(w, statusForError(err), err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, resp)
 		return
 	}
 	writeError(w, http.StatusNotFound, "endpoint not found")
