@@ -1,0 +1,412 @@
+version: "2"
+name: goal-v2
+description: "Recebe um goal, gera uma spec completa, quebra em planos paralelizáveis, revisa, refina e verifica se o objetivo foi totalmente atingido."
+
+inputs:
+  goal:
+    type: string
+    required: true
+
+defaults:
+  timeout: 12000
+  retries: 0
+  working_dir: "."
+
+execution:
+  max_concurrency: 1
+  fail_fast: true
+  pause_when_fail: true
+  max_node_output_bytes: 1048576
+
+worktree:
+  enabled: true
+  provider: pi
+  base: current
+  merge:
+    strategy: deterministic
+    on_conflict: agent
+  cleanup:
+    on_success: true
+    on_failure: keep
+
+hooks:
+  - phase: before_run
+    kind: bash
+    command: echo "Iniciando workflow goal-v2"
+  - phase: after_success
+    kind: bash
+    command: echo "Workflow goal-v2 concluido com sucesso"
+  - phase: after_failure
+    kind: bash
+    command: echo "Workflow goal-v2 finalizado com falha"
+
+steps:
+  draft_goal_spec:
+    nodes:
+      - id: draft_goal_spec
+        kind: agent
+        provider: codex
+        permission:
+          write: true
+        prompt: |
+          You are a senior product and software architect working inside this repository.
+
+          Your job is to turn the goal below into a complete, shippable specification with no MVP framing and no partial-solution thinking.
+
+          Goal:
+          ${inputs.goal}
+
+          Rules:
+          - Inspect the current repository before writing the spec.
+          - Use the existing codebase, workflows, documentation, samples, architecture boundaries, and conventions as the source of truth.
+          - Explicitly account for what already exists so the spec extends the real project instead of inventing a disconnected system.
+          - Describe the intended behavior in a way that fits the current repository, its modules, its runtime model, and its delivery constraints.
+          - Produce a spec that is complete enough to guide the work all the way through delivery.
+          - Include functional requirements, non-functional requirements, dependencies, integration points, constraints, risks, validation, and acceptance criteria.
+          - State assumptions and decisions clearly whenever the goal is ambiguous.
+          - Save the spec to `.agentflow/specs/<goal-slug>/spec.md`.
+          - Use a stable kebab-case slug for the directory.
+          - Do not implement the goal; write only the full spec.
+          - Return valid JSON that follows the schema.
+        output_schema:
+          type: object
+          required:
+            - goal_slug
+            - goal_title
+            - spec_path
+            - summary
+            - assumptions
+            - acceptance_criteria
+          additionalProperties: false
+          properties:
+            goal_slug:
+              type: string
+            goal_title:
+              type: string
+            spec_path:
+              type: string
+            summary:
+              type: string
+            assumptions:
+              type: array
+              items:
+                type: string
+            acceptance_criteria:
+              type: array
+              items:
+                type: string
+            risks:
+              type: array
+              items:
+                type: string
+            validation_plan:
+              type: array
+              items:
+                type: string
+
+  break_goal_plans:
+    nodes:
+      - id: break_goal_plans
+        kind: agent
+        provider: codex
+        depends_on: [draft_goal_spec]
+        permission:
+          write: true
+        prompt: |
+          You are a senior technical planner working inside this repository.
+
+          Your job is to break the complete spec below into ordered Markdown delivery plans inside `.agentflow/plans/<goal-slug>/`.
+
+          Original goal:
+          ${inputs.goal}
+
+          Goal slug:
+          ${nodes.draft_goal_spec.output.goal_slug}
+
+          Generated spec:
+          ${nodes.draft_goal_spec.output.spec_path}
+
+          Rules:
+          - Read the full spec before planning.
+          - Create `.agentflow/plans/<goal-slug>/` if it does not already exist.
+          - Each plan must fit into one coding-agent session.
+          - The outer array represents sequential delivery phases; each inner array represents tasks that can run in parallel because they have no dependency on each other.
+          - Every plan item must contain `path`, `description`, and `context`.
+          - Use stable names such as `.agentflow/plans/<goal-slug>/001-short-slug.md`.
+          - Each plan file must include: objective, context, scope, likely files, implementation steps, validation, and risks.
+          - Do not implement the goal; only write the plan files.
+          - Return valid JSON that follows the schema.
+        output_schema:
+          type: object
+          required:
+            - goal_slug
+            - plan_matrix
+            - summary
+          additionalProperties: false
+          properties:
+            goal_slug:
+              type: string
+            summary:
+              type: string
+            plan_matrix:
+              type: array
+              minItems: 1
+              items:
+                type: array
+                minItems: 1
+                items:
+                  type: object
+                  required:
+                    - path
+                    - description
+                    - context
+                  additionalProperties: false
+                  properties:
+                    path:
+                      type: string
+                    description:
+                      type: string
+                    context:
+                      type: string
+
+  review_goal:
+    nodes:
+      - id: review_goal
+        kind: agent
+        provider: codex
+        depends_on: [break_goal_plans]
+        prompt: |
+          You are a pragmatic technical planning reviewer.
+
+          Review the complete spec and the plan matrix after generation.
+
+          Original goal:
+          ${inputs.goal}
+
+          Spec:
+          ${nodes.draft_goal_spec.output.spec_path}
+
+          Plans:
+          ${nodes.break_goal_plans.output.plan_matrix}
+
+          Rules:
+          - Prioritize real coverage gaps, missing dependencies, ordering issues, and risk omissions.
+          - Verify that the spec is truly complete enough to reach the finish line without partial-solution framing.
+          - Verify that the plan matrix is ordered correctly and that each inner group is genuinely parallelizable.
+          - Do not modify files in this node; only review.
+          - Return valid JSON that follows the schema.
+        output_schema:
+          type: object
+          required:
+            - status
+            - findings
+            - recommended_fine_tuning
+          additionalProperties: false
+          properties:
+            status:
+              type: string
+            findings:
+              type: array
+              items:
+                type: object
+                required:
+                  - severity
+                  - description
+                  - evidence
+                  - recommendation
+                additionalProperties: false
+                properties:
+                  severity:
+                    type: string
+                  description:
+                    type: string
+                  evidence:
+                    type: string
+                  recommendation:
+                    type: string
+            recommended_fine_tuning:
+              type: array
+              items:
+                type: string
+
+  fine_tune_goal:
+    nodes:
+      - id: fine_tune_goal
+        kind: agent
+        provider: codex
+        depends_on: [review_goal]
+        permission:
+          write: true
+        prompt: |
+          You are the final technical planning fine-tuning agent.
+
+          Apply only the adjustments required by the review.
+
+          Original goal:
+          ${inputs.goal}
+
+          Spec:
+          ${nodes.draft_goal_spec.output.spec_path}
+
+          Plans:
+          ${nodes.break_goal_plans.output.plan_matrix}
+
+          Review:
+          ${nodes.review_goal.output}
+
+          Rules:
+          - Fix the review findings that are actually relevant.
+          - Preserve the completeness of the spec and the ordering/boundaries of the plans.
+          - Do not rewrite everything unless it is necessary.
+          - Stay focused on the original goal and the planning artifacts.
+          - Run relevant validations when they are fast and local.
+          - Return valid JSON that follows the schema.
+        output_schema:
+          type: object
+          required:
+            - status
+            - summary
+            - files_changed
+            - validation
+            - remaining_risks
+          additionalProperties: false
+          properties:
+            status:
+              type: string
+            summary:
+              type: string
+            files_changed:
+              type: array
+              items:
+                type: string
+            validation:
+              type: array
+              items:
+                type: string
+            remaining_risks:
+              type: array
+              items:
+                type: string
+
+  verify_goal:
+    nodes:
+      - id: verify_goal
+        kind: agent
+        provider: codex
+        depends_on: [fine_tune_goal]
+        permission:
+          write: true
+        go_to_if:
+          when: "${nodes.verify_goal.output.complete} == false"
+          target: draft_goal_spec
+        prompt: |
+          You are the final verifier for the goal.
+
+          Your task is to determine whether the objective has been fully achieved.
+
+          Original goal:
+          ${inputs.goal}
+
+          Spec:
+          ${nodes.draft_goal_spec.output.spec_path}
+
+          Plans:
+          ${nodes.break_goal_plans.output.plan_matrix}
+
+          Review:
+          ${nodes.review_goal.output}
+
+          Fine-tune:
+          ${nodes.fine_tune_goal.output}
+
+          Rules:
+          - Return `complete: true` only if there is nothing meaningful left to evolve or implement.
+          - If there is any gap, pending item, or remaining improvement/implementation work, return `complete: false`.
+          - Always write a JSON file containing the pending items at `.agentflow/specs/<goal-slug>/pending-items.json`.
+          - If the goal is complete, that file may contain an empty list.
+          - The file must contain objective, actionable items focused on what still needs to be evolved or implemented.
+          - Return valid JSON that follows the schema.
+        output_schema:
+          type: object
+          required:
+            - status
+            - complete
+            - pending_items_path
+            - pending_items
+            - summary
+          additionalProperties: false
+          properties:
+            status:
+              type: string
+            complete:
+              type: boolean
+            pending_items_path:
+              type: string
+            pending_items:
+              type: array
+              items:
+                type: object
+                required:
+                  - area
+                  - description
+                  - recommendation
+                additionalProperties: false
+                properties:
+                  area:
+                    type: string
+                  description:
+                    type: string
+                  recommendation:
+                    type: string
+                  priority:
+                    type: string
+            summary:
+              type: string
+
+nodes:
+  - id: draft_goal_spec
+    ref: draft_goal_spec
+
+  - id: break_goal_plans
+    ref: break_goal_plans
+
+  - id: review_goal
+    ref: review_goal
+
+  - id: fine_tune_goal
+    ref: fine_tune_goal
+
+  - id: verify_goal
+    ref: verify_goal
+
+outputs:
+  status:
+    value: "${nodes.verify_goal.output.status}"
+    type: string
+  complete:
+    value: "${nodes.verify_goal.output.complete}"
+    type: boolean
+  goal_slug:
+    value: "${nodes.draft_goal_spec.output.goal_slug}"
+    type: string
+  spec_path:
+    value: "${nodes.draft_goal_spec.output.spec_path}"
+    type: string
+  plan_matrix:
+    value: "${nodes.break_goal_plans.output.plan_matrix}"
+    type: array
+  summary:
+    value: "${nodes.verify_goal.output.summary}"
+    type: string
+  review:
+    value: "${nodes.review_goal.output}"
+    type: object
+  fine_tune:
+    value: "${nodes.fine_tune_goal.output}"
+    type: object
+  verification:
+    value: "${nodes.verify_goal.output}"
+    type: object
+  pending_items_path:
+    value: "${nodes.verify_goal.output.pending_items_path}"
+    type: string

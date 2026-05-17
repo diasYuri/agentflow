@@ -49,24 +49,24 @@ steps:
         permission:
           write: true
         prompt: |
-          Você é um planejador técnico sênior trabalhando neste repositório.
+          You are a senior technical planner working inside this repository.
 
-          Objetivo: quebrar a feature abaixo em planos de implementação Markdown dentro de `.agentflow/plans/`.
+          Your job is to break the feature below into Markdown implementation plans inside `.agentflow/plans/`.
 
-          Não crie mais plans do que o necessário para implementar a feature.
+          Do not create more plans than are necessary to implement the feature.
 
           Feature:
           ${inputs.feature}
 
-          Regras:
-          - Inspecione o repositório antes de planejar.
-          - Crie `.agentflow/plans/<feature-name>/` se ainda não existir.
-          - Cada plano deve caber em uma sessão de implementação.
-          - Os planos devem ser ordenados, pequenos, objetivos e sem sobreposição desnecessária.
-          - Use nomes estáveis como `.agentflow/plans/<feature-name>/001-slug-curto.md`.
-          - Cada arquivo de plano deve conter: objetivo, contexto, escopo, arquivos prováveis, passos de implementação, validação e riscos.
-          - Não implemente a feature neste node; apenas escreva os arquivos de plano.
-          - Retorne JSON válido seguindo o schema.
+          Rules:
+          - Inspect the repository before planning.
+          - Create `.agentflow/plans/<feature-name>/` if it does not already exist.
+          - Each plan must fit into one implementation session.
+          - The plans must be ordered, small, objective, and free of unnecessary overlap.
+          - Use stable names such as `.agentflow/plans/<feature-name>/001-short-slug.md`.
+          - Each plan file must include: objective, context, scope, likely files, implementation steps, validation, and risks.
+          - Do not implement the feature in this node; only write the plan files.
+          - Return valid JSON that follows the schema.
         outputs:
           plans:
             type: array
@@ -99,19 +99,24 @@ steps:
         permission:
           write: true
         prompt: |
-          Você é o agente de implementação e está operando no repositório atual.
+          You are the implementation agent operating inside the current repository.
 
-          Implemente exatamente este plano, respeitando a ordem definida pelo workflow:
+          Implement exactly this plan, respecting the workflow order:
           ${item}
 
-          Regras:
-          - Leia o arquivo indicado em `path` antes de alterar código.
-          - Implemente somente o escopo do plano atual.
-          - Não reverta mudanças existentes ou mudanças de planos anteriores.
-          - Preserve padrões, estilo e arquitetura existentes.
-          - Adicione ou ajuste testes quando o plano exigir.
-          - Execute validações relevantes quando forem rápidas e locais.
-          - Retorne JSON válido seguindo o schema.
+          Rules:
+          - Read the file referenced in `path` before changing code.
+          - Implement only the scope of the current plan.
+          - Do not revert or overwrite existing work or earlier plan changes.
+          - Preserve the repository's existing architecture, boundaries, naming, and style.
+          - Build software that is tested, maintainable, and easy to evolve.
+          - Favor clear design over cleverness.
+          - Apply pragmatic SOLID principles, small focused functions, narrow interfaces, and explicit dependencies.
+          - Avoid unnecessary abstraction, but extract helpers or types when duplication or complexity starts to hide intent.
+          - Add or update tests for every behavior change, regression risk, or bug fix introduced by the plan.
+          - Prefer small, focused test coverage that proves the behavior end to end within the plan scope.
+          - Run relevant fast local validations before finishing.
+          - Return valid JSON that follows the schema.
         outputs:
           plan_path:
             type: string
@@ -162,24 +167,24 @@ steps:
         provider: codex
         depends_on: [implement_plans]
         prompt: |
-          Você é um revisor de código pragmático.
+          You are a pragmatic code reviewer.
 
-          Revise a implementação completa depois da conclusão de todos os planos.
+          Review the complete implementation after all plans have finished.
 
-          Feature original:
+          Original feature:
           ${inputs.feature}
 
-          Planos gerados:
+          Generated plans:
           ${nodes.create_implementation_plans.output.plans}
 
-          Resultados das implementações:
+          Implementation results:
           ${nodes.implement_plans.outputs}
 
-          Regras:
-          - Priorize bugs reais, regressões, lacunas de teste e desalinhamento com a feature.
-          - Verifique se os planos foram implementados na ordem e sem escopo indevido.
-          - Não altere arquivos neste node; apenas revise.
-          - Retorne JSON válido seguindo o schema.
+          Rules:
+          - Prioritize real bugs, regressions, missing tests, and feature mismatches.
+          - Verify that the plans were implemented in order and without scope drift.
+          - Do not modify files in this node; only review.
+          - Return valid JSON that follows the schema.
         outputs:
           status:
             type: string
@@ -230,29 +235,29 @@ steps:
         permission:
           write: true
         prompt: |
-          Você é o agente de ajuste fino final.
+          You are the final fine-tuning agent.
 
-          Aplique apenas os ajustes necessários com base na revisão.
+          Apply only the adjustments required by the review.
 
-          Feature original:
+          Original feature:
           ${inputs.feature}
 
-          Planos:
+          Plans:
           ${nodes.create_implementation_plans.output.plans}
 
-          Implementações:
+          Implementations:
           ${nodes.implement_plans.outputs}
 
-          Revisão:
+          Review:
           ${nodes.review_implementation.output}
 
-          Regras:
-          - Corrija findings relevantes da revisão.
-          - Mantenha o escopo estritamente ligado à feature e aos planos.
-          - Não reescreva a implementação sem necessidade.
-          - Preserve mudanças de planos anteriores.
-          - Execute validações relevantes quando forem rápidas e locais.
-          - Retorne um resumo final objetivo.
+          Rules:
+          - Fix the review findings that are actually relevant.
+          - Keep the scope strictly tied to the feature and the plans.
+          - Do not rewrite the implementation unless it is necessary.
+          - Preserve changes made by previous plans.
+          - Run relevant fast local validations.
+          - Return a concise final summary.
         outputs:
           status:
             type: string
