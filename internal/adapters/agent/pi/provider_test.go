@@ -278,8 +278,47 @@ func TestProviderRetriesStructuredOutputInSameSession(t *testing.T) {
 	if strings.Count(promptLog, "---PROMPT---") != 2 {
 		t.Fatalf("expected 2 prompt turns, got log %q", promptLog)
 	}
+	if !strings.Contains(promptLog, "Retry attempt 1 of 5") {
+		t.Fatalf("expected retry counter in retry prompt, got %q", promptLog)
+	}
 	if !strings.Contains(promptLog, "missing required property \\\"summary\\\"") {
 		t.Fatalf("expected schema validation error in retry prompt, got %q", promptLog)
+	}
+}
+
+func TestProviderExhaustsStructuredOutputRetries(t *testing.T) {
+	dir := t.TempDir()
+	promptPath := filepath.Join(dir, "prompt.txt")
+	provider := New(writeFakePi(t, dir, fakePiInvalidStructuredText))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	_, err := provider.Run(ctx, ports.AgentRequest{
+		Prompt: "implement the plan",
+		Env: map[string]string{
+			"FAKE_PI_PROMPT_FILE": promptPath,
+		},
+		OutputSchema: map[string]any{
+			"type":     "object",
+			"required": []any{"summary"},
+			"properties": map[string]any{
+				"summary": map[string]any{"type": "string"},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected structured output retry exhaustion error")
+	}
+	if !strings.Contains(err.Error(), "initial response invalid") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	promptLog := readFile(t, promptPath)
+	if strings.Count(promptLog, "---PROMPT---") != 6 {
+		t.Fatalf("expected 6 prompt turns, got log %q", promptLog)
+	}
+	if !strings.Contains(promptLog, "Retry attempt 5 of 5") {
+		t.Fatalf("expected final retry counter in retry prompt, got %q", promptLog)
 	}
 }
 

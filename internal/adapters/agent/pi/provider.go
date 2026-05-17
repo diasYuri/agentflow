@@ -18,8 +18,9 @@ import (
 )
 
 const (
-	maxErrorOutputBytes = 4096
-	readOnlyTools       = "read,grep,find,ls"
+	maxErrorOutputBytes        = 4096
+	maxStructuredOutputRetries = 5
+	readOnlyTools              = "read,grep,find,ls"
 )
 
 type Provider struct {
@@ -81,20 +82,29 @@ func (p *Provider) Run(ctx context.Context, req ports.AgentRequest) (ports.Agent
 	var parsed any
 	var statsResp map[string]any
 	if req.OutputSchema != nil {
+		var firstValidationErr error
+		var lastValidationErr error
 		parsed, err = validateStructuredOutput(text, req.OutputSchema)
 		if err != nil {
-			firstValidationErr := err
-			retryPrompt := buildStructuredOutputRetryPrompt(err)
-			text, assistantTextResp, err = session.runTurn(ctx, "agentflow-prompt", retryPrompt)
-			if err != nil {
-				return ports.AgentResult{}, finishWithError(ctx, cmd, &waited, stderr.String(), "run pi structured output retry", err)
+			firstValidationErr = err
+			lastValidationErr = err
+			for retry := 1; retry <= maxStructuredOutputRetries; retry++ {
+				retryPrompt := buildStructuredOutputRetryPrompt(lastValidationErr, retry, maxStructuredOutputRetries)
+				text, assistantTextResp, err = session.runTurn(ctx, "agentflow-prompt", retryPrompt)
+				if err != nil {
+					return ports.AgentResult{}, finishWithError(ctx, cmd, &waited, stderr.String(), "run pi structured output retry", err)
+				}
+				if strings.TrimSpace(text) == "" && session.lastAgentError != "" {
+					return ports.AgentResult{}, finishWithError(ctx, cmd, &waited, stderr.String(), "run pi agent", errors.New(session.lastAgentError))
+				}
+				parsed, err = validateStructuredOutput(text, req.OutputSchema)
+				if err == nil {
+					break
+				}
+				lastValidationErr = err
 			}
-			if strings.TrimSpace(text) == "" && session.lastAgentError != "" {
-				return ports.AgentResult{}, finishWithError(ctx, cmd, &waited, stderr.String(), "run pi agent", errors.New(session.lastAgentError))
-			}
-			parsed, err = validateStructuredOutput(text, req.OutputSchema)
 			if err != nil {
-				return ports.AgentResult{}, finishWithError(ctx, cmd, &waited, stderr.String(), "validate pi structured output", fmt.Errorf("initial response invalid: %v; retry response invalid: %v; final text=%q", firstValidationErr, err, truncateOutput(text)))
+				return ports.AgentResult{}, finishWithError(ctx, cmd, &waited, stderr.String(), "validate pi structured output", fmt.Errorf("initial response invalid: %v; retry response invalid: %v; final text=%q", firstValidationErr, lastValidationErr, truncateOutput(text)))
 			}
 		}
 	}
@@ -488,8 +498,13 @@ func appendJSONOnlyInstruction(prompt string) string {
 	return prompt + "\n\nReturn only the final assistant message as JSON matching the requested output schema. Do not include Markdown fences, commentary, or surrounding text."
 }
 
-func buildStructuredOutputRetryPrompt(validationErr error) string {
-	return "The previous response did not match the requested JSON schema.\n\nValidation error: " + validationErr.Error() + "\n\nReturn a corrected final assistant message as JSON only. Do not include Markdown fences, commentary, or surrounding text."
+func buildStructuredOutputRetryPrompt(validationErr error, retry int, maxRetries int) string {
+	return fmt.Sprintf(
+		"The previous response did not match the requested JSON schema.\n\nValidation error: %s\n\nRetry attempt %d of %d.\nReturn a corrected final assistant message as JSON only. Do not include Markdown fences, commentary, or surrounding text.",
+		validationErr.Error(),
+		retry,
+		maxRetries,
+	)
 }
 
 func finishWithError(ctx context.Context, cmd *exec.Cmd, waited *bool, stderr string, label string, err error) error {
