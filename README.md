@@ -285,3 +285,7 @@ Para começar pelos fundamentos:
 - [`docs/claude-agent.md`](docs/claude-agent.md)
 - [`docs/pi-agent.md`](docs/pi-agent.md)
 - [`samples/README.md`](samples/README.md)
+
+Para diagnosticar performance e memória do daemon:
+
+- [`docs/debug-profiling.md`](docs/debug-profiling.md)

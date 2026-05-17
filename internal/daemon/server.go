@@ -76,6 +76,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("/v1/daemon/stop", s.handleDaemonStop)
 	mux.HandleFunc("/v1/workflows", s.handleWorkflows)
 	mux.HandleFunc("/v1/workflows/", s.handleWorkflow)
+	registerDebugRoutes(mux)
 	return mux
 }
 

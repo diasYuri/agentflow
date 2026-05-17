@@ -12,6 +12,13 @@ import (
 	"github.com/diasYuri/agentflow/internal/daemon"
 )
 
+func debugLevel() slog.Level {
+	if os.Getenv("AGENTFLOWD_DEBUG") == "1" {
+		return slog.LevelDebug
+	}
+	return slog.LevelInfo
+}
+
 func main() {
 	cfg := daemon.DefaultConfig()
 	if value := os.Getenv("AGENTFLOWD_SOCKET"); value != "" {
@@ -39,7 +46,7 @@ func main() {
 		os.Exit(1)
 	}
 	defer logFile.Close()
-	logger := slog.New(slog.NewJSONHandler(logFile, nil))
+	logger := slog.New(slog.NewJSONHandler(logFile, &slog.HandlerOptions{Level: debugLevel()}))
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if err := daemon.Run(ctx, cfg, logger); err != nil {

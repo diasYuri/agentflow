@@ -269,6 +269,10 @@ func (m *Manager) clearCheckpointForRun(runID string) {
 }
 
 func (m *Manager) WorkflowLogs(runID string) ([]string, error) {
+	logMemStats(m.logger, "WorkflowLogs start", slog.String("run_id", runID))
+	defer func() {
+		logMemStats(m.logger, "WorkflowLogs end", slog.String("run_id", runID))
+	}()
 	run, ok := m.WorkflowStatus(runID)
 	if !ok {
 		return nil, os.ErrNotExist
@@ -290,6 +294,10 @@ func (m *Manager) WorkflowLogs(runID string) ([]string, error) {
 }
 
 func (m *Manager) WorkflowEvents(runID string, cursor int, limit int) (WorkflowEventsResponse, error) {
+	logMemStats(m.logger, "WorkflowEvents start", slog.String("run_id", runID), slog.Int("cursor", cursor), slog.Int("limit", limit))
+	defer func() {
+		logMemStats(m.logger, "WorkflowEvents end", slog.String("run_id", runID))
+	}()
 	if limit <= 0 {
 		limit = defaultEventLimit
 	}
@@ -384,7 +392,9 @@ func (m *Manager) WorkflowEvents(runID string, cursor int, limit int) (WorkflowE
 }
 
 func (m *Manager) refreshRun(run WorkflowRun) WorkflowRun {
+	logMemStats(m.logger, "refreshRun start", slog.String("run_id", run.ID))
 	progress, err := loadProgress(run.RunDir)
+	logMemStats(m.logger, "refreshRun end", slog.String("run_id", run.ID), slog.Int("total_steps", progress.TotalSteps), slog.Int("completed_steps", len(progress.CompletedSteps)), slog.Int("pending_steps", len(progress.PendingSteps)), slog.Int("recent_events", len(progress.RecentEvents)))
 	if err != nil {
 		return run
 	}
@@ -871,6 +881,10 @@ func (m *Manager) WorkflowArtifacts(runID string) (WorkflowArtifactsResponse, er
 }
 
 func (m *Manager) WorkflowArtifact(runID, artifactID string) (WorkflowArtifactResponse, error) {
+	logMemStats(m.logger, "WorkflowArtifact start", slog.String("run_id", runID), slog.String("artifact_id", artifactID))
+	defer func() {
+		logMemStats(m.logger, "WorkflowArtifact end", slog.String("run_id", runID), slog.String("artifact_id", artifactID))
+	}()
 	run, ok := m.WorkflowStatus(runID)
 	if !ok {
 		return WorkflowArtifactResponse{}, os.ErrNotExist
@@ -883,15 +897,19 @@ func (m *Manager) WorkflowArtifact(runID, artifactID string) (WorkflowArtifactRe
 	if isSymlink(path) {
 		return WorkflowArtifactResponse{}, fmt.Errorf("symlink not allowed")
 	}
-	data, err := os.ReadFile(path)
+	info, err := os.Stat(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return WorkflowArtifactResponse{}, os.ErrNotExist
 		}
 		return WorkflowArtifactResponse{}, err
 	}
-	info, err := os.Stat(path)
+	logMemStats(m.logger, "WorkflowArtifact stat", slog.String("run_id", runID), slog.String("artifact_id", artifactID), slog.Int64("size_bytes", info.Size()))
+	data, err := os.ReadFile(path)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return WorkflowArtifactResponse{}, os.ErrNotExist
+		}
 		return WorkflowArtifactResponse{}, err
 	}
 	masker := m.maskerForRun(run)
@@ -932,6 +950,10 @@ func nodeResultToDTO(result corerun.NodeResult) WorkflowNodeResultDTO {
 }
 
 func (m *Manager) WorkflowNodes(runID string) (WorkflowNodesResponse, error) {
+	logMemStats(m.logger, "WorkflowNodes start", slog.String("run_id", runID))
+	defer func(start time.Time) {
+		logMemStats(m.logger, "WorkflowNodes end", slog.String("run_id", runID), slog.Duration("elapsed", time.Since(start)))
+	}(time.Now())
 	run, ok := m.WorkflowStatus(runID)
 	if !ok {
 		return WorkflowNodesResponse{}, os.ErrNotExist
