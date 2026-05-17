@@ -53,6 +53,7 @@ As entradas são combinadas nesta ordem:
 6. `--codex-path` aponta para o binário `codex` usado pelo provider `codex`.
 7. `--claude-path` aponta para o binário `claude` usado pelo provider `claude`.
 8. `--pi-path` aponta para o binário `pi` usado pelo provider `pi`.
+9. `--tag <name>` atribui um nome amigável opcional ao run. A tag é exibida em `workflow list`, `workflow status` e preservada nos artefatos do run.
 
 Quando a execução vai para o daemon, esses caminhos são enviados na requisição do run. Ao iniciar o `agentflowd`, a CLI também propaga `--codex-path` como `AGENTFLOW_CODEX_PATH`, `--claude-path` como `AGENTFLOW_CLAUDE_PATH` e `--pi-path` como `AGENTFLOW_PI_PATH`. Se o caminho do Claude ou do Pi não for informado, os adapters ainda podem resolver `CLAUDE_PATH`, `PI_PATH` ou o binário correspondente no `PATH`.
 
@@ -77,6 +78,7 @@ Os workflows são resolvidos por nome/ref, seguindo a convenção documentada em
 - `validate` e `graph` validam a definição do workflow, mas não executam etapas nem resolvem inputs externos.
 - `dry-run` não executa comandos; ele mostra o plano já resolvido em JSON para inspeção ou automação.
 - `run` aceita `--dry-run` para validar e planejar sem executar; por padrão essa solicitação vai para o daemon.
+- `run --tag <name>` adiciona um nome descritivo ao run, útil para identificar execuções em listagens.
 - `run -it` é o caminho compatível para executar no processo da CLI.
 - `provider: claude` exige Claude Code CLI disponível via `--claude-path`, `AGENTFLOW_CLAUDE_PATH`, `CLAUDE_PATH` ou `PATH`.
 - `provider: pi` exige Pi CLI disponível via `--pi-path`, `AGENTFLOW_PI_PATH`, `PI_PATH` ou `PATH`.
@@ -85,3 +87,4 @@ Os workflows são resolvidos por nome/ref, seguindo a convenção documentada em
 - `workflow watch` para automaticamente em `paused`, mostrando o hint `agentflow workflow resume <id>` para que o usuário decida quando continuar.
 - `workflow pause` é cooperativa: o runtime só pausa em pontos seguros (entre nodes, depois de gravar um resultado, durante atraso de retry). Um node ainda em execução conclui antes da pausa.
 - `workflow resume` reaproveita o request salvo no daemon. Novos `--input` ou `--var` precisam de um novo `workflow run`; o resume mantém entradas, working dir, paths de provider e demais opções do run original.
+- Tags não precisam ser únicas e não substituem o `run_id`; servem apenas para identificação visual.

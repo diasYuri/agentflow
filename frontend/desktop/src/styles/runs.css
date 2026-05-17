@@ -148,6 +148,14 @@
 	white-space: nowrap;
 }
 
+.run-item-workflow-secondary {
+	font-size: 0.6875rem;
+	color: var(--text-secondary);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
 .run-item-id {
 	font-family: var(--font-mono);
 }
@@ -210,6 +218,15 @@
 .run-workflow {
 	font-size: 0.8125rem;
 	font-weight: 500;
+}
+
+.run-tag {
+	font-size: 0.75rem;
+	font-weight: 600;
+	color: var(--accent);
+	background: var(--accent-soft);
+	padding: 0.1rem 0.4rem;
+	border-radius: 999px;
 }
 
 .run-progress {

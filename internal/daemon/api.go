@@ -64,6 +64,7 @@ type RunWorkflowRequest struct {
 	RunRoot        string         `json:"run_root,omitempty"`
 	OutputDir      string         `json:"output_dir,omitempty"`
 	DryRun         bool           `json:"dry_run,omitempty"`
+	Tag            string         `json:"tag,omitempty"`
 }
 
 type WorkflowRun struct {
@@ -83,6 +84,7 @@ type WorkflowRun struct {
 	Error          string              `json:"error,omitempty"`
 	TerminalError  string              `json:"terminal_error,omitempty"`
 	RecentEvents   []string            `json:"recent_events,omitempty"`
+	Tag            string              `json:"tag,omitempty"`
 	Request        *RunWorkflowRequest `json:"-"`
 }
 
@@ -216,6 +218,7 @@ func runOptions(req RunWorkflowRequest, runID string) runworkflow.RunOptions {
 		MaxConcurrency: req.MaxConcurrency,
 		WorkingDir:     req.WorkingDir,
 		DryRun:         req.DryRun,
+		Tag:            req.Tag,
 	}
 }
 

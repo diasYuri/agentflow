@@ -72,6 +72,7 @@ type RunMetadata struct {
 	WorkflowPath string    `json:"workflow_path"`
 	StartedAt    time.Time `json:"started_at"`
 	OutputDir    string    `json:"output_dir"`
+	Tag          string    `json:"tag,omitempty"`
 }
 
 type RunHandle struct {
@@ -91,6 +92,7 @@ type Summary struct {
 	FailedNodes int                   `json:"failed_nodes"`
 	Retries     int                   `json:"retries"`
 	Nodes       map[string]NodeResult `json:"nodes"`
+	Tag         string                `json:"tag,omitempty"`
 }
 
 type CheckpointMetrics struct {
@@ -186,6 +188,7 @@ type Checkpoint struct {
 	RetryNodeID  string                `json:"retry_node_id,omitempty"`
 	Inputs       map[string]any        `json:"inputs,omitempty"`
 	StartedAt    time.Time             `json:"started_at"`
+	Tag          string                `json:"tag,omitempty"`
 	UpdatedAt    time.Time             `json:"updated_at"`
 	Metrics      CheckpointMetrics     `json:"metrics"`
 	Nodes        map[string]NodeResult `json:"nodes,omitempty"`

@@ -646,13 +646,19 @@ nodes:
 	}
 	uc := newTestRunWorkflowUseCase(dir, shell, events)
 
-	first, err := uc.Run(context.Background(), RunOptions{WorkflowRef: workflowPath})
+	first, err := uc.Run(context.Background(), RunOptions{WorkflowRef: workflowPath, Tag: "resume-tag"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if first.Status != run.RunPaused {
 		t.Fatalf("expected paused first run, got %s", first.Status)
 	}
+	checkpoint := readCheckpoint(t, filepath.Join(first.RunDir, "checkpoint.json"))
+	if checkpoint.Tag != "resume-tag" {
+		t.Fatalf("expected checkpoint tag, got %q", checkpoint.Tag)
+	}
+	checkpoint.Tag = ""
+	writeCheckpoint(t, filepath.Join(first.RunDir, "checkpoint.json"), checkpoint)
 	resumed, err := uc.Run(context.Background(), RunOptions{ResumeRunID: first.RunID})
 	if err != nil {
 		t.Fatal(err)
@@ -676,6 +682,10 @@ nodes:
 	if resumed.Summary.Nodes["after"].Status != run.NodeSuccess {
 		t.Fatalf("expected after success, got %s", resumed.Summary.Nodes["after"].Status)
 	}
+	if resumed.Summary.Tag != "resume-tag" {
+		t.Fatalf("expected resumed summary tag, got %q", resumed.Summary.Tag)
+	}
+	assertFileContains(t, filepath.Join(resumed.RunDir, "summary.json"), `"tag": "resume-tag"`)
 	assertFileNotExists(t, filepath.Join(resumed.RunDir, "checkpoint.json"))
 	if findEvent(events.Events, "run.resumed", "") == nil {
 		t.Fatalf("expected run.resumed event, got %#v", events.Events)

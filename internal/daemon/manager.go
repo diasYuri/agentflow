@@ -86,6 +86,7 @@ func (m *Manager) StartWorkflow(req RunWorkflowRequest) (WorkflowRun, error) {
 		RunDir:    filepath.Join(runRoot, runID),
 		Status:    corerun.RunCreated,
 		StartedAt: now,
+		Tag:       req.Tag,
 		Request:   &storedReq,
 	}
 	uc, err := app.NewRunWorkflowUseCase(app.RuntimeOptions{

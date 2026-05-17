@@ -95,6 +95,7 @@ export interface RunSummary {
 	completed_steps?: string[];
 	pending_steps?: string[];
 	total_steps?: number;
+	tag?: string;
 }
 
 export interface RunWorkflowRequest {
@@ -103,6 +104,7 @@ export interface RunWorkflowRequest {
 	vars?: Record<string, unknown>;
 	max_concurrency?: number;
 	working_dir?: string;
+	tag?: string;
 }
 
 export interface ListRunsResponse {

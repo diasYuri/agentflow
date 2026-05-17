@@ -20,6 +20,7 @@ type RunSummary struct {
 	CompletedSteps []string          `json:"completed_steps,omitempty"`
 	PendingSteps   []string          `json:"pending_steps,omitempty"`
 	TotalSteps     int               `json:"total_steps,omitempty"`
+	Tag            string            `json:"tag,omitempty"`
 }
 
 // RunWorkflowRequest inicia uma execucao de workflow.
@@ -29,6 +30,7 @@ type RunWorkflowRequest struct {
 	Vars           map[string]any `json:"vars,omitempty"`
 	MaxConcurrency int            `json:"max_concurrency,omitempty"`
 	WorkingDir     string         `json:"working_dir,omitempty"`
+	Tag            string         `json:"tag,omitempty"`
 }
 
 // ListRunsResponse lista execucoes.
@@ -48,6 +50,7 @@ func toRunSummary(s runtime.RunSummary) RunSummary {
 		CompletedSteps: s.CompletedSteps,
 		PendingSteps:   s.PendingSteps,
 		TotalSteps:     s.TotalSteps,
+		Tag:            s.Tag,
 	}
 }
 
@@ -62,6 +65,7 @@ func (a *Adapter) RunWorkflow(ctx context.Context, req RunWorkflowRequest) (RunS
 		Vars:           req.Vars,
 		MaxConcurrency: req.MaxConcurrency,
 		WorkingDir:     req.WorkingDir,
+		Tag:            req.Tag,
 	})
 	if err != nil {
 		return RunSummary{}, normalizeError(err)

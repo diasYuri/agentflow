@@ -34,6 +34,7 @@ type Options struct {
 	WorkingDir     string
 	DryRun         bool
 	Pause          PauseSignaller
+	Tag            string
 }
 
 // PauseSignaller is the subset of *runtime.PauseController used by the handlers.
@@ -59,6 +60,7 @@ type ExecutionRequest struct {
 	Inputs             map[string]any
 	WorkingDir         string
 	Pause              PauseSignaller
+	Tag                string
 }
 
 func ResolveInputs(spec coreworkflow.WorkflowSpec, provided map[string]any) (map[string]any, error) {

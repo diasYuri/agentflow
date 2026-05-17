@@ -110,7 +110,22 @@ func (r *Repository) LoadCheckpoint(ctx context.Context, runID string) (run.Chec
 	if checkpoint.RunID == "" {
 		checkpoint.RunID = runID
 	}
+	if checkpoint.Tag == "" {
+		checkpoint.Tag = r.loadRunTag(dir)
+	}
 	return checkpoint, nil
+}
+
+func (r *Repository) loadRunTag(dir string) string {
+	data, err := os.ReadFile(filepath.Join(dir, "run.json"))
+	if err != nil {
+		return ""
+	}
+	var meta run.RunMetadata
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return ""
+	}
+	return meta.Tag
 }
 
 func (r *Repository) ClearCheckpoint(ctx context.Context, runID string) error {

@@ -45,7 +45,7 @@ func (e *Executor) execute(ctx context.Context, req ExecutionRequest) (Result, e
 		return Result{}, err
 	}
 	handle, err := e.svc.Runs.CreateRun(ctx, corerun.RunMetadata{
-		RunID: runID, Workflow: req.Plan.Workflow.Name, WorkflowPath: req.WorkflowSourcePath, StartedAt: now,
+		RunID: runID, Workflow: req.Plan.Workflow.Name, WorkflowPath: req.WorkflowSourcePath, StartedAt: now, Tag: req.Tag,
 	})
 	if err != nil {
 		return Result{}, err
@@ -61,6 +61,7 @@ func (e *Executor) execute(ctx context.Context, req ExecutionRequest) (Result, e
 	state := newExecutionState(runID, req.Plan, req.Inputs, secrets, corerun.NewSecretMasker(secrets), now)
 	state.workflowPath = req.WorkflowSourcePath
 	state.pause = req.Pause
+	state.tag = req.Tag
 
 	destinationDir := req.WorkingDir
 	if destinationDir == "" {
@@ -275,8 +276,12 @@ func (e *Executor) resume(ctx context.Context, req ExecutionRequest) (Result, er
 	if err != nil {
 		return Result{}, err
 	}
+	tag := req.Tag
+	if tag == "" {
+		tag = checkpoint.Tag
+	}
 	handle, err := e.svc.Runs.CreateRun(ctx, corerun.RunMetadata{
-		RunID: checkpoint.RunID, Workflow: checkpoint.Workflow.Name, WorkflowPath: checkpoint.WorkflowPath, StartedAt: checkpoint.StartedAt,
+		RunID: checkpoint.RunID, Workflow: checkpoint.Workflow.Name, WorkflowPath: checkpoint.WorkflowPath, StartedAt: checkpoint.StartedAt, Tag: tag,
 	})
 	if err != nil {
 		return Result{}, err
@@ -290,6 +295,7 @@ func (e *Executor) resume(ctx context.Context, req ExecutionRequest) (Result, er
 	state.baseWorkingDir = req.WorkingDir
 	state.workflowPath = checkpoint.WorkflowPath
 	state.pause = req.Pause
+	state.tag = tag
 	state.restoreMetrics(checkpoint.Metrics)
 	if checkpoint.Workflow.Worktree.Enabled {
 		if err := e.restoreWorktree(ctx, state, checkpoint); err != nil {

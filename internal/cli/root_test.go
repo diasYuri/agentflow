@@ -84,7 +84,7 @@ func TestWorkflowListRendersTableAndJson(t *testing.T) {
 	newDaemonClient = func(socketPath string) workflowDaemonClient {
 		return workflowDaemonClientFunc{
 			list: func(context.Context) (daemon.ListWorkflowsResponse, error) {
-				return daemon.ListWorkflowsResponse{Runs: []daemon.WorkflowRun{{ID: "run-1", Workflow: "build", Status: "running", RunDir: "/tmp/run-1", StartedAt: time.Unix(100, 0)}}}, nil
+				return daemon.ListWorkflowsResponse{Runs: []daemon.WorkflowRun{{ID: "run-1", Workflow: "build", Status: "running", RunDir: "/tmp/run-1", StartedAt: time.Unix(100, 0), Tag: "smoke-test"}}}, nil
 			},
 		}
 	}
@@ -102,6 +102,9 @@ func TestWorkflowListRendersTableAndJson(t *testing.T) {
 	if !strings.Contains(got, "ID") || !strings.Contains(got, "CONCLUÍDOS") || !strings.Contains(got, "TOTAL") || !strings.Contains(got, "run-1") {
 		t.Fatalf("unexpected list output: %q", got)
 	}
+	if !strings.Contains(got, "smoke-test") {
+		t.Fatalf("expected tag in list output: %q", got)
+	}
 
 	out.Reset()
 	cmd = NewRootCommand()
@@ -111,7 +114,7 @@ func TestWorkflowListRendersTableAndJson(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), `"id":"run-1"`) {
+	if !strings.Contains(out.String(), `"id":"run-1"`) || !strings.Contains(out.String(), `"tag":"smoke-test"`) {
 		t.Fatalf("unexpected json output: %q", out.String())
 	}
 }
@@ -174,6 +177,37 @@ func TestWorkflowListRendersElapsedTime(t *testing.T) {
 	got = out.String()
 	if strings.Contains(got, "elapsed") || !strings.Contains(got, `"started_at"`) || !strings.Contains(got, `"finished_at"`) {
 		t.Fatalf("unexpected json output: %q", got)
+	}
+}
+
+func TestWorkflowStatusRendersTag(t *testing.T) {
+	oldClient := newDaemonClient
+	newDaemonClient = func(socketPath string) workflowDaemonClient {
+		return workflowDaemonClientFunc{
+			workflowStatus: func(context.Context, string) (daemon.RunWorkflowResponse, error) {
+				return daemon.RunWorkflowResponse{Run: daemon.WorkflowRun{
+					ID:       "run-1",
+					Workflow: "build",
+					Status:   "success",
+					Tag:      "release-123",
+					RunDir:   "/tmp/run-1",
+				}}, nil
+			},
+		}
+	}
+	t.Cleanup(func() { newDaemonClient = oldClient })
+
+	cmd := NewRootCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"workflow", "status", "run-1", "--no-color"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "tag: release-123") {
+		t.Fatalf("expected tag in status output: %q", got)
 	}
 }
 
@@ -256,6 +290,31 @@ func TestRunCommandDoesNotExposeOutputDirFlag(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "unknown flag: --output-dir") {
 		t.Fatalf("expected unknown output-dir flag, got %v", err)
+	}
+}
+
+func TestRunCommandSendsTagToDaemon(t *testing.T) {
+	var got daemon.RunWorkflowRequest
+	oldClient := newWorkflowRunClient
+	newWorkflowRunClient = func(socketPath string) workflowRunClient {
+		return workflowRunClientFunc(func(ctx context.Context, req daemon.RunWorkflowRequest) (daemon.RunWorkflowResponse, error) {
+			got = req
+			return daemon.RunWorkflowResponse{Run: daemon.WorkflowRun{ID: "run-1", RunDir: "/tmp/run-1", Status: "created"}}, nil
+		})
+	}
+	t.Cleanup(func() { newWorkflowRunClient = oldClient })
+
+	cmd := NewRootCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"run", "daemon-run", "--tag", "release-123"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if got.Tag != "release-123" {
+		t.Fatalf("tag mismatch: got %q", got.Tag)
 	}
 }
 

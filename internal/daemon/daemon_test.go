@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -200,6 +201,142 @@ nodes:
 	}
 	got, _ := manager.WorkflowStatus(run.ID)
 	t.Fatalf("workflow did not complete successfully: %#v", got)
+}
+
+func TestManagerPersistsAndLoadsTag(t *testing.T) {
+	dir := shortTempDir(t)
+	home := filepath.Join(dir, "home")
+	t.Setenv("HOME", home)
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(oldwd)
+	})
+	workflowDir := filepath.Join(dir, ".agentflow", "workflows")
+	if err := os.MkdirAll(workflowDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workflowDir, "tagged.yaml"), []byte(`
+version: "1"
+name: tagged
+nodes:
+  - id: ok
+    kind: noop
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := Config{
+		SocketPath: filepath.Join(dir, "agentflowd.sock"),
+		PIDPath:    filepath.Join(dir, "agentflowd.pid"),
+		LogPath:    filepath.Join(dir, "agentflowd.log"),
+		RunRoot:    filepath.Join(dir, "runs"),
+		DBPath:     filepath.Join(dir, "agentflowd.sqlite"),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runSupervisor := suture.NewSimple("test-workflows")
+	done := make(chan error, 1)
+	go func() {
+		done <- runSupervisor.Serve(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+	store, err := OpenSQLiteRunStore(context.Background(), cfg.DBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := NewManagerWithStore(cfg, runSupervisor, nil, store)
+	run, err := manager.StartWorkflow(RunWorkflowRequest{WorkflowRef: "tagged", WorkingDir: dir, Tag: "release-42"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		got, _ := manager.WorkflowStatus(run.ID)
+		if got.Status == "success" {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	got, _ := manager.WorkflowStatus(run.ID)
+	if got.Status != "success" {
+		t.Fatalf("workflow did not complete successfully: %#v", got)
+	}
+	if got.Tag != "release-42" {
+		t.Fatalf("expected tag to be persisted, got %q", got.Tag)
+	}
+	assertFileContains(t, filepath.Join(got.RunDir, "run.json"), `"tag": "release-42"`)
+	assertFileContains(t, filepath.Join(got.RunDir, "summary.json"), `"tag": "release-42"`)
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := OpenSQLiteRunStore(context.Background(), cfg.DBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	reloaded := NewManagerWithStore(cfg, runSupervisor, nil, reopened)
+	loaded, ok := reloaded.WorkflowStatus(run.ID)
+	if !ok {
+		t.Fatalf("expected persisted run %q to load", run.ID)
+	}
+	if loaded.Tag != "release-42" {
+		t.Fatalf("expected persisted tag, got %q", loaded.Tag)
+	}
+}
+
+func TestSQLiteRunStoreMigratesRunsWithoutTag(t *testing.T) {
+	dir := shortTempDir(t)
+	dbPath := filepath.Join(dir, "agentflowd.sqlite")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`
+CREATE TABLE workflow_runs (
+	id TEXT PRIMARY KEY,
+	workflow TEXT NOT NULL,
+	run_dir TEXT NOT NULL,
+	status TEXT NOT NULL,
+	started_at TEXT NOT NULL,
+	finished_at TEXT,
+	error TEXT
+);
+INSERT INTO workflow_runs (id, workflow, run_dir, status, started_at, finished_at, error)
+VALUES ('old-run', 'old-workflow', '/tmp/old-run', 'success', '2026-05-16T12:00:00Z', NULL, '');
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := OpenSQLiteRunStore(context.Background(), dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	runs, err := store.LoadRuns(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("expected one migrated run, got %d", len(runs))
+	}
+	if runs[0].ID != "old-run" || runs[0].Tag != "" {
+		t.Fatalf("unexpected migrated run: %#v", runs[0])
+	}
 }
 
 func TestManagerLoadsPersistedWorkflowRuns(t *testing.T) {

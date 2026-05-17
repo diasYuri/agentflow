@@ -35,6 +35,7 @@ type options struct {
 	dryRun         bool
 	interactive    bool
 	noColor        bool
+	tag            string
 }
 
 type workflowRunClient interface {
@@ -178,7 +179,7 @@ func newRunCommand(opts *options) *cobra.Command {
 			}
 			result, err := uc.Run(cmd.Context(), runworkflow.RunOptions{
 				WorkflowRef: args[0], Inputs: inputs, Vars: vars, MaxConcurrency: local.maxConcurrency,
-				WorkingDir: local.workingDir, DryRun: local.dryRun,
+				WorkingDir: local.workingDir, DryRun: local.dryRun, Tag: local.tag,
 			})
 			if result.RunID != "" {
 				fmt.Fprintf(cmd.OutOrStdout(), "run_id: %s\nrun_dir: %s\nstatus: %s\n", result.RunID, result.RunDir, result.Status)
@@ -188,6 +189,7 @@ func newRunCommand(opts *options) *cobra.Command {
 	}
 	addCommonFlags(cmd, &local)
 	cmd.Flags().BoolVar(&local.dryRun, "dry-run", false, "validate and plan without executing")
+	cmd.Flags().StringVar(&local.tag, "tag", "", "friendly name for this workflow run")
 	addInteractiveFlags(cmd, &local)
 	return cmd
 }
@@ -228,7 +230,7 @@ func newWorkflowRunCommand(opts *options) *cobra.Command {
 				}
 				result, err := uc.Run(cmd.Context(), runworkflow.RunOptions{
 					WorkflowRef: args[0], Inputs: inputs, Vars: vars, MaxConcurrency: local.maxConcurrency,
-					WorkingDir: local.workingDir, DryRun: local.dryRun,
+					WorkingDir: local.workingDir, DryRun: local.dryRun, Tag: local.tag,
 				})
 				if result.RunID != "" {
 					fmt.Fprintf(cmd.OutOrStdout(), "run_id: %s\nrun_dir: %s\nstatus: %s\n", result.RunID, result.RunDir, result.Status)
@@ -240,6 +242,7 @@ func newWorkflowRunCommand(opts *options) *cobra.Command {
 	}
 	addCommonFlags(cmd, &local)
 	cmd.Flags().BoolVar(&local.dryRun, "dry-run", false, "validate and plan without executing")
+	cmd.Flags().StringVar(&local.tag, "tag", "", "friendly name for this workflow run")
 	addInteractiveFlags(cmd, &local)
 	return cmd
 }
@@ -540,6 +543,7 @@ func runWorkflowViaDaemon(cmd *cobra.Command, workflowRef string, opts *options)
 		LogFormat:      opts.logFormat,
 		EventsJSONL:    opts.eventsJSONL,
 		DryRun:         opts.dryRun,
+		Tag:            opts.tag,
 	})
 	if err != nil {
 		return err
@@ -564,6 +568,9 @@ func daemonWorkingDir(workingDir string) (string, error) {
 
 func printRun(cmd *cobra.Command, run daemon.WorkflowRun) {
 	fmt.Fprintf(cmd.OutOrStdout(), "run_id: %s\nrun_dir: %s\nstatus: %s\n", run.ID, run.RunDir, run.Status)
+	if run.Tag != "" {
+		fmt.Fprintf(cmd.OutOrStdout(), "tag: %s\n", run.Tag)
+	}
 	if run.CurrentStep != "" {
 		fmt.Fprintf(cmd.OutOrStdout(), "step: %s\n", run.CurrentStep)
 	}
@@ -604,6 +611,7 @@ func renderWorkflowList(w io.Writer, runs []daemon.WorkflowRun, format string, n
 		rows = append(rows, workflowListRow{
 			ID:        run.ID,
 			Status:    normalizeStatus(run.Status),
+			Tag:       firstNonEmpty(run.Tag, "-"),
 			Workflow:  run.Workflow,
 			Step:      firstNonEmpty(run.CurrentStep, "-"),
 			Completed: fmt.Sprintf("%d", len(run.CompletedSteps)),
@@ -612,8 +620,8 @@ func renderWorkflowList(w io.Writer, runs []daemon.WorkflowRun, format string, n
 			Age:       formatWorkflowElapsed(run),
 		})
 	}
-	cols := []string{"ID", "WORKFLOW", "STATUS", "STEP ATUAL", "CONCLUÍDOS", "TOTAL", "TEMPO", "RUN DIR"}
-	widths := []int{6, 20, 12, 18, 10, 5, 8, 0}
+	cols := []string{"ID", "TAG", "WORKFLOW", "STATUS", "STEP ATUAL", "CONCLUÍDOS", "TOTAL", "TEMPO", "RUN DIR"}
+	widths := []int{6, 12, 20, 12, 18, 10, 5, 8, 0}
 	maxWidth := terminalWidth(w)
 	if !interactive {
 		maxWidth = 0
@@ -630,13 +638,14 @@ func renderWorkflowList(w io.Writer, runs []daemon.WorkflowRun, format string, n
 	for _, row := range rows {
 		line := []string{
 			padOrTruncate(row.ID, widths[0]),
-			padOrTruncate(row.Workflow, widths[1]),
-			padOrTruncate(colorizeStatus(row.Status, effectiveNoColor), widths[2]),
-			padOrTruncate(row.Step, widths[3]),
-			padOrTruncate(row.Completed, widths[4]),
-			padOrTruncate(row.Total, widths[5]),
-			padOrTruncate(row.Age, widths[6]),
-			padOrTruncate(row.Dir, widths[7]),
+			padOrTruncate(row.Tag, widths[1]),
+			padOrTruncate(row.Workflow, widths[2]),
+			padOrTruncate(colorizeStatus(row.Status, effectiveNoColor), widths[3]),
+			padOrTruncate(row.Step, widths[4]),
+			padOrTruncate(row.Completed, widths[5]),
+			padOrTruncate(row.Total, widths[6]),
+			padOrTruncate(row.Age, widths[7]),
+			padOrTruncate(row.Dir, widths[8]),
 		}
 		fmt.Fprintln(w, strings.Join(line, "  "))
 	}
@@ -644,7 +653,7 @@ func renderWorkflowList(w io.Writer, runs []daemon.WorkflowRun, format string, n
 }
 
 type workflowListRow struct {
-	ID, Status, Workflow, Step, Completed, Total, Age, Dir string
+	ID, Status, Tag, Workflow, Step, Completed, Total, Age, Dir string
 }
 
 func renderWorkflowStatus(w io.Writer, run daemon.WorkflowRun, format string, noColor bool) error {
@@ -660,6 +669,7 @@ func renderWorkflowStatus(w io.Writer, run daemon.WorkflowRun, format string, no
 	lines := []string{
 		fmt.Sprintf("id: %s", run.ID),
 		fmt.Sprintf("workflow: %s", run.Workflow),
+		fmt.Sprintf("tag: %s", firstNonEmpty(run.Tag, "-")),
 		fmt.Sprintf("status: %s", colorizeStatus(normalizeStatus(run.Status), effectiveNoColor)),
 		fmt.Sprintf("step: %s", firstNonEmpty(run.CurrentStep, "-")),
 		fmt.Sprintf("completed: %d/%d", len(run.CompletedSteps), run.TotalSteps),

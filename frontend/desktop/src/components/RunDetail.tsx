@@ -35,6 +35,7 @@ export function RunDetail({ detail, onCancel }: RunDetailProps) {
 					</span>
 					<span className="run-id">{run.id}</span>
 					<span className="run-workflow">{run.workflow}</span>
+					{run.tag && <span className="run-tag">{run.tag}</span>}
 					{run.total_steps != null && (
 						<span className="run-progress">
 							{run.completed_steps?.length ?? 0} / {run.total_steps} steps

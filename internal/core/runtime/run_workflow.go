@@ -63,6 +63,7 @@ func (uc *RunWorkflowUseCase) Run(ctx context.Context, opts RunOptions) (RunResu
 			ResumeRunID: opts.ResumeRunID,
 			WorkingDir:  opts.WorkingDir,
 			Pause:       opts.Pause,
+			Tag:         opts.Tag,
 		})
 	}
 	prepared, err := uc.prepareRunWorkflow(ctx, opts)
@@ -79,6 +80,7 @@ func (uc *RunWorkflowUseCase) Run(ctx context.Context, opts RunOptions) (RunResu
 		Inputs:             prepared.resolvedInputs,
 		WorkingDir:         opts.WorkingDir,
 		Pause:              opts.Pause,
+		Tag:                opts.Tag,
 	})
 }
 

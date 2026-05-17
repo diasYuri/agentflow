@@ -43,6 +43,7 @@ type ExecutionState struct {
 	destinationWorkingDir string
 	worktreeBaseCommit    string
 	worktree              coreports.Worktree
+	tag                   string
 }
 
 type executionMetrics struct {
@@ -198,6 +199,7 @@ func (s *ExecutionState) spawn(plan coreworkflow.ExecutionPlan, path []string) *
 		destinationWorkingDir: s.destinationWorkingDir,
 		worktreeBaseCommit:    s.worktreeBaseCommit,
 		worktree:              s.worktree,
+		tag:                   s.tag,
 	}
 }
 
@@ -231,6 +233,7 @@ func (e *Executor) saveCheckpoint(ctx context.Context, state *ExecutionState, en
 		RetryNodeID:  retryNodeID,
 		Inputs:       state.inputs,
 		StartedAt:    state.startedAt,
+		Tag:          state.tag,
 		UpdatedAt:    e.now(),
 		Metrics: corerun.CheckpointMetrics{
 			AgentCalls: state.agentCalls(),
@@ -296,6 +299,7 @@ func (e *Executor) finish(ctx context.Context, plan coreworkflow.ExecutionPlan, 
 		RunID: state.runID, Workflow: plan.Workflow.Name, Status: status, StartedAt: state.startedAt,
 		FinishedAt: finished, DurationMS: finished.Sub(state.startedAt).Milliseconds(), AgentCalls: state.agentCalls(),
 		BashCalls: state.bashCalls(), FailedNodes: countFailedNodes(state.results), Retries: state.retries(), Nodes: state.results,
+		Tag: state.tag,
 	}
 	publicSummary := state.masker.MaskSummary(summary)
 	_ = e.svc.Runs.FinalizeRun(persistCtx, state.runID, publicSummary)

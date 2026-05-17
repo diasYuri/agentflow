@@ -75,7 +75,7 @@ func TestManagerListRuns(t *testing.T) {
 	// Simular run persistida
 	runDir := filepath.Join(tmp, "persisted-run")
 	_ = os.MkdirAll(filepath.Join(runDir, "nodes"), 0o755)
-	meta := `{"run_id":"persisted-run","workflow":"wf","started_at":"2024-01-01T00:00:00Z","output_dir":"` + runDir + `"}`
+	meta := `{"run_id":"persisted-run","workflow":"wf","started_at":"2024-01-01T00:00:00Z","output_dir":"` + runDir + `","tag":"prod-deploy"}`
 	_ = os.WriteFile(filepath.Join(runDir, "run.json"), []byte(meta), 0o644)
 	plan := `{"order":["a","b"]}`
 	_ = os.WriteFile(filepath.Join(runDir, "plan.json"), []byte(plan), 0o644)
@@ -91,6 +91,9 @@ func TestManagerListRuns(t *testing.T) {
 	}
 	if runs[0].ID != "persisted-run" {
 		t.Fatalf("unexpected run id: %s", runs[0].ID)
+	}
+	if runs[0].Tag != "prod-deploy" {
+		t.Fatalf("expected tag prod-deploy, got %s", runs[0].Tag)
 	}
 }
 

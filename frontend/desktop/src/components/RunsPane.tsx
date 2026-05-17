@@ -41,7 +41,14 @@ export function RunsPane({ state, onSelectRun, onCancelRun }: RunsPaneProps) {
 							<span className={`run-item-status status-${run.status}`}>
 								{run.status || "unknown"}
 							</span>
-							<span className="run-item-workflow">{run.workflow}</span>
+							<span className="run-item-workflow">
+								{run.tag || run.workflow}
+							</span>
+							{run.tag && (
+								<span className="run-item-workflow-secondary">
+									{run.workflow}
+								</span>
+							)}
 						</div>
 						<div className="run-item-row secondary">
 							<span className="run-item-id">{run.id}</span>

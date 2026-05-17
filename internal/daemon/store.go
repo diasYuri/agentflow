@@ -65,7 +65,8 @@ CREATE TABLE IF NOT EXISTS workflow_runs (
 	paused_at TEXT,
 	pause_reason TEXT,
 	resume_count INTEGER,
-	request_json TEXT
+	request_json TEXT,
+	tag TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_workflow_runs_started_at ON workflow_runs(started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_workflow_runs_status ON workflow_runs(status);
@@ -84,6 +85,7 @@ CREATE INDEX IF NOT EXISTS idx_workflow_runs_status ON workflow_runs(status);
 		"pause_reason TEXT",
 		"resume_count INTEGER",
 		"request_json TEXT",
+		"tag TEXT",
 	}
 	for _, col := range cols {
 		if _, err := s.db.ExecContext(ctx, `ALTER TABLE workflow_runs ADD COLUMN `+col); err != nil {
@@ -97,7 +99,7 @@ CREATE INDEX IF NOT EXISTS idx_workflow_runs_status ON workflow_runs(status);
 
 func (s *SQLiteRunStore) LoadRuns(ctx context.Context) ([]WorkflowRun, error) {
 	rows, err := s.db.QueryContext(ctx, `
-SELECT id, workflow, run_dir, status, started_at, finished_at, error, current_step, completed_steps, pending_steps, total_steps, terminal_error, recent_events, paused_at, pause_reason, resume_count, request_json
+SELECT id, workflow, run_dir, status, started_at, finished_at, error, current_step, completed_steps, pending_steps, total_steps, terminal_error, recent_events, paused_at, pause_reason, resume_count, request_json, tag
 FROM workflow_runs
 ORDER BY started_at DESC`)
 	if err != nil {
@@ -111,16 +113,30 @@ ORDER BY started_at DESC`)
 		var startedAt string
 		var finishedAt, pausedAt sql.NullString
 		var completedSteps, pendingSteps, recentEvents sql.NullString
+		var runError, currentStep, terminalError sql.NullString
 		var pauseReason, requestJSON sql.NullString
+		var tag sql.NullString
 		var totalSteps, resumeCount sql.NullInt64
 		if err := rows.Scan(
 			&run.ID, &run.Workflow, &run.RunDir, &run.Status,
-			&startedAt, &finishedAt, &run.Error,
-			&run.CurrentStep, &completedSteps, &pendingSteps,
-			&totalSteps, &run.TerminalError, &recentEvents,
-			&pausedAt, &pauseReason, &resumeCount, &requestJSON,
+			&startedAt, &finishedAt, &runError,
+			&currentStep, &completedSteps, &pendingSteps,
+			&totalSteps, &terminalError, &recentEvents,
+			&pausedAt, &pauseReason, &resumeCount, &requestJSON, &tag,
 		); err != nil {
 			return nil, err
+		}
+		if runError.Valid {
+			run.Error = runError.String
+		}
+		if currentStep.Valid {
+			run.CurrentStep = currentStep.String
+		}
+		if terminalError.Valid {
+			run.TerminalError = terminalError.String
+		}
+		if tag.Valid {
+			run.Tag = tag.String
 		}
 		parsedStartedAt, err := time.Parse(time.RFC3339Nano, startedAt)
 		if err != nil {
@@ -188,8 +204,8 @@ func (s *SQLiteRunStore) UpsertRun(ctx context.Context, run WorkflowRun) error {
 		}
 	}
 	_, err := s.db.ExecContext(ctx, `
-INSERT INTO workflow_runs (id, workflow, run_dir, status, started_at, finished_at, error, current_step, completed_steps, pending_steps, total_steps, terminal_error, recent_events, paused_at, pause_reason, resume_count, request_json)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO workflow_runs (id, workflow, run_dir, status, started_at, finished_at, error, current_step, completed_steps, pending_steps, total_steps, terminal_error, recent_events, paused_at, pause_reason, resume_count, request_json, tag)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
 	workflow = excluded.workflow,
 	run_dir = excluded.run_dir,
@@ -206,7 +222,8 @@ ON CONFLICT(id) DO UPDATE SET
 	paused_at = excluded.paused_at,
 	pause_reason = excluded.pause_reason,
 	resume_count = excluded.resume_count,
-	request_json = COALESCE(excluded.request_json, workflow_runs.request_json)`,
+	request_json = COALESCE(excluded.request_json, workflow_runs.request_json),
+	tag = COALESCE(excluded.tag, workflow_runs.tag)`,
 		run.ID,
 		run.Workflow,
 		run.RunDir,
@@ -224,6 +241,7 @@ ON CONFLICT(id) DO UPDATE SET
 		run.PauseReason,
 		run.ResumeCount,
 		requestJSON,
+		run.Tag,
 	)
 	return err
 }

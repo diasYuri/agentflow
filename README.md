@@ -184,6 +184,7 @@ Flags úteis:
 --claude-path <path>      # caminho para o binário claude
 --pi-path <path>          # caminho para o binário pi
 --events-jsonl <path>     # grava eventos em JSONL
+--tag <name>              # nome amigável opcional para o run
 ```
 
 ## DSL em poucas palavras

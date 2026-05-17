@@ -37,6 +37,7 @@ type activeRun struct {
 	startedAt  time.Time
 	finishedAt time.Time
 	err        string
+	tag        string
 	cancel     context.CancelFunc
 	mu         sync.Mutex
 }
@@ -48,6 +49,7 @@ type RunRequest struct {
 	Vars           map[string]any
 	MaxConcurrency int
 	WorkingDir     string
+	Tag            string
 }
 
 // RunSummary resume uma execucao de workflow.
@@ -63,6 +65,7 @@ type RunSummary struct {
 	CompletedSteps []string
 	PendingSteps   []string
 	TotalSteps     int
+	Tag            string
 }
 
 // NewManager cria um gerenciador de runs desktop.
@@ -146,6 +149,7 @@ func (m *Manager) RunWorkflow(ctx context.Context, req RunRequest) (RunSummary, 
 		status:    corerun.RunCreated,
 		runDir:    runDir,
 		startedAt: now,
+		tag:       req.Tag,
 	}
 
 	m.mu.Lock()
@@ -189,6 +193,7 @@ func (m *Manager) RunWorkflow(ctx context.Context, req RunRequest) (RunSummary, 
 			Vars:           req.Vars,
 			MaxConcurrency: req.MaxConcurrency,
 			WorkingDir:     req.WorkingDir,
+			Tag:            req.Tag,
 		})
 
 		ar.mu.Lock()
@@ -351,6 +356,7 @@ func (m *Manager) getRunSummary(runID string) (RunSummary, error) {
 		RunDir:    ar.runDir,
 		Status:    ar.status,
 		StartedAt: ar.startedAt,
+		Tag:       ar.tag,
 	}
 	if !ar.finishedAt.IsZero() {
 		summary.FinishedAt = ar.finishedAt
@@ -389,6 +395,7 @@ func (m *Manager) loadPersistedRun(runID string) (RunSummary, error) {
 		if err := json.Unmarshal(data, &meta); err == nil {
 			summary.Workflow = meta.Workflow
 			summary.StartedAt = meta.StartedAt
+			summary.Tag = meta.Tag
 		}
 	}
 
