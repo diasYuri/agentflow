@@ -640,7 +640,7 @@ func renderWorkflowList(w io.Writer, runs []daemon.WorkflowRun, format string, n
 			padOrTruncate(row.ID, widths[0]),
 			padOrTruncate(row.Tag, widths[1]),
 			padOrTruncate(row.Workflow, widths[2]),
-			padOrTruncate(colorizeStatus(row.Status, effectiveNoColor), widths[3]),
+			colorizeStatus(padOrTruncate(row.Status, widths[3]), effectiveNoColor),
 			padOrTruncate(row.Step, widths[4]),
 			padOrTruncate(row.Completed, widths[5]),
 			padOrTruncate(row.Total, widths[6]),

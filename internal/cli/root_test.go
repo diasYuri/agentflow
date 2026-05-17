@@ -180,6 +180,34 @@ func TestWorkflowListRendersElapsedTime(t *testing.T) {
 	}
 }
 
+func TestWorkflowListColorsStatusWithoutLeakingANSI(t *testing.T) {
+	runs := []daemon.WorkflowRun{{
+		ID:          "run-live",
+		Workflow:    "build",
+		Status:      "running",
+		CurrentStep: "implement",
+		RunDir:      "/tmp/run-live",
+		StartedAt:   time.Now(),
+	}}
+
+	var out bytes.Buffer
+	if err := renderWorkflowList(&out, runs, string(workflowOutputText), false, true); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "\x1b[36mrunning\x1b[0m") {
+		t.Fatalf("expected complete colored status with reset, got %q", got)
+	}
+	resetIndex := strings.Index(got, "\x1b[0m")
+	stepIndex := strings.Index(got, "implement")
+	if resetIndex < 0 || stepIndex < 0 || resetIndex > stepIndex {
+		t.Fatalf("expected status color to reset before next column, got %q", got)
+	}
+	if strings.Contains(got, "runnin…") {
+		t.Fatalf("expected status color not to be truncated before reset, got %q", got)
+	}
+}
+
 func TestWorkflowStatusRendersTag(t *testing.T) {
 	oldClient := newDaemonClient
 	newDaemonClient = func(socketPath string) workflowDaemonClient {
