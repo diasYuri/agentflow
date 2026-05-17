@@ -240,16 +240,11 @@ func TestWorkflowListColorsStatusWithoutLeakingANSI(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := out.String()
-	if !strings.Contains(got, "\x1b[36mrunning\x1b[0m") {
-		t.Fatalf("expected complete colored status with reset, got %q", got)
+	if !strings.Contains(got, "running") || !strings.Contains(got, "implement") {
+		t.Fatalf("expected plain list output with status and step, got %q", got)
 	}
-	resetIndex := strings.Index(got, "\x1b[0m")
-	stepIndex := strings.Index(got, "implement")
-	if resetIndex < 0 || stepIndex < 0 || resetIndex > stepIndex {
-		t.Fatalf("expected status color to reset before next column, got %q", got)
-	}
-	if strings.Contains(got, "runnin…") {
-		t.Fatalf("expected status color not to be truncated before reset, got %q", got)
+	if strings.Contains(got, "\x1b[") {
+		t.Fatalf("expected no ANSI in buffer output, got %q", got)
 	}
 }
 
@@ -338,7 +333,7 @@ func TestWorkflowStatusAndWatchRenderProgress(t *testing.T) {
 	if strings.Count(out.String(), "status:") < 2 || !strings.Contains(out.String(), "status: success") {
 		t.Fatalf("unexpected watch output: %q", out.String())
 	}
-	if !strings.Contains(out.String(), "\x1b[H\x1b[2Jid:") {
+	if !strings.Contains(out.String(), "\x1b[H\x1b[2J") || strings.Count(out.String(), "Workflow status") < 2 {
 		t.Fatalf("expected watch output to clear before refresh, got %q", out.String())
 	}
 
@@ -865,7 +860,7 @@ nodes:
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("project add: %v", err)
 	}
-	if !strings.Contains(out.String(), "added project demo") {
+	if !strings.Contains(out.String(), "Project added") || !strings.Contains(out.String(), "name: demo") {
 		t.Fatalf("unexpected add output: %q", out.String())
 	}
 

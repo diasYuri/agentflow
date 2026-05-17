@@ -12,9 +12,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 
 	"github.com/diasYuri/agentflow/internal/app"
+	corerun "github.com/diasYuri/agentflow/internal/core/run"
 	runworkflow "github.com/diasYuri/agentflow/internal/core/runtime"
 	"github.com/diasYuri/agentflow/internal/core/workflow"
 	"github.com/diasYuri/agentflow/internal/daemon"
@@ -209,7 +211,14 @@ func newRunCommand(opts *options) *cobra.Command {
 				WorkingDir: workingDir, DryRun: local.dryRun, Tag: local.tag,
 			})
 			if result.RunID != "" {
-				fmt.Fprintf(cmd.OutOrStdout(), "run_id: %s\nrun_dir: %s\nstatus: %s\n", result.RunID, result.RunDir, result.Status)
+				printRun(cmd, daemon.WorkflowRun{
+					ID:            result.RunID,
+					RunDir:        result.RunDir,
+					Status:        corerun.RunStatus(result.Status),
+					Tag:           result.Summary.Tag,
+					PauseReason:   string(result.PauseReason),
+					FailureReason: result.FailureReason,
+				}, isInteractiveWriter(cmd.OutOrStdout()))
 			}
 			return err
 		},
@@ -264,7 +273,14 @@ func newProjectAddCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "added project %s -> %s\n", project.Name, project.Path)
+			f := newCLIFormat(isInteractiveWriter(cmd.OutOrStdout()))
+			fmt.Fprintln(cmd.OutOrStdout(), f.block(
+				f.title("Project added"),
+				f.keyValueLines([][2]string{
+					{"name", project.Name},
+					{"path", project.Path},
+				}),
+			))
 			return nil
 		},
 	}
@@ -283,11 +299,19 @@ func newProjectListCommand() *cobra.Command {
 				return err
 			}
 			if len(projects) == 0 {
-				fmt.Fprintln(cmd.OutOrStdout(), "no projects")
+				f := newCLIFormat(isInteractiveWriter(cmd.OutOrStdout()))
+				fmt.Fprintln(cmd.OutOrStdout(), f.note("No projects"))
 				return nil
 			}
+			f := newCLIFormat(isInteractiveWriter(cmd.OutOrStdout()))
 			for _, project := range projects {
-				fmt.Fprintf(cmd.OutOrStdout(), "%s\t%s\n", project.Name, project.Path)
+				fmt.Fprintln(cmd.OutOrStdout(), f.block(
+					f.section("Project"),
+					f.keyValueLines([][2]string{
+						{"name", project.Name},
+						{"path", project.Path},
+					}),
+				))
 			}
 			return nil
 		},
@@ -305,7 +329,11 @@ func newProjectRemoveCommand() *cobra.Command {
 			if err := registry.Remove(args[0]); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "removed project %s\n", args[0])
+			f := newCLIFormat(isInteractiveWriter(cmd.OutOrStdout()))
+			fmt.Fprintln(cmd.OutOrStdout(), f.block(
+				f.title("Project removed"),
+				[]string{f.labelValue("name", args[0])},
+			))
 			return nil
 		},
 	}
@@ -502,21 +530,25 @@ func renderWorkflowArtifacts(w io.Writer, resp daemon.WorkflowArtifactsResponse,
 		return err
 	}
 	if len(resp.Artifacts) == 0 {
-		_, err := fmt.Fprintln(w, "no artifacts")
+		_, err := fmt.Fprintln(w, newCLIFormat(isInteractiveWriter(w)).note("No artifacts"))
 		return err
 	}
+	f := newCLIFormat(isInteractiveWriter(w))
+	headers := []string{"ID", "NAME", "TYPE", "SIZE", "NODE", "INSTANCE"}
+	widths := []int{28, 24, 18, 10, 14, 14}
+	rows := make([][]string, 0, len(resp.Artifacts))
 	for _, a := range resp.Artifacts {
-		size := humanizeBytes(a.SizeBytes)
-		line := fmt.Sprintf("%s\t%s\t%s\t%s", a.ID, a.Name, a.MediaType, size)
-		if a.NodeID != "" {
-			line += "\tnode=" + a.NodeID
-		}
-		if a.InstanceID != "" {
-			line += "\tinstance=" + a.InstanceID
-		}
-		fmt.Fprintln(w, line)
+		rows = append(rows, []string{
+			a.ID,
+			a.Name,
+			a.MediaType,
+			humanizeBytes(a.SizeBytes),
+			firstNonEmpty(a.NodeID, "-"),
+			firstNonEmpty(a.InstanceID, "-"),
+		})
 	}
-	return nil
+	_, err := fmt.Fprint(w, f.table(headers, rows, widths))
+	return err
 }
 
 func renderWorkflowArtifact(w io.Writer, resp daemon.WorkflowArtifactResponse, format string) error {
@@ -528,33 +560,34 @@ func renderWorkflowArtifact(w io.Writer, resp daemon.WorkflowArtifactResponse, f
 		_, err = fmt.Fprintln(w, string(data))
 		return err
 	}
+	f := newCLIFormat(isInteractiveWriter(w))
 	lines := []string{
-		fmt.Sprintf("id: %s", resp.ID),
-		fmt.Sprintf("name: %s", resp.Name),
-		fmt.Sprintf("size: %s", humanizeBytes(resp.SizeBytes)),
-		fmt.Sprintf("media_type: %s", resp.MediaType),
-		fmt.Sprintf("kind: %s", resp.Kind),
+		f.labelValue("id", resp.ID),
+		f.labelValue("name", resp.Name),
+		f.labelValue("size", humanizeBytes(resp.SizeBytes)),
+		f.labelValue("media_type", resp.MediaType),
+		f.labelValue("kind", string(resp.Kind)),
 	}
 	if resp.NodeID != "" {
-		lines = append(lines, fmt.Sprintf("node_id: %s", resp.NodeID))
+		lines = append(lines, f.labelValue("node_id", resp.NodeID))
 	}
 	if resp.InstanceID != "" {
-		lines = append(lines, fmt.Sprintf("instance_id: %s", resp.InstanceID))
+		lines = append(lines, f.labelValue("instance_id", resp.InstanceID))
 	}
 	if resp.Description != "" {
-		lines = append(lines, fmt.Sprintf("description: %s", resp.Description))
+		lines = append(lines, f.labelValue("description", resp.Description))
 	}
 	if resp.Truncated {
-		lines = append(lines, fmt.Sprintf("truncated: true (limit %d bytes)", daemon.MaxArtifactInline))
+		lines = append(lines, f.labelValue("truncated", fmt.Sprintf("true (limit %d bytes)", daemon.MaxArtifactInline)))
 	}
 	if resp.IsText {
-		lines = append(lines, "---")
+		lines = append(lines, f.section("Content"))
 		lines = append(lines, resp.TextContent)
 	} else if resp.Content != "" {
-		lines = append(lines, "---")
-		lines = append(lines, fmt.Sprintf("[binary content, %s encoded, %s]", resp.Encoding, humanizeBytes(resp.SizeBytes)))
+		lines = append(lines, f.section("Content"))
+		lines = append(lines, f.note(fmt.Sprintf("[binary content, %s encoded, %s]", resp.Encoding, humanizeBytes(resp.SizeBytes))))
 	} else {
-		lines = append(lines, fmt.Sprintf("[binary content omitted, size %s]", humanizeBytes(resp.SizeBytes)))
+		lines = append(lines, f.note(fmt.Sprintf("[binary content omitted, size %s]", humanizeBytes(resp.SizeBytes))))
 	}
 	for _, line := range lines {
 		if _, err := fmt.Fprintln(w, line); err != nil {
@@ -584,7 +617,7 @@ func newWorkflowCancelCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			printRun(cmd, resp.Run)
+			printRun(cmd, resp.Run, isInteractiveWriter(cmd.OutOrStdout()))
 			return nil
 		},
 	}
@@ -603,7 +636,7 @@ func newWorkflowPauseCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			printRun(cmd, resp.Run)
+			printRun(cmd, resp.Run, isInteractiveWriter(cmd.OutOrStdout()))
 			return nil
 		},
 	}
@@ -622,7 +655,7 @@ func newWorkflowResumeCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			printRun(cmd, resp.Run)
+			printRun(cmd, resp.Run, isInteractiveWriter(cmd.OutOrStdout()))
 			return nil
 		},
 	}
@@ -645,7 +678,14 @@ func newDaemonStartCommand(opts *options) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client := newDaemonClient("")
 			if status, err := client.Status(cmd.Context()); err == nil && status.Running {
-				fmt.Fprintf(cmd.OutOrStdout(), "agentflowd already running\npid: %d\nsocket: %s\n", status.PID, status.Socket)
+				f := newCLIFormat(isInteractiveWriter(cmd.OutOrStdout()))
+				fmt.Fprintln(cmd.OutOrStdout(), f.block(
+					f.title("agentflowd already running"),
+					f.keyValueLines([][2]string{
+						{"pid", fmt.Sprint(status.PID)},
+						{"socket", status.Socket},
+					}),
+				))
 				return nil
 			}
 			path, err := findAgentflowd()
@@ -673,12 +713,26 @@ func newDaemonStartCommand(opts *options) *cobra.Command {
 			for time.Now().Before(deadline) {
 				status, err := client.Status(cmd.Context())
 				if err == nil && status.Running {
-					fmt.Fprintf(cmd.OutOrStdout(), "agentflowd started\npid: %d\nsocket: %s\n", status.PID, status.Socket)
+					f := newCLIFormat(isInteractiveWriter(cmd.OutOrStdout()))
+					fmt.Fprintln(cmd.OutOrStdout(), f.block(
+						f.title("agentflowd started"),
+						f.keyValueLines([][2]string{
+							{"pid", fmt.Sprint(status.PID)},
+							{"socket", status.Socket},
+						}),
+					))
 					return nil
 				}
 				time.Sleep(100 * time.Millisecond)
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "agentflowd starting\npid: %d\nsocket: %s\n", proc.Process.Pid, cfg.SocketPath)
+			f := newCLIFormat(isInteractiveWriter(cmd.OutOrStdout()))
+			fmt.Fprintln(cmd.OutOrStdout(), f.block(
+				f.title("agentflowd starting"),
+				f.keyValueLines([][2]string{
+					{"pid", fmt.Sprint(proc.Process.Pid)},
+					{"socket", cfg.SocketPath},
+				}),
+			))
 			return nil
 		},
 	}
@@ -697,7 +751,8 @@ func newDaemonStopCommand() *cobra.Command {
 			if _, err := newDaemonClient("").Stop(cmd.Context()); err != nil {
 				return err
 			}
-			fmt.Fprintln(cmd.OutOrStdout(), "agentflowd stopping")
+			f := newCLIFormat(isInteractiveWriter(cmd.OutOrStdout()))
+			fmt.Fprintln(cmd.OutOrStdout(), f.note("agentflowd stopping"))
 			return nil
 		},
 	}
@@ -713,7 +768,16 @@ func newDaemonStatusCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "running: %t\npid: %d\nsocket: %s\nruns: %d\n", status.Running, status.PID, status.Socket, status.Runs)
+			f := newCLIFormat(isInteractiveWriter(cmd.OutOrStdout()))
+			fmt.Fprintln(cmd.OutOrStdout(), f.block(
+				f.title("agentflowd status"),
+				f.keyValueLines([][2]string{
+					{"running", fmt.Sprint(status.Running)},
+					{"pid", fmt.Sprint(status.PID)},
+					{"socket", status.Socket},
+					{"runs", fmt.Sprint(status.Runs)},
+				}),
+			))
 			return nil
 		},
 	}
@@ -850,7 +914,7 @@ func runWorkflowViaDaemon(cmd *cobra.Command, workflowRef string, opts *options)
 	if err != nil {
 		return err
 	}
-	printRun(cmd, resp.Run)
+	printRun(cmd, resp.Run, isInteractiveWriter(cmd.OutOrStdout()))
 	return nil
 }
 
@@ -868,29 +932,35 @@ func daemonWorkingDir(workingDir string) (string, error) {
 	return abs, nil
 }
 
-func printRun(cmd *cobra.Command, run daemon.WorkflowRun) {
-	fmt.Fprintf(cmd.OutOrStdout(), "run_id: %s\nrun_dir: %s\nstatus: %s\n", run.ID, run.RunDir, run.Status)
+func printRun(cmd *cobra.Command, run daemon.WorkflowRun, colored bool) {
+	f := newCLIFormat(colored)
+	lines := []string{
+		f.labelValue("run_id", run.ID),
+		f.labelValue("run_dir", run.RunDir),
+		f.labelValue("status", f.status(string(run.Status))),
+	}
 	if run.Tag != "" {
-		fmt.Fprintf(cmd.OutOrStdout(), "tag: %s\n", run.Tag)
+		lines = append(lines, f.labelValue("tag", run.Tag))
 	}
 	if run.CurrentStep != "" {
-		fmt.Fprintf(cmd.OutOrStdout(), "step: %s\n", run.CurrentStep)
+		lines = append(lines, f.labelValue("step", run.CurrentStep))
 	}
 	if run.PauseReason != "" {
-		fmt.Fprintf(cmd.OutOrStdout(), "pause_reason: %s\n", run.PauseReason)
+		lines = append(lines, f.labelValue("pause_reason", run.PauseReason))
 	}
 	if run.ResumeCount > 0 {
-		fmt.Fprintf(cmd.OutOrStdout(), "resume_count: %d\n", run.ResumeCount)
+		lines = append(lines, f.labelValue("resume_count", fmt.Sprint(run.ResumeCount)))
 	}
 	if run.Error != "" {
-		fmt.Fprintf(cmd.OutOrStdout(), "error: %s\n", run.Error)
+		lines = append(lines, f.labelValue("error", run.Error))
 	}
 	if run.FailureReason != "" {
-		fmt.Fprintf(cmd.OutOrStdout(), "failure_reason: %s\n", run.FailureReason)
+		lines = append(lines, f.labelValue("failure_reason", run.FailureReason))
 	}
 	if run.TerminalError != "" {
-		fmt.Fprintf(cmd.OutOrStdout(), "terminal_error: %s\n", run.TerminalError)
+		lines = append(lines, f.labelValue("terminal_error", run.TerminalError))
 	}
+	fmt.Fprintln(cmd.OutOrStdout(), f.block(f.title("Run"), lines))
 }
 
 type workflowOutputFormat string
@@ -910,10 +980,11 @@ func renderWorkflowList(w io.Writer, runs []daemon.WorkflowRun, format string, n
 		return err
 	}
 	if len(runs) == 0 {
-		_, err := fmt.Fprintln(w, "no workflow runs")
+		_, err := fmt.Fprintln(w, newCLIFormat(noColor || !interactive).note("No workflow runs"))
 		return err
 	}
 	effectiveNoColor := noColor || !interactive
+	f := newCLIFormat(!effectiveNoColor)
 	rows := make([]workflowListRow, 0, len(runs))
 	for _, run := range runs {
 		rows = append(rows, workflowListRow{
@@ -935,29 +1006,29 @@ func renderWorkflowList(w io.Writer, runs []daemon.WorkflowRun, format string, n
 		maxWidth = 0
 	}
 	for i, col := range cols {
-		if len(col) > widths[i] {
-			widths[i] = len(col)
+		if w := lipgloss.Width(col); w > widths[i] {
+			widths[i] = w
 		}
 	}
 	if maxWidth > 0 {
 		widths = fitWidths(widths, maxWidth, 2)
 	}
-	fmt.Fprintln(w, strings.Join(renderHeader(cols, widths), "  "))
+	tableRows := make([][]string, 0, len(rows))
 	for _, row := range rows {
-		line := []string{
-			padOrTruncate(row.ID, widths[0]),
-			padOrTruncate(row.Tag, widths[1]),
-			padOrTruncate(row.Workflow, widths[2]),
-			colorizeStatus(padOrTruncate(row.Status, widths[3]), effectiveNoColor),
-			padOrTruncate(row.Step, widths[4]),
-			padOrTruncate(row.Completed, widths[5]),
-			padOrTruncate(row.Total, widths[6]),
-			padOrTruncate(row.Age, widths[7]),
-			padOrTruncate(row.Dir, widths[8]),
-		}
-		fmt.Fprintln(w, strings.Join(line, "  "))
+		tableRows = append(tableRows, []string{
+			row.ID,
+			row.Tag,
+			row.Workflow,
+			row.Status,
+			row.Step,
+			row.Completed,
+			row.Total,
+			row.Age,
+			row.Dir,
+		})
 	}
-	return nil
+	_, err := fmt.Fprint(w, f.table(cols, tableRows, widths))
+	return err
 }
 
 type workflowListRow struct {
@@ -973,39 +1044,37 @@ func renderWorkflowStatus(w io.Writer, run daemon.WorkflowRun, format string, no
 		_, err = fmt.Fprintln(w, string(data))
 		return err
 	}
-	effectiveNoColor := noColor || !isInteractiveWriter(w)
+	f := newCLIFormat(!(noColor || !isInteractiveWriter(w)))
 	lines := []string{
-		fmt.Sprintf("id: %s", run.ID),
-		fmt.Sprintf("workflow: %s", run.Workflow),
-		fmt.Sprintf("tag: %s", firstNonEmpty(run.Tag, "-")),
-		fmt.Sprintf("status: %s", colorizeStatus(normalizeStatus(run.Status), effectiveNoColor)),
-		fmt.Sprintf("step: %s", firstNonEmpty(run.CurrentStep, "-")),
-		fmt.Sprintf("completed: %d/%d", len(run.CompletedSteps), run.TotalSteps),
-		fmt.Sprintf("pending: %d", len(run.PendingSteps)),
-		fmt.Sprintf("run_dir: %s", run.RunDir),
+		f.labelValue("id", run.ID),
+		f.labelValue("workflow", run.Workflow),
+		f.labelValue("tag", firstNonEmpty(run.Tag, "-")),
+		f.labelValue("status", f.status(normalizeStatus(run.Status))),
+		f.labelValue("step", firstNonEmpty(run.CurrentStep, "-")),
+		f.labelValue("completed", fmt.Sprintf("%d/%d", len(run.CompletedSteps), run.TotalSteps)),
+		f.labelValue("pending", fmt.Sprintf("%d", len(run.PendingSteps))),
+		f.labelValue("run_dir", run.RunDir),
 	}
 	if run.PauseReason != "" {
-		lines = append(lines, fmt.Sprintf("pause_reason: %s", run.PauseReason))
+		lines = append(lines, f.labelValue("pause_reason", run.PauseReason))
 	}
 	if run.ResumeCount > 0 {
-		lines = append(lines, fmt.Sprintf("resume_count: %d", run.ResumeCount))
+		lines = append(lines, f.labelValue("resume_count", fmt.Sprint(run.ResumeCount)))
 	}
 	if run.Error != "" {
-		lines = append(lines, fmt.Sprintf("error: %s", run.Error))
+		lines = append(lines, f.labelValue("error", run.Error))
 	}
 	if run.FailureReason != "" {
-		lines = append(lines, fmt.Sprintf("failure_reason: %s", run.FailureReason))
+		lines = append(lines, f.labelValue("failure_reason", run.FailureReason))
 	}
 	if run.TerminalError != "" {
-		lines = append(lines, fmt.Sprintf("terminal_error: %s", run.TerminalError))
+		lines = append(lines, f.labelValue("terminal_error", run.TerminalError))
 	}
-	for _, line := range lines {
-		if _, err := fmt.Fprintln(w, line); err != nil {
-			return err
-		}
+	if _, err := fmt.Fprintln(w, f.block(f.title("Workflow status"), lines)); err != nil {
+		return err
 	}
 	if normalizeStatus(run.Status) == "paused" {
-		_, _ = fmt.Fprintln(w, "hint: run `agentflow workflow resume "+run.ID+"` to continue")
+		_, _ = fmt.Fprintln(w, f.note("hint: run `agentflow workflow resume "+run.ID+"` to continue"))
 	}
 	return nil
 }
@@ -1054,24 +1123,6 @@ func isTerminalStatus(status any) bool {
 		return true
 	default:
 		return false
-	}
-}
-
-func colorizeStatus(status string, noColor bool) string {
-	if noColor {
-		return status
-	}
-	switch status {
-	case "success":
-		return "\x1b[32m" + status + "\x1b[0m"
-	case "failed", "cancelled", "canceled", "timeout":
-		return "\x1b[31m" + status + "\x1b[0m"
-	case "running":
-		return "\x1b[36m" + status + "\x1b[0m"
-	case "paused":
-		return "\x1b[33m" + status + "\x1b[0m"
-	default:
-		return status
 	}
 }
 
@@ -1141,14 +1192,6 @@ func fitWidths(widths []int, maxWidth int, gap int) []int {
 	}
 	result[len(result)-1] = remaining
 	return result
-}
-
-func renderHeader(cols []string, widths []int) []string {
-	out := make([]string, len(cols))
-	for i := range cols {
-		out[i] = padOrTruncate(cols[i], widths[i])
-	}
-	return out
 }
 
 func padOrTruncate(value string, width int) string {
