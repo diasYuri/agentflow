@@ -281,6 +281,12 @@ func TestProviderRetriesStructuredOutputInSameSession(t *testing.T) {
 	if !strings.Contains(promptLog, "Retry attempt 1 of 5") {
 		t.Fatalf("expected retry counter in retry prompt, got %q", promptLog)
 	}
+	if !strings.Contains(promptLog, "Requested JSON schema") {
+		t.Fatalf("expected schema in retry prompt, got %q", promptLog)
+	}
+	if !strings.Contains(promptLog, "\\\"summary\\\":{\\\"type\\\":\\\"string\\\"}") {
+		t.Fatalf("expected serialized schema in retry prompt, got %q", promptLog)
+	}
 	if !strings.Contains(promptLog, "missing required property \\\"summary\\\"") {
 		t.Fatalf("expected schema validation error in retry prompt, got %q", promptLog)
 	}
@@ -319,6 +325,9 @@ func TestProviderExhaustsStructuredOutputRetries(t *testing.T) {
 	}
 	if !strings.Contains(promptLog, "Retry attempt 5 of 5") {
 		t.Fatalf("expected final retry counter in retry prompt, got %q", promptLog)
+	}
+	if !strings.Contains(promptLog, "Requested JSON schema") {
+		t.Fatalf("expected schema in retry prompt, got %q", promptLog)
 	}
 }
 
