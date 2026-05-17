@@ -246,6 +246,7 @@ func newWorkflowCommand(opts *options) *cobra.Command {
 		newWorkflowLogsCommand(),
 		newWorkflowArtifactsCommand(),
 		newWorkflowArtifactCommand(),
+		newWorkflowScheduleCommand(opts),
 		newWorkflowCancelCommand(),
 		newWorkflowPauseCommand(),
 		newWorkflowResumeCommand(),

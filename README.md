@@ -169,6 +169,7 @@ agentflow tui                              # lança a interface terminal interat
 agentflow workflow list                    # lista runs conhecidos
 agentflow workflow status <run_id>         # mostra status de um run
 agentflow workflow logs <run_id>           # imprime eventos do run
+agentflow workflow schedule add <workflow> # agenda um workflow localmente
 agentflow workflow cancel <run_id>         # cancela um run em execução
 agentflow daemon start|stop|status         # controla o agentflowd
 ```

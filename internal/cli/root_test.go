@@ -1351,3 +1351,128 @@ func TestWorkflowInspectRendersTextAndJson(t *testing.T) {
 		t.Fatalf("expected json output, got %q", out.String())
 	}
 }
+
+func TestWorkflowScheduleCommandExists(t *testing.T) {
+	cmd := NewRootCommand()
+	workflow := findSubcommand(cmd, "workflow")
+	if workflow == nil {
+		t.Fatal("expected workflow command")
+	}
+	if schedule := findSubcommand(workflow, "schedule"); schedule == nil {
+		t.Fatal("expected schedule subcommand")
+	}
+}
+
+func TestWorkflowScheduleAddListRemove(t *testing.T) {
+	dir := t.TempDir()
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(oldwd)
+	})
+	t.Setenv("HOME", dir)
+	t.Setenv("AGENTFLOW_PATH", "/tmp/agentflow")
+
+	workflowDir := filepath.Join(dir, ".agentflow", "workflows")
+	if err := os.MkdirAll(workflowDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workflowDir, "nightly.yaml"), []byte(`
+version: "1"
+name: nightly
+nodes:
+  - id: plan
+    kind: noop
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	fakeInstaller := &fakeScheduleInstaller{}
+	oldInstaller := newScheduleDispatcherInstaller
+	newScheduleDispatcherInstaller = func() scheduleDispatcherInstaller { return fakeInstaller }
+	t.Cleanup(func() { newScheduleDispatcherInstaller = oldInstaller })
+
+	cmd := NewRootCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"workflow", "schedule", "add", "nightly", "--every", "15m", "--tag", "nightly-run", "--input", "flag=true"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("add schedule: %v\n%s", err, out.String())
+	}
+	if fakeInstaller.ensureCalls != 1 {
+		t.Fatalf("expected installer ensure call, got %d", fakeInstaller.ensureCalls)
+	}
+	if fakeInstaller.binaryPath != "/tmp/agentflow" {
+		t.Fatalf("expected agentflow binary path, got %q", fakeInstaller.binaryPath)
+	}
+
+	registry := newScheduleRegistry()
+	schedules, err := registry.List()
+	if err != nil {
+		t.Fatalf("list schedules: %v", err)
+	}
+	if len(schedules) != 1 {
+		t.Fatalf("expected 1 schedule, got %d", len(schedules))
+	}
+	scheduleID := schedules[0].ID
+	if schedules[0].ScheduleType != "every" || schedules[0].Every != "15m0s" {
+		t.Fatalf("unexpected schedule stored: %#v", schedules[0])
+	}
+	if !strings.Contains(out.String(), scheduleID) {
+		t.Fatalf("expected schedule id in add output, got %q", out.String())
+	}
+
+	out.Reset()
+	cmd = NewRootCommand()
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"workflow", "schedule", "list", "--output", "json"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("list schedules: %v\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), scheduleID) || !strings.Contains(out.String(), `"schedule_type":"every"`) {
+		t.Fatalf("unexpected list output: %q", out.String())
+	}
+
+	out.Reset()
+	cmd = NewRootCommand()
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"workflow", "schedule", "remove", scheduleID})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("remove schedule: %v\n%s", err, out.String())
+	}
+	if fakeInstaller.removeCalls != 1 {
+		t.Fatalf("expected installer remove call, got %d", fakeInstaller.removeCalls)
+	}
+	schedules, err = registry.List()
+	if err != nil {
+		t.Fatalf("list schedules after remove: %v", err)
+	}
+	if len(schedules) != 0 {
+		t.Fatalf("expected no schedules after remove, got %#v", schedules)
+	}
+}
+
+type fakeScheduleInstaller struct {
+	ensureCalls int
+	removeCalls int
+	binaryPath  string
+}
+
+func (f *fakeScheduleInstaller) Ensure(ctx context.Context, binaryPath string) error {
+	f.ensureCalls++
+	f.binaryPath = binaryPath
+	return nil
+}
+
+func (f *fakeScheduleInstaller) Remove(ctx context.Context) error {
+	f.removeCalls++
+	return nil
+}

@@ -32,6 +32,9 @@ Em [`internal/cli/root.go`](/Users/yuri/git/diasYuri/agentflow/internal/cli/root
 - `workflow cancel <id>`: cancela um run em execução ou pausado, removendo o checkpoint salvo.
 - `workflow pause <id>`: solicita pausa cooperativa no próximo checkpoint seguro do runtime. Nodes em andamento concluem antes da pausa.
 - `workflow resume <id>`: retoma um run pausado a partir do checkpoint. Usa o request original; novos `--input`/`--var` não são aceitos no resume para manter reprodutibilidade.
+- `workflow schedule add <workflow>`: cria um agendamento local persistido em `~/.agentflow/schedules.json` e instala um dispatcher do sistema operacional para disparar `workflow run -it`.
+- `workflow schedule list`: lista os agendamentos locais.
+- `workflow schedule remove <id>`: remove um agendamento e desinstala o dispatcher quando não restarem schedules.
 - `daemon start|stop|status`: controla o processo `agentflowd`.
 - `tui`: lança a interface terminal interativa (TUI). Aceita `--workflow`, `--run`, `--daemon`, `--no-mouse` e `--theme`. Veja [`docs/tui.md`](docs/tui.md) para detalhes completos.
 
@@ -84,6 +87,8 @@ Os workflows são resolvidos por nome/ref, seguindo a convenção documentada em
 - `run` aceita `--dry-run` para validar e planejar sem executar; por padrão essa solicitação vai para o daemon.
 - `run --tag <name>` adiciona um nome descritivo ao run, útil para identificar execuções em listagens.
 - `run -it` é o caminho compatível para executar no processo da CLI.
+- `workflow schedule add` aceita `--cron` ou `--every`, além das mesmas flags de execução usadas por `run` para congelar inputs e variáveis no agendamento.
+- `workflow schedule` depende de uma instalação estável do binário `agentflow`; se `agentflow` não estiver no `PATH`, use `AGENTFLOW_PATH`.
 - `provider: claude` exige Claude Code CLI disponível via `--claude-path`, `AGENTFLOW_CLAUDE_PATH`, `CLAUDE_PATH` ou `PATH`.
 - `provider: pi` exige Pi CLI disponível via `--pi-path`, `AGENTFLOW_PI_PATH`, `PI_PATH` ou `PATH`.
 - A CLI não expõe `--output-dir`; os runs são gravados no storage local padrão em `.agentflow/runs` ou `~/.agentflow/runs`, dependendo do modo de execução.
