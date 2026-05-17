@@ -27,6 +27,7 @@ type Adapter struct {
 	workflows ports.WorkflowRepository
 	ucFactory func() (*runworkflow.RunWorkflowUseCase, error)
 	store     SettingsStore
+	projects  *app.ProjectRegistry
 	fs        FileSystem
 	runtime   *runtime.Manager
 	recentMu  sync.Mutex
@@ -37,6 +38,7 @@ func NewAdapter(
 	workflows ports.WorkflowRepository,
 	ucFactory func() (*runworkflow.RunWorkflowUseCase, error),
 	store SettingsStore,
+	projects *app.ProjectRegistry,
 	fs FileSystem,
 	rt *runtime.Manager,
 ) *Adapter {
@@ -47,6 +49,7 @@ func NewAdapter(
 		workflows: workflows,
 		ucFactory: ucFactory,
 		store:     store,
+		projects:  projects,
 		fs:        fs,
 		runtime:   rt,
 	}
@@ -56,6 +59,7 @@ func NewAdapter(
 func NewDefaultAdapter() *Adapter {
 	workflows := yamlrepo.NewWorkflowRepository()
 	store := NewJSONSettingsStore(DefaultSettingsPath())
+	projects := app.NewProjectRegistry(app.NewJSONProjectStore(app.DefaultProjectsPath()))
 	ucFactory := func() (*runworkflow.RunWorkflowUseCase, error) {
 		settings, err := store.Load()
 		if err != nil {
@@ -65,7 +69,7 @@ func NewDefaultAdapter() *Adapter {
 	}
 	settings, _ := store.Load()
 	rt := runtime.NewManager("", settings.CodexPath, settings.ClaudePath, settings.PiPath, settings.LogFormat)
-	return NewAdapter(workflows, ucFactory, store, nil, rt)
+	return NewAdapter(workflows, ucFactory, store, projects, nil, rt)
 }
 
 // LoadWorkflow le um workflow por path e retorna metadados e conteudo bruto.
@@ -271,6 +275,47 @@ func (a *Adapter) UpdateAppSettings(settings AppSettings) error {
 	}
 	if a.runtime != nil {
 		a.runtime.Configure(settings.CodexPath, settings.ClaudePath, settings.PiPath, settings.LogFormat)
+	}
+	return nil
+}
+
+// ListProjects retorna os projetos configurados localmente.
+func (a *Adapter) ListProjects() ([]ProjectSummary, error) {
+	if a.projects == nil {
+		return nil, DesktopError{Message: "project registry not configured", Code: ErrCodeInternalError}
+	}
+	projects, err := a.projects.List()
+	if err != nil {
+		return nil, normalizeError(err)
+	}
+	result := make([]ProjectSummary, len(projects))
+	for i, project := range projects {
+		result[i] = ProjectSummary{
+			Name: project.Name,
+			Path: project.Path,
+		}
+	}
+	return result, nil
+}
+
+// AddProject adiciona um projeto ao registry local.
+func (a *Adapter) AddProject(name, path string) error {
+	if a.projects == nil {
+		return DesktopError{Message: "project registry not configured", Code: ErrCodeInternalError}
+	}
+	if err := a.projects.Add(name, path); err != nil {
+		return normalizeError(err)
+	}
+	return nil
+}
+
+// RemoveProject remove um projeto do registry local.
+func (a *Adapter) RemoveProject(name string) error {
+	if a.projects == nil {
+		return DesktopError{Message: "project registry not configured", Code: ErrCodeInternalError}
+	}
+	if err := a.projects.Remove(name); err != nil {
+		return normalizeError(err)
 	}
 	return nil
 }

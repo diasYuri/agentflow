@@ -28,6 +28,7 @@ type options struct {
 	vars           []string
 	maxConcurrency int
 	workingDir     string
+	project        string
 	codexPath      string
 	claudePath     string
 	piPath         string
@@ -80,6 +81,7 @@ func NewRootCommand() *cobra.Command {
 		newRunCommand(opts),
 		newGraphCommand(opts),
 		newMigrateCommand(),
+		newProjectCommand(),
 		newDaemonCommand(opts),
 		newWorkflowCommand(opts),
 		newTUICommand(),
@@ -97,7 +99,11 @@ func newValidateCommand(opts *options) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			plan, err := uc.Validate(cmd.Context(), args[0])
+			ref, err := resolveWorkflowRefForCLI(args[0], opts.project)
+			if err != nil {
+				return err
+			}
+			plan, err := uc.Validate(cmd.Context(), ref)
 			if err != nil {
 				return err
 			}
@@ -105,6 +111,7 @@ func newValidateCommand(opts *options) *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().StringVar(&opts.project, "project", "", "project name to resolve the workflow within")
 	return cmd
 }
 
@@ -123,13 +130,18 @@ func newGraphCommand(opts *options) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			plan, err := uc.Validate(cmd.Context(), args[0])
+			ref, err := resolveWorkflowRefForCLI(args[0], local.project)
+			if err != nil {
+				return err
+			}
+			plan, err := uc.Validate(cmd.Context(), ref)
 			if err != nil {
 				return err
 			}
 			return workflow.WriteMermaidGraph(cmd.OutOrStdout(), plan)
 		},
 	}
+	cmd.Flags().StringVar(&local.project, "project", "", "project name to resolve the workflow within")
 	cmd.Flags().StringVar(&local.graphFormat, "format", "mermaid", "graph output format (mermaid)")
 	return cmd
 }
@@ -149,9 +161,13 @@ func newDryRunCommand(opts *options) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			ref, workingDir, err := resolveWorkflowRunContext(cmd, args[0], &local)
+			if err != nil {
+				return err
+			}
 			plan, resolved, err := uc.DryRun(cmd.Context(), runworkflow.RunOptions{
-				WorkflowRef: args[0], Inputs: inputs, Vars: vars, MaxConcurrency: local.maxConcurrency,
-				WorkingDir: local.workingDir,
+				WorkflowRef: ref, Inputs: inputs, Vars: vars, MaxConcurrency: local.maxConcurrency,
+				WorkingDir: workingDir,
 			})
 			if err != nil {
 				return err
@@ -184,9 +200,13 @@ func newRunCommand(opts *options) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			ref, workingDir, err := resolveWorkflowRunContext(cmd, args[0], &local)
+			if err != nil {
+				return err
+			}
 			result, err := uc.Run(cmd.Context(), runworkflow.RunOptions{
-				WorkflowRef: args[0], Inputs: inputs, Vars: vars, MaxConcurrency: local.maxConcurrency,
-				WorkingDir: local.workingDir, DryRun: local.dryRun, Tag: local.tag,
+				WorkflowRef: ref, Inputs: inputs, Vars: vars, MaxConcurrency: local.maxConcurrency,
+				WorkingDir: workingDir, DryRun: local.dryRun, Tag: local.tag,
 			})
 			if result.RunID != "" {
 				fmt.Fprintf(cmd.OutOrStdout(), "run_id: %s\nrun_dir: %s\nstatus: %s\n", result.RunID, result.RunDir, result.Status)
@@ -221,6 +241,77 @@ func newWorkflowCommand(opts *options) *cobra.Command {
 	return cmd
 }
 
+func newProjectCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "project",
+		Short: "Manage named project roots",
+	}
+	cmd.AddCommand(newProjectAddCommand(), newProjectListCommand(), newProjectRemoveCommand())
+	return cmd
+}
+
+func newProjectAddCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "add <name> <path>",
+		Short: "Register a project root",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			registry := newCLIProjectRegistry()
+			if err := registry.Add(args[0], args[1]); err != nil {
+				return err
+			}
+			project, err := registry.Resolve(args[0])
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "added project %s -> %s\n", project.Name, project.Path)
+			return nil
+		},
+	}
+	return cmd
+}
+
+func newProjectListCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "list",
+		Short: "List configured projects",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			registry := newCLIProjectRegistry()
+			projects, err := registry.List()
+			if err != nil {
+				return err
+			}
+			if len(projects) == 0 {
+				fmt.Fprintln(cmd.OutOrStdout(), "no projects")
+				return nil
+			}
+			for _, project := range projects {
+				fmt.Fprintf(cmd.OutOrStdout(), "%s\t%s\n", project.Name, project.Path)
+			}
+			return nil
+		},
+	}
+	return cmd
+}
+
+func newProjectRemoveCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "remove <name>",
+		Short: "Remove a registered project",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			registry := newCLIProjectRegistry()
+			if err := registry.Remove(args[0]); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "removed project %s\n", args[0])
+			return nil
+		},
+	}
+	return cmd
+}
+
 func newWorkflowRunCommand(opts *options) *cobra.Command {
 	local := *opts
 	cmd := &cobra.Command{
@@ -237,9 +328,13 @@ func newWorkflowRunCommand(opts *options) *cobra.Command {
 				if err != nil {
 					return err
 				}
+				ref, workingDir, err := resolveWorkflowRunContext(cmd, args[0], &local)
+				if err != nil {
+					return err
+				}
 				result, err := uc.Run(cmd.Context(), runworkflow.RunOptions{
-					WorkflowRef: args[0], Inputs: inputs, Vars: vars, MaxConcurrency: local.maxConcurrency,
-					WorkingDir: local.workingDir, DryRun: local.dryRun, Tag: local.tag,
+					WorkflowRef: ref, Inputs: inputs, Vars: vars, MaxConcurrency: local.maxConcurrency,
+					WorkingDir: workingDir, DryRun: local.dryRun, Tag: local.tag,
 				})
 				if result.RunID != "" {
 					fmt.Fprintf(cmd.OutOrStdout(), "run_id: %s\nrun_dir: %s\nstatus: %s\n", result.RunID, result.RunDir, result.Status)
@@ -630,6 +725,7 @@ func addCommonFlags(cmd *cobra.Command, opts *options) {
 	cmd.Flags().StringArrayVar(&opts.vars, "var", nil, "workflow var override key=value, repeatable")
 	cmd.Flags().IntVar(&opts.maxConcurrency, "max-concurrency", 0, "override execution.max_concurrency")
 	cmd.Flags().StringVar(&opts.workingDir, "working-dir", ".", "base working directory for the run")
+	cmd.Flags().StringVar(&opts.project, "project", "", "project name to resolve the workflow within")
 	cmd.Flags().StringVar(&opts.codexPath, "codex-path", "", "path to codex binary")
 	cmd.Flags().StringVar(&opts.claudePath, "claude-path", "", "path to claude binary")
 	cmd.Flags().StringVar(&opts.piPath, "pi-path", "", "path to pi binary")
@@ -675,17 +771,70 @@ func addInteractiveFlags(cmd *cobra.Command, opts *options) {
 	}
 }
 
+func newCLIProjectRegistry() *app.ProjectRegistry {
+	return app.NewProjectRegistry(app.NewJSONProjectStore(app.DefaultProjectsPath()))
+}
+
+func isWorkflowPath(ref string) bool {
+	ext := strings.ToLower(filepath.Ext(ref))
+	if ext != ".yaml" && ext != ".yml" {
+		return false
+	}
+	if strings.Contains(ref, string(filepath.Separator)) || filepath.IsAbs(ref) {
+		return true
+	}
+	if _, err := os.Stat(ref); err == nil {
+		return true
+	}
+	return false
+}
+
+func resolveWorkflowRefForCLI(workflowRef, projectName string) (string, error) {
+	projectName = strings.TrimSpace(projectName)
+	if projectName == "" || isWorkflowPath(workflowRef) {
+		return workflowRef, nil
+	}
+	project, err := newCLIProjectRegistry().Resolve(projectName)
+	if err != nil {
+		return "", err
+	}
+	return app.ResolveWorkflowRef(app.Project{Name: project.Name, Path: project.Path}, workflowRef)
+}
+
+func resolveWorkflowRunContext(cmd *cobra.Command, workflowRef string, opts *options) (string, string, error) {
+	resolvedRef, err := resolveWorkflowRefForCLI(workflowRef, opts.project)
+	if err != nil {
+		return "", "", err
+	}
+
+	workingDir := opts.workingDir
+	workingDirExplicit := cmd.Flags().Changed("working-dir")
+	projectName := strings.TrimSpace(opts.project)
+	if projectName != "" && !workingDirExplicit {
+		project, err := newCLIProjectRegistry().Resolve(projectName)
+		if err != nil {
+			return "", "", err
+		}
+		workingDir = project.Path
+	}
+	normalizedWorkingDir, err := daemonWorkingDir(workingDir)
+	if err != nil {
+		return "", "", err
+	}
+	return resolvedRef, normalizedWorkingDir, nil
+}
+
 func runWorkflowViaDaemon(cmd *cobra.Command, workflowRef string, opts *options) error {
 	inputs, vars, err := parseInputsAndVars(opts)
 	if err != nil {
 		return err
 	}
-	workingDir, err := daemonWorkingDir(opts.workingDir)
+	ref, workingDir, err := resolveWorkflowRunContext(cmd, workflowRef, opts)
 	if err != nil {
 		return err
 	}
 	resp, err := newWorkflowRunClient("").RunWorkflow(cmd.Context(), daemon.RunWorkflowRequest{
-		WorkflowRef:    workflowRef,
+		WorkflowRef:    ref,
 		Inputs:         inputs,
 		Vars:           vars,
 		MaxConcurrency: opts.maxConcurrency,

@@ -80,6 +80,12 @@ type AppSettings struct {
 	LogFormat     string   `json:"logFormat"`
 }
 
+// ProjectSummary describes a configured project.
+type ProjectSummary struct {
+	Name string `json:"name"`
+	Path string `json:"path"`
+}
+
 // FileSystem abstrai operacoes de arquivo para testabilidade.
 type FileSystem interface {
 	ReadFile(name string) ([]byte, error)

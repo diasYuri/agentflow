@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/diasYuri/agentflow/internal/app"
 	"github.com/diasYuri/agentflow/internal/core/ports"
 	corerun "github.com/diasYuri/agentflow/internal/core/run"
 	runworkflow "github.com/diasYuri/agentflow/internal/core/runtime"
@@ -80,6 +81,29 @@ func (m *mockSettingsStore) Save(settings AppSettings) error {
 	return m.err
 }
 
+type mockProjectStore struct {
+	projects []app.Project
+	err      error
+}
+
+func (m *mockProjectStore) Load() ([]app.Project, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	out := make([]app.Project, len(m.projects))
+	copy(out, m.projects)
+	return out, nil
+}
+
+func (m *mockProjectStore) Save(projects []app.Project) error {
+	if m.err != nil {
+		return m.err
+	}
+	m.projects = make([]app.Project, len(projects))
+	copy(m.projects, projects)
+	return nil
+}
+
 func TestAdapter_LoadWorkflow(t *testing.T) {
 	spec := &workflow.WorkflowSpec{
 		Version:     "1",
@@ -99,7 +123,7 @@ func TestAdapter_LoadWorkflow(t *testing.T) {
 		},
 	}
 
-	a := NewAdapter(&mockWorkflowRepo{spec: spec, path: "/tmp/test.yaml"}, nil, &mockSettingsStore{}, fs, nil)
+	a := NewAdapter(&mockWorkflowRepo{spec: spec, path: "/tmp/test.yaml"}, nil, &mockSettingsStore{}, nil, fs, nil)
 
 	got, err := a.LoadWorkflow(context.Background(), "/tmp/test.yaml")
 	if err != nil {
@@ -123,7 +147,7 @@ func TestAdapter_LoadWorkflow(t *testing.T) {
 }
 
 func TestAdapter_LoadWorkflow_NotFound(t *testing.T) {
-	a := NewAdapter(&mockWorkflowRepo{}, nil, &mockSettingsStore{}, &mockFS{}, nil)
+	a := NewAdapter(&mockWorkflowRepo{}, nil, &mockSettingsStore{}, nil, &mockFS{}, nil)
 
 	_, err := a.LoadWorkflow(context.Background(), "/tmp/missing.yaml")
 	if err == nil {
@@ -183,7 +207,7 @@ func TestAdapter_ResolveInput(t *testing.T) {
 		},
 	}
 
-	a := NewAdapter(&mockWorkflowRepo{spec: spec, path: "/tmp/input-test.yaml"}, nil, &mockSettingsStore{}, fs, nil)
+	a := NewAdapter(&mockWorkflowRepo{spec: spec, path: "/tmp/input-test.yaml"}, nil, &mockSettingsStore{}, nil, fs, nil)
 
 	resolved, err := a.ResolveInput(context.Background(), "/tmp/input-test.yaml", map[string]any{
 		"name": "Alice",
@@ -213,7 +237,7 @@ func TestAdapter_DryRunWorkflow(t *testing.T) {
 
 func TestAdapter_SaveWorkflow(t *testing.T) {
 	fs := &mockFS{}
-	a := NewAdapter(nil, nil, &mockSettingsStore{}, fs, nil)
+	a := NewAdapter(nil, nil, &mockSettingsStore{}, nil, fs, nil)
 
 	err := a.SaveWorkflow("/tmp/workflows/test.yaml", "version: \"1\"\nname: test")
 	if err != nil {
@@ -227,7 +251,7 @@ func TestAdapter_SaveWorkflow(t *testing.T) {
 
 func TestAdapter_SaveInput(t *testing.T) {
 	fs := &mockFS{}
-	a := NewAdapter(nil, nil, &mockSettingsStore{}, fs, nil)
+	a := NewAdapter(nil, nil, &mockSettingsStore{}, nil, fs, nil)
 
 	err := a.SaveInput("/tmp/inputs/test.json", `{"key":"value"}`)
 	if err != nil {
@@ -241,7 +265,7 @@ func TestAdapter_SaveInput(t *testing.T) {
 
 func TestAdapter_GetUpdateAppSettings(t *testing.T) {
 	store := &mockSettingsStore{settings: defaultSettings()}
-	a := NewAdapter(nil, nil, store, &mockFS{}, nil)
+	a := NewAdapter(nil, nil, store, nil, &mockFS{}, nil)
 
 	settings, err := a.GetAppSettings()
 	if err != nil {
@@ -262,6 +286,33 @@ func TestAdapter_GetUpdateAppSettings(t *testing.T) {
 	}
 	if got.Theme != "dark" {
 		t.Errorf("expected theme dark, got %s", got.Theme)
+	}
+}
+
+func TestAdapter_ProjectCRUD(t *testing.T) {
+	projectStore := &mockProjectStore{projects: []app.Project{{Name: "demo", Path: "/tmp/demo"}}}
+	a := NewAdapter(nil, nil, &mockSettingsStore{}, app.NewProjectRegistry(projectStore), &mockFS{}, nil)
+
+	projects, err := a.ListProjects()
+	if err != nil {
+		t.Fatalf("list projects: %v", err)
+	}
+	if len(projects) != 1 {
+		t.Fatalf("expected 1 project, got %d", len(projects))
+	}
+
+	if err := a.AddProject("extra", "/tmp/extra"); err != nil {
+		t.Fatalf("add project: %v", err)
+	}
+	if len(projectStore.projects) != 2 {
+		t.Fatalf("expected 2 stored projects, got %d", len(projectStore.projects))
+	}
+
+	if err := a.RemoveProject("demo"); err != nil {
+		t.Fatalf("remove project: %v", err)
+	}
+	if len(projectStore.projects) != 1 || projectStore.projects[0].Name != "extra" {
+		t.Fatalf("unexpected projects after remove: %#v", projectStore.projects)
 	}
 }
 
@@ -287,7 +338,7 @@ func TestAdapter_ListWorkflows(t *testing.T) {
 		osUserHomeDir = oldUserHomeDir
 	}()
 
-	a := NewAdapter(nil, nil, &mockSettingsStore{}, fs, nil)
+	a := NewAdapter(nil, nil, &mockSettingsStore{}, nil, fs, nil)
 
 	list, err := a.ListWorkflows()
 	if err != nil {
@@ -402,7 +453,7 @@ func TestAdapter_ResolveInput_Error(t *testing.T) {
 			"/tmp/input-test.yaml": []byte("version: \"1\"\nname: input-test"),
 		},
 	}
-	a := NewAdapter(&mockWorkflowRepo{spec: spec, path: "/tmp/input-test.yaml"}, nil, &mockSettingsStore{}, fs, nil)
+	a := NewAdapter(&mockWorkflowRepo{spec: spec, path: "/tmp/input-test.yaml"}, nil, &mockSettingsStore{}, nil, fs, nil)
 	_, err := a.ResolveInput(context.Background(), "/tmp/input-test.yaml", map[string]any{})
 	if err == nil {
 		t.Fatal("expected error for missing required input")
@@ -425,7 +476,7 @@ nodes:
     kind: noop
 `)
 	m := runtime.NewManager(tmp, "", "", "", "")
-	a := NewAdapter(nil, nil, &mockSettingsStore{}, &mockFS{}, m)
+	a := NewAdapter(nil, nil, &mockSettingsStore{}, nil, &mockFS{}, m)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -485,7 +536,7 @@ func TestAdapter_GetRunArtifacts(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(runDir, "artifacts", "subdir", "nested.txt"), []byte("world"), 0o644)
 
 	m := runtime.NewManager(tmp, "", "", "", "")
-	a := NewAdapter(nil, nil, &mockSettingsStore{}, &mockFS{}, m)
+	a := NewAdapter(nil, nil, &mockSettingsStore{}, nil, &mockFS{}, m)
 
 	resp, err := a.GetRunArtifacts("run-1")
 	if err != nil {
@@ -517,7 +568,7 @@ func TestAdapter_GetRunArtifacts_Index(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(runDir, "artifacts", "index.json"), idxData, 0o644)
 
 	m := runtime.NewManager(tmp, "", "", "", "")
-	a := NewAdapter(nil, nil, &mockSettingsStore{}, &mockFS{}, m)
+	a := NewAdapter(nil, nil, &mockSettingsStore{}, nil, &mockFS{}, m)
 
 	resp, err := a.GetRunArtifacts("run-1")
 	if err != nil {
@@ -548,7 +599,7 @@ func TestAdapter_GetRunArtifacts_Fallback(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(runDir, "artifacts", "legacy.txt"), []byte("legacy"), 0o644)
 
 	m := runtime.NewManager(tmp, "", "", "", "")
-	a := NewAdapter(nil, nil, &mockSettingsStore{}, &mockFS{}, m)
+	a := NewAdapter(nil, nil, &mockSettingsStore{}, nil, &mockFS{}, m)
 
 	resp, err := a.GetRunArtifacts("run-1")
 	if err != nil {
@@ -583,7 +634,7 @@ func TestAdapter_GetRunArtifact_Text(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(runDir, "artifacts", "index.json"), idxData, 0o644)
 
 	m := runtime.NewManager(tmp, "", "", "", "")
-	a := NewAdapter(nil, nil, &mockSettingsStore{}, &mockFS{}, m)
+	a := NewAdapter(nil, nil, &mockSettingsStore{}, nil, &mockFS{}, m)
 
 	resp, err := a.GetRunArtifact("run-1", "nodes/a/stdout.txt")
 	if err != nil {
@@ -623,7 +674,7 @@ func TestAdapter_GetRunArtifact_Binary(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(runDir, "artifacts", "index.json"), idxData, 0o644)
 
 	m := runtime.NewManager(tmp, "", "", "", "")
-	a := NewAdapter(nil, nil, &mockSettingsStore{}, &mockFS{}, m)
+	a := NewAdapter(nil, nil, &mockSettingsStore{}, nil, &mockFS{}, m)
 
 	resp, err := a.GetRunArtifact("run-1", "image.png")
 	if err != nil {
@@ -664,7 +715,7 @@ func TestAdapter_GetRunArtifact_Truncated(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(runDir, "artifacts", "index.json"), idxData, 0o644)
 
 	m := runtime.NewManager(tmp, "", "", "", "")
-	a := NewAdapter(nil, nil, &mockSettingsStore{}, &mockFS{}, m)
+	a := NewAdapter(nil, nil, &mockSettingsStore{}, nil, &mockFS{}, m)
 
 	resp, err := a.GetRunArtifact("run-1", "large.txt")
 	if err != nil {
@@ -702,7 +753,7 @@ func TestAdapter_GetRunArtifactPath(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(runDir, "artifacts", "index.json"), idxData, 0o644)
 
 	m := runtime.NewManager(tmp, "", "", "", "")
-	a := NewAdapter(nil, nil, &mockSettingsStore{}, &mockFS{}, m)
+	a := NewAdapter(nil, nil, &mockSettingsStore{}, nil, &mockFS{}, m)
 
 	path, err := a.GetRunArtifactPath("run-1", "nodes/a/stdout.txt")
 	if err != nil {
@@ -720,7 +771,7 @@ func TestAdapter_GetRunArtifactPath_NotIndexed(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(runDir, "artifacts", "legacy.txt"), []byte("legacy"), 0o644)
 
 	m := runtime.NewManager(tmp, "", "", "", "")
-	a := NewAdapter(nil, nil, &mockSettingsStore{}, &mockFS{}, m)
+	a := NewAdapter(nil, nil, &mockSettingsStore{}, nil, &mockFS{}, m)
 
 	_, err := a.GetRunArtifactPath("run-1", "legacy.txt")
 	if err == nil {
@@ -744,7 +795,7 @@ func TestAdapter_GetRunArtifact_PathTraversal(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(runDir, "secret.txt"), []byte("secret"), 0o644)
 
 	m := runtime.NewManager(tmp, "", "", "", "")
-	a := NewAdapter(nil, nil, &mockSettingsStore{}, &mockFS{}, m)
+	a := NewAdapter(nil, nil, &mockSettingsStore{}, nil, &mockFS{}, m)
 
 	_, err := a.GetRunArtifact("run-1", "../secret.txt")
 	if err == nil {
@@ -766,7 +817,7 @@ func TestAdapter_GetRunArtifact_Fallback(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(runDir, "artifacts", "fallback.txt"), []byte("fallback content"), 0o644)
 
 	m := runtime.NewManager(tmp, "", "", "", "")
-	a := NewAdapter(nil, nil, &mockSettingsStore{}, &mockFS{}, m)
+	a := NewAdapter(nil, nil, &mockSettingsStore{}, nil, &mockFS{}, m)
 
 	resp, err := a.GetRunArtifact("run-1", "fallback.txt")
 	if err != nil {
@@ -794,7 +845,7 @@ func TestAdapter_GetRunNodes(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(runDir, "nodes", "a", "result.json"), data, 0o644)
 
 	m := runtime.NewManager(tmp, "", "", "", "")
-	a := NewAdapter(nil, nil, &mockSettingsStore{}, &mockFS{}, m)
+	a := NewAdapter(nil, nil, &mockSettingsStore{}, nil, &mockFS{}, m)
 
 	resp, err := a.GetRunNodes("run-1")
 	if err != nil {
@@ -819,7 +870,7 @@ func TestAdapter_GetRunNode(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(runDir, "nodes", "a", "result.json"), data, 0o644)
 
 	m := runtime.NewManager(tmp, "", "", "", "")
-	a := NewAdapter(nil, nil, &mockSettingsStore{}, &mockFS{}, m)
+	a := NewAdapter(nil, nil, &mockSettingsStore{}, nil, &mockFS{}, m)
 
 	resp, err := a.GetRunNode("run-1", "a")
 	if err != nil {
@@ -848,7 +899,7 @@ func TestAdapter_GetRunPlan(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(runDir, "plan.json"), []byte(`{"order":["a"]}`), 0o644)
 
 	m := runtime.NewManager(tmp, "", "", "", "")
-	a := NewAdapter(nil, nil, &mockSettingsStore{}, &mockFS{}, m)
+	a := NewAdapter(nil, nil, &mockSettingsStore{}, nil, &mockFS{}, m)
 
 	resp, err := a.GetRunPlan("run-1")
 	if err != nil {
@@ -869,7 +920,7 @@ func TestAdapter_GetRunLogs(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(runDir, "events.jsonl"), []byte("line1\nline2\n"), 0o644)
 
 	m := runtime.NewManager(tmp, "", "", "", "")
-	a := NewAdapter(nil, nil, &mockSettingsStore{}, &mockFS{}, m)
+	a := NewAdapter(nil, nil, &mockSettingsStore{}, nil, &mockFS{}, m)
 
 	resp, err := a.GetRunLogs("run-1")
 	if err != nil {
@@ -894,7 +945,7 @@ func TestAdapter_GetRunEvents(t *testing.T) {
 	), 0o644)
 
 	m := runtime.NewManager(tmp, "", "", "", "")
-	a := NewAdapter(nil, nil, &mockSettingsStore{}, &mockFS{}, m)
+	a := NewAdapter(nil, nil, &mockSettingsStore{}, nil, &mockFS{}, m)
 
 	resp, err := a.GetRunEvents("run-1", 0, 2)
 	if err != nil {

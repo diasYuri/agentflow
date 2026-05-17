@@ -54,6 +54,7 @@ func TestDesktopService_Greet(t *testing.T) {
 func TestDesktopService_AdapterDelegation(t *testing.T) {
 	// Usa o adapter default; os metodos que precisam de filesystem vao retornar
 	// erro controlado quando o path nao existe, o que ja valida o binding.
+	t.Setenv("HOME", t.TempDir())
 	svc := NewDesktopService(nil)
 	if err := svc.ServiceStartup(context.Background(), nil); err != nil {
 		t.Fatal(err)
@@ -95,12 +96,28 @@ func TestDesktopService_AdapterDelegation(t *testing.T) {
 			t.Errorf("expected default theme system, got %s", settings.Theme)
 		}
 	})
+
+	t.Run("Project CRUD", func(t *testing.T) {
+		if err := svc.AddProject("demo", t.TempDir()); err != nil {
+			t.Fatalf("add project: %v", err)
+		}
+		projects, err := svc.ListProjects()
+		if err != nil {
+			t.Fatalf("list projects: %v", err)
+		}
+		if len(projects) != 1 || projects[0].Name != "demo" {
+			t.Fatalf("unexpected projects: %#v", projects)
+		}
+		if err := svc.RemoveProject("demo"); err != nil {
+			t.Fatalf("remove project: %v", err)
+		}
+	})
 }
 
 func TestDesktopService_RunBindingErrors(t *testing.T) {
 	// Usa adapter sem runtime inicializado para validar que o binding
 	// delega corretamente e retorna erros normalizados.
-	svc := NewDesktopService(adapter.NewAdapter(nil, nil, nil, nil, nil))
+	svc := NewDesktopService(adapter.NewAdapter(nil, nil, nil, nil, nil, nil))
 	if err := svc.ServiceStartup(context.Background(), nil); err != nil {
 		t.Fatal(err)
 	}

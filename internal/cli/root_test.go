@@ -779,6 +779,88 @@ func TestWorkflowArtifactPathPrintsPath(t *testing.T) {
 	}
 }
 
+func TestProjectCommandsAndResolution(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	projectRoot := filepath.Join(t.TempDir(), "demo-project")
+	workflowDir := filepath.Join(projectRoot, ".agentflow", "workflows")
+	if err := os.MkdirAll(workflowDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	workflowPath := filepath.Join(workflowDir, "demo.yaml")
+	if err := os.WriteFile(workflowPath, []byte(`version: "1"
+name: demo
+nodes:
+  - id: ok
+    kind: noop
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := NewRootCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"project", "add", "demo", projectRoot})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("project add: %v", err)
+	}
+	if !strings.Contains(out.String(), "added project demo") {
+		t.Fatalf("unexpected add output: %q", out.String())
+	}
+
+	out.Reset()
+	cmd = NewRootCommand()
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"project", "list"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("project list: %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "demo") || !strings.Contains(got, filepath.Clean(projectRoot)) {
+		t.Fatalf("unexpected list output: %q", got)
+	}
+
+	out.Reset()
+	cmd = NewRootCommand()
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"validate", "demo", "--project", "demo"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("validate project workflow: %v", err)
+	}
+	if !strings.Contains(out.String(), "valid: demo") {
+		t.Fatalf("unexpected validate output: %q", out.String())
+	}
+
+	var gotReq daemon.RunWorkflowRequest
+	oldRunClient := newWorkflowRunClient
+	newWorkflowRunClient = func(socketPath string) workflowRunClient {
+		return workflowRunClientFunc(func(ctx context.Context, req daemon.RunWorkflowRequest) (daemon.RunWorkflowResponse, error) {
+			gotReq = req
+			return daemon.RunWorkflowResponse{Run: daemon.WorkflowRun{ID: "run-1", RunDir: "/tmp/run-1", Status: "created"}}, nil
+		})
+	}
+	t.Cleanup(func() { newWorkflowRunClient = oldRunClient })
+
+	out.Reset()
+	cmd = NewRootCommand()
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"run", "demo", "--project", "demo"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("run project workflow: %v", err)
+	}
+	if gotReq.WorkflowRef != workflowPath {
+		t.Fatalf("expected resolved workflow path %q, got %q", workflowPath, gotReq.WorkflowRef)
+	}
+	if gotReq.WorkingDir != filepath.Clean(projectRoot) {
+		t.Fatalf("expected working dir %q, got %q", filepath.Clean(projectRoot), gotReq.WorkingDir)
+	}
+}
+
 type workflowRunClientFunc func(context.Context, daemon.RunWorkflowRequest) (daemon.RunWorkflowResponse, error)
 
 func (f workflowRunClientFunc) RunWorkflow(ctx context.Context, req daemon.RunWorkflowRequest) (daemon.RunWorkflowResponse, error) {

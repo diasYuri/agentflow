@@ -120,6 +120,21 @@ func (s *DesktopService) UpdateAppSettings(settings adapter.AppSettings) error {
 	return s.adapter.UpdateAppSettings(settings)
 }
 
+// ListProjects lista os projetos configurados.
+func (s *DesktopService) ListProjects() ([]adapter.ProjectSummary, error) {
+	return s.adapter.ListProjects()
+}
+
+// AddProject adiciona um projeto local.
+func (s *DesktopService) AddProject(name string, path string) error {
+	return s.adapter.AddProject(name, path)
+}
+
+// RemoveProject remove um projeto local.
+func (s *DesktopService) RemoveProject(name string) error {
+	return s.adapter.RemoveProject(name)
+}
+
 // RunWorkflow inicia uma execucao de workflow.
 func (s *DesktopService) RunWorkflow(req adapter.RunWorkflowRequest) (adapter.RunSummary, error) {
 	return s.adapter.RunWorkflow(s.ctx, req)

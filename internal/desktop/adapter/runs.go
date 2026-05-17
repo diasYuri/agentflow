@@ -2,8 +2,12 @@ package adapter
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
+	"github.com/diasYuri/agentflow/internal/app"
 	corerun "github.com/diasYuri/agentflow/internal/core/run"
 	"github.com/diasYuri/agentflow/internal/desktop/runtime"
 )
@@ -26,6 +30,7 @@ type RunSummary struct {
 // RunWorkflowRequest inicia uma execucao de workflow.
 type RunWorkflowRequest struct {
 	WorkflowRef    string         `json:"workflow_ref"`
+	Project        string         `json:"project,omitempty"`
 	Inputs         map[string]any `json:"inputs,omitempty"`
 	Vars           map[string]any `json:"vars,omitempty"`
 	MaxConcurrency int            `json:"max_concurrency,omitempty"`
@@ -59,18 +64,84 @@ func (a *Adapter) RunWorkflow(ctx context.Context, req RunWorkflowRequest) (RunS
 	if a.runtime == nil {
 		return RunSummary{}, DesktopError{Message: "runtime not initialized", Code: ErrCodeInternalError}
 	}
+	resolvedReq, err := a.resolveProjectRunRequest(req)
+	if err != nil {
+		return RunSummary{}, normalizeError(err)
+	}
 	s, err := a.runtime.RunWorkflow(ctx, runtime.RunRequest{
-		WorkflowRef:    req.WorkflowRef,
-		Inputs:         req.Inputs,
-		Vars:           req.Vars,
-		MaxConcurrency: req.MaxConcurrency,
-		WorkingDir:     req.WorkingDir,
-		Tag:            req.Tag,
+		WorkflowRef:    resolvedReq.WorkflowRef,
+		Inputs:         resolvedReq.Inputs,
+		Vars:           resolvedReq.Vars,
+		MaxConcurrency: resolvedReq.MaxConcurrency,
+		WorkingDir:     resolvedReq.WorkingDir,
+		Tag:            resolvedReq.Tag,
 	})
 	if err != nil {
 		return RunSummary{}, normalizeError(err)
 	}
 	return toRunSummary(s), nil
+}
+
+func (a *Adapter) resolveProjectRunRequest(req RunWorkflowRequest) (RunWorkflowRequest, error) {
+	if a.projects == nil {
+		req.WorkingDir = normalizeWorkingDir(req.WorkingDir)
+		return req, nil
+	}
+
+	projectName := strings.TrimSpace(req.Project)
+	if projectName == "" {
+		req.WorkingDir = normalizeWorkingDir(req.WorkingDir)
+		return req, nil
+	}
+
+	project, err := a.projects.Resolve(projectName)
+	if err != nil {
+		return req, err
+	}
+
+	if req.WorkflowRef != "" && !isWorkflowPath(req.WorkflowRef) {
+		resolved, err := app.ResolveWorkflowRef(app.Project{Name: project.Name, Path: project.Path}, req.WorkflowRef)
+		if err != nil {
+			return req, err
+		}
+		req.WorkflowRef = resolved
+	}
+
+	if strings.TrimSpace(req.WorkingDir) == "" {
+		req.WorkingDir = project.Path
+	} else {
+		req.WorkingDir = normalizeWorkingDir(req.WorkingDir)
+	}
+	return req, nil
+}
+
+func normalizeWorkingDir(workingDir string) string {
+	workingDir = strings.TrimSpace(workingDir)
+	if workingDir == "" {
+		return ""
+	}
+	if filepath.IsAbs(workingDir) {
+		return filepath.Clean(workingDir)
+	}
+	abs, err := filepath.Abs(workingDir)
+	if err != nil {
+		return filepath.Clean(workingDir)
+	}
+	return abs
+}
+
+func isWorkflowPath(ref string) bool {
+	ext := strings.ToLower(filepath.Ext(ref))
+	if ext != ".yaml" && ext != ".yml" {
+		return false
+	}
+	if strings.Contains(ref, string(filepath.Separator)) || filepath.IsAbs(ref) {
+		return true
+	}
+	if _, err := os.Stat(ref); err == nil {
+		return true
+	}
+	return false
 }
 
 // CancelRun cancela uma execucao ativa.
