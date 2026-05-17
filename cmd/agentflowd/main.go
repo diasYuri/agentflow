@@ -10,7 +10,22 @@ import (
 	"syscall"
 
 	"github.com/diasYuri/agentflow/internal/daemon"
+	"github.com/diasYuri/agentflow/internal/version"
 )
+
+var (
+	buildVersion = "dev"
+	buildCommit  = "unknown"
+	buildDate    = "unknown"
+	buildBy      = ""
+)
+
+func init() {
+	version.Version = buildVersion
+	version.Commit = buildCommit
+	version.Date = buildDate
+	version.BuiltBy = buildBy
+}
 
 func debugLevel() slog.Level {
 	if os.Getenv("AGENTFLOWD_DEBUG") == "1" {

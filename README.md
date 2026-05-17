@@ -5,7 +5,7 @@
     /   | ____ ____  ____  / /_/ ____/___ _      __
    / /| |/ __ `/ _ \/ __ \/ __/ /_  / __ \ | /| / /
   / ___ / /_/ /  __/ / / / /_/ __/ / /_/ / |/ |/ /
- /_/  |_\__, /\___/_/ /_/\__/_/    \____/|__/|__/ 
+ /_/  |_\__, /\___/_/ /_/\__/_/    \____/|__/|__/
        /____/
 
       YAML workflows for local coding agents
@@ -35,8 +35,19 @@ It is designed to be one of the most complete platforms for local agent workflow
 
 ## Requirements
 
-- Go 1.26.1+
+- Go 1.26.1+ (only for development builds)
 - `codex`, `claude`, or `pi` on `PATH` when a workflow uses `kind: agent`
+
+## Installation
+
+The quickest way to get AgentFlow is through Homebrew or a direct download from GitHub Releases. See [docs/installation.md](docs/installation.md) for detailed steps, checksum verification, shell completions, and upgrade guidance.
+
+```bash
+brew tap diasYuri/agentflow https://github.com/diasYuri/agentflow
+brew install agentflow
+```
+
+After installing, run `agentflow doctor` to validate your environment.
 
 ## CLI
 
@@ -119,6 +130,8 @@ In practice, that means:
 ## Agent Workflows
 
 Workflows with `kind: agent` can use `provider: codex`, `provider: claude`, or `provider: pi`. When `provider` is omitted, the default is `codex`.
+
+The examples below use `go run ./cmd/agentflow` for development inside the repository. If you installed AgentFlow from a release or via Homebrew, replace `go run ./cmd/agentflow` with `agentflow`.
 
 Example with Codex:
 
@@ -224,6 +237,8 @@ Workflows can run local commands. Review each `command` before running it. Use `
 
 ## Next Steps
 
-1. Run `go run ./cmd/agentflow validate samples/workflows/fix-github-issue.yaml`.
-2. Execute `go run ./cmd/agentflow dry-run ...` against a real workflow in your repository.
+1. Install AgentFlow via [docs/installation.md](docs/installation.md) or run directly from source:
+   `go run ./cmd/agentflow validate samples/workflows/fix-github-issue.yaml`.
+2. Execute `agentflow dry-run ...` (or `go run ./cmd/agentflow dry-run ...` from source)
+   against a real workflow in your repository.
 3. Copy a sample into `.agentflow/workflows/` and adapt it to your process.
