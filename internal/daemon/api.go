@@ -135,22 +135,43 @@ type WorkflowArtifactsResponse struct {
 }
 
 type WorkflowArtifactDTO struct {
-	ID          string    `json:"id"`
-	Name        string    `json:"name"`
-	Path        string    `json:"path"`
-	Size        int64     `json:"size"`
-	ContentType string    `json:"content_type,omitempty"`
-	ModifiedAt  time.Time `json:"modified_at,omitempty"`
+	ID           string               `json:"id"`
+	Name         string               `json:"name"`
+	Path         string               `json:"path"`
+	Size         int64                `json:"size"`
+	ContentType  string               `json:"content_type,omitempty"`
+	ModifiedAt   time.Time            `json:"modified_at,omitempty"`
+	RunID        string               `json:"run_id,omitempty"`
+	NodeID       string               `json:"node_id,omitempty"`
+	InstanceID   string               `json:"instance_id,omitempty"`
+	RelativePath string               `json:"relative_path,omitempty"`
+	MediaType    string               `json:"media_type,omitempty"`
+	SizeBytes    int64                `json:"size_bytes,omitempty"`
+	CreatedAt    time.Time            `json:"created_at,omitempty"`
+	Kind         corerun.ArtifactKind `json:"kind,omitempty"`
+	Description  string               `json:"description,omitempty"`
 }
 
 type WorkflowArtifactResponse struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Path        string `json:"path"`
-	Size        int64  `json:"size"`
-	ContentType string `json:"content_type,omitempty"`
-	Encoding    string `json:"encoding,omitempty"`
-	Content     string `json:"content"`
+	ID           string               `json:"id"`
+	Name         string               `json:"name"`
+	Path         string               `json:"path"`
+	Size         int64                `json:"size"`
+	ContentType  string               `json:"content_type,omitempty"`
+	Encoding     string               `json:"encoding,omitempty"`
+	Content      string               `json:"content,omitempty"`
+	RunID        string               `json:"run_id,omitempty"`
+	NodeID       string               `json:"node_id,omitempty"`
+	InstanceID   string               `json:"instance_id,omitempty"`
+	RelativePath string               `json:"relative_path,omitempty"`
+	MediaType    string               `json:"media_type,omitempty"`
+	SizeBytes    int64                `json:"size_bytes,omitempty"`
+	CreatedAt    time.Time            `json:"created_at,omitempty"`
+	Kind         corerun.ArtifactKind `json:"kind,omitempty"`
+	Description  string               `json:"description,omitempty"`
+	TextContent  string               `json:"text_content,omitempty"`
+	Truncated    bool                 `json:"truncated,omitempty"`
+	IsText       bool                 `json:"is_text,omitempty"`
 }
 
 type WorkflowNodesResponse struct {
@@ -191,6 +212,7 @@ type WorkflowPlanResponse struct {
 const (
 	defaultEventLimit = 100
 	maxEventLimit     = 1000
+	MaxArtifactInline = 128 * 1024
 )
 
 type CancelWorkflowResponse struct {

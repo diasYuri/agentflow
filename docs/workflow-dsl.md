@@ -78,6 +78,53 @@ referenciado é expandido por `for_each`:
 
 Se a referência apontar para um node inexistente, a validação falha antes da execução.
 
+### Artefatos
+
+Nodes `bash` podem declarar artefatos produzidos no `working_dir`:
+
+```yaml
+nodes:
+  - id: scan
+    kind: bash
+    command: "trivy filesystem -o reports/security.json ."
+    artifacts:
+      - name: security-report
+        path: reports/security.json
+        media_type: application/json
+        description: Vulnerability scan results
+```
+
+Regras de validação:
+
+- `name` é obrigatório e define a chave de acesso em `${nodes.<id>.artifacts.<name>.id}`.
+- `path` é obrigatório, deve ser relativo e não pode conter `..`.
+- `media_type` é opcional; quando ausente, o runtime infere a partir da extensão do arquivo.
+- `description` é opcional e preservada como metadado.
+
+O runtime copia cada artefato declarado de forma segura do `working_dir` do node para o diretório
+de artefatos do run (`<run_dir>/artifacts/nodes/<node_id>/artifacts/<name>`). A cópia rejeita
+symlinks e arquivos fora do `working_dir` permitido. Conteúdo textual passa pelo mascaramento de
+secrets; binários são copiados sem transformação.
+
+Além dos artefatos declarados, todo node produz automaticamente três artefatos nativos:
+
+- `result.json` — resultado completo do node (status, output, stdout, stderr, exit_code).
+- `stdout.txt` — saída padrão capturada.
+- `stderr.txt` — saída de erro capturada.
+
+Esses artefatos são indexados com `kind: result`, `kind: stdout` e `kind: stderr`, respectivamente.
+Em execuções `for_each` ou `map`, os IDs incluem `instance_id` para garantir unicidade:
+`nodes/<node_id>/<instance_id>/stdout.txt`.
+
+Referência em expressões:
+
+```yaml
+- id: publish
+  kind: bash
+  depends_on: [scan]
+  command: "upload ${nodes.scan.artifacts.security-report.id}"
+```
+
 ### `go_to_if`, ciclos e ordem de execução
 
 Os campos `go_to_if.when` e `go_to_if.target` são verificados durante a validação estrutural.

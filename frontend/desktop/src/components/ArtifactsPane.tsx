@@ -7,11 +7,15 @@ interface ArtifactsPaneProps {
 	runId: string;
 }
 
+interface PreviewState {
+	info: ArtifactInfo;
+	content: string;
+	isText: boolean;
+	truncated?: boolean;
+}
+
 export function ArtifactsPane({ artifacts, runId }: ArtifactsPaneProps) {
-	const [preview, setPreview] = useState<{
-		info: ArtifactInfo;
-		content: string;
-	} | null>(null);
+	const [preview, setPreview] = useState<PreviewState | null>(null);
 	const [busy, setBusy] = useState(false);
 
 	const openArtifact = useCallback(
@@ -19,36 +23,42 @@ export function ArtifactsPane({ artifacts, runId }: ArtifactsPaneProps) {
 			setBusy(true);
 			try {
 				const resp = await api.getRunArtifact(runId, info.id);
-				if (resp.encoding === "base64") {
-					const isText =
-						(resp.content_type ?? "").startsWith("text/") ||
-						resp.size < 128 * 1024;
-					if (isText) {
-						try {
-							const decoded = atob(resp.content);
-							setPreview({ info, content: decoded });
-						} catch {
-							setPreview({
-								info,
-								content: "[Unable to decode base64 content]",
-							});
-						}
-					} else {
-						setPreview({
-							info,
-							content: "[Binary file — preview not available]",
-						});
-					}
+				if (resp.is_text) {
+					setPreview({
+						info,
+						content: resp.text_content ?? "",
+						isText: true,
+						truncated: resp.truncated,
+					});
 				} else {
-					setPreview({ info, content: resp.content });
+					setPreview({
+						info,
+						content: "",
+						isText: false,
+						truncated: resp.truncated,
+					});
 				}
 			} catch (err) {
 				setPreview({
 					info,
 					content: err instanceof Error ? err.message : String(err),
+					isText: true,
 				});
 			} finally {
 				setBusy(false);
+			}
+		},
+		[runId],
+	);
+
+	const handleOpenExternally = useCallback(
+		async (artifactID: string) => {
+			try {
+				const path = await api.getRunArtifactPath(runId, artifactID);
+				await api.openPath(path);
+			} catch (err) {
+				// eslint-disable-next-line no-console
+				console.error("Failed to open artifact:", err);
 			}
 		},
 		[runId],
@@ -77,7 +87,15 @@ export function ArtifactsPane({ artifacts, runId }: ArtifactsPaneProps) {
 					>
 						<span className="artifact-name">{a.name}</span>
 						<span className="artifact-meta">
-							{a.content_type} · {formatBytes(a.size)}
+							{a.kind ?? "file"}
+							{a.node_id ? ` · ${a.node_id}` : ""}
+							{a.media_type ? ` · ${a.media_type}` : ""}
+							{a.size_bytes !== undefined
+								? ` · ${formatBytes(a.size_bytes)}`
+								: a.size
+									? ` · ${formatBytes(a.size)}`
+									: ""}
+							{a.created_at ? ` · ${formatDate(a.created_at)}` : ""}
 						</span>
 					</button>
 				))}
@@ -85,15 +103,43 @@ export function ArtifactsPane({ artifacts, runId }: ArtifactsPaneProps) {
 			{preview && (
 				<div className="artifact-preview">
 					<div className="artifact-preview-header">
-						<span className="artifact-preview-title">{preview.info.name}</span>
-						<button
-							className="artifact-preview-close"
-							onClick={() => setPreview(null)}
-						>
-							Close
-						</button>
+						<span className="artifact-preview-title">
+							{preview.info.name}
+							{preview.truncated ? " (truncated)" : ""}
+						</span>
+						<div className="artifact-preview-actions">
+							{!preview.isText && (
+								<button
+									className="artifact-preview-open"
+									onClick={() => handleOpenExternally(preview.info.id)}
+								>
+									Open
+								</button>
+							)}
+							<button
+								className="artifact-preview-close"
+								onClick={() => setPreview(null)}
+							>
+								Close
+							</button>
+						</div>
 					</div>
-					<pre className="artifact-preview-content">{preview.content}</pre>
+					{preview.isText ? (
+						<pre className="artifact-preview-content">{preview.content}</pre>
+					) : (
+						<div className="artifact-preview-binary">
+							<p>
+								Binary file — preview not available.
+								{preview.info.media_type ? ` (${preview.info.media_type})` : ""}
+							</p>
+							<button
+								className="artifact-preview-open"
+								onClick={() => handleOpenExternally(preview.info.id)}
+							>
+								Open
+							</button>
+						</div>
+					)}
 				</div>
 			)}
 		</div>
@@ -104,4 +150,13 @@ function formatBytes(n: number): string {
 	if (n < 1024) return `${n} B`;
 	if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
 	return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function formatDate(iso: string): string {
+	try {
+		const d = new Date(iso);
+		return d.toLocaleString();
+	} catch {
+		return iso;
+	}
 }

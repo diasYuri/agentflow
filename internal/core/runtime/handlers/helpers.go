@@ -214,6 +214,28 @@ func sanitizeName(name string) string {
 	return out
 }
 
+func exprSafeKey(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	var b strings.Builder
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r == '_' || r == '-':
+			b.WriteRune('_')
+		default:
+			b.WriteRune('_')
+		}
+	}
+	out := strings.Trim(b.String(), "_")
+	if out == "" {
+		return "artifact"
+	}
+	return out
+}
+
 func JSONString(value any) string {
 	data, _ := json.MarshalIndent(value, "", "  ")
 	return string(data)

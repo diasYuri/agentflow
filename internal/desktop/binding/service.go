@@ -155,6 +155,11 @@ func (s *DesktopService) GetRunArtifact(runID, artifactID string) (adapter.Artif
 	return s.adapter.GetRunArtifact(runID, artifactID)
 }
 
+// GetRunArtifactPath resolve o path absoluto de um artefato indexado para open/export controlado.
+func (s *DesktopService) GetRunArtifactPath(runID, artifactID string) (string, error) {
+	return s.adapter.GetRunArtifactPath(runID, artifactID)
+}
+
 // GetRunNodes lista resultados de nos.
 func (s *DesktopService) GetRunNodes(runID string) (adapter.NodesResponse, error) {
 	return s.adapter.GetRunNodes(runID)

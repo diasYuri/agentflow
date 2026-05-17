@@ -206,6 +206,20 @@ func (s *Server) handleWorkflow(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, resp)
 		return
 	}
+	if len(parts) == 2 && parts[1] == "artifact-path" && r.Method == http.MethodGet {
+		artifactID := r.URL.Query().Get("artifact_id")
+		if artifactID == "" {
+			writeError(w, http.StatusBadRequest, "artifact_id is required")
+			return
+		}
+		p, err := s.manager.WorkflowArtifactPath(runID, artifactID)
+		if err != nil {
+			writeError(w, statusForError(err), err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"run_id": runID, "artifact_id": artifactID, "path": p})
+		return
+	}
 	if len(parts) >= 3 && parts[1] == "artifacts" && r.Method == http.MethodGet {
 		artifactID := strings.Join(parts[2:], "/")
 		resp, err := s.manager.WorkflowArtifact(runID, artifactID)

@@ -3,6 +3,7 @@ package workflow
 import (
 	"fmt"
 	"math"
+	"path/filepath"
 	"reflect"
 	"regexp"
 	"strings"
@@ -429,6 +430,9 @@ func validateNode(spec *WorkflowSpec, node NodeSpec, providers ProviderLookup) e
 	default:
 		return fmt.Errorf("unknown kind %q", node.Kind)
 	}
+	if err := validateArtifacts(node.Artifacts); err != nil {
+		return err
+	}
 	if node.Kind != NodeKindAgent && node.Permission != nil {
 		return fmt.Errorf("permission is only supported for agent nodes")
 	}
@@ -448,6 +452,61 @@ func validateNode(spec *WorkflowSpec, node NodeSpec, providers ProviderLookup) e
 		return fmt.Errorf("timeout must be >= 0")
 	}
 	return nil
+}
+
+func validateArtifacts(artifacts []ArtifactSpec) error {
+	seen := map[string]int{}
+	for i, art := range artifacts {
+		if strings.TrimSpace(art.Name) == "" {
+			return fmt.Errorf("artifacts[%d].name is required", i)
+		}
+		if strings.TrimSpace(art.Path) == "" {
+			return fmt.Errorf("artifacts[%d].path is required", i)
+		}
+		if filepath.IsAbs(art.Path) {
+			return fmt.Errorf("artifacts[%d].path must be relative", i)
+		}
+		clean := filepath.Clean(art.Path)
+		if strings.Contains(clean, "..") {
+			return fmt.Errorf("artifacts[%d].path must not contain ..", i)
+		}
+		key := normalizeArtifactKey(art.Name)
+		if isReservedArtifactKey(key) {
+			return fmt.Errorf("artifacts[%d].name %q is reserved", i, art.Name)
+		}
+		if prev, ok := seen[key]; ok {
+			return fmt.Errorf("artifacts[%d].name %q collides with artifacts[%d].name %q after normalization", i, art.Name, prev, artifacts[prev].Name)
+		}
+		seen[key] = i
+	}
+	return nil
+}
+
+func normalizeArtifactKey(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	var b strings.Builder
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r == '_' || r == '-':
+			b.WriteRune('_')
+		default:
+			b.WriteRune('_')
+		}
+	}
+	return strings.Trim(b.String(), "_")
+}
+
+func isReservedArtifactKey(key string) bool {
+	switch key {
+	case "stdout", "stderr", "result", "stdout_txt", "stderr_txt", "result_json":
+		return true
+	default:
+		return false
+	}
 }
 
 func validateAgentPermission(node NodeSpec) error {

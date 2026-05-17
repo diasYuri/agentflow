@@ -111,9 +111,15 @@ func (s *ExecutionState) set(id string, result corerun.NodeResult) {
 		result.Path = append([]string(nil), s.path...)
 	}
 	s.results[id] = result
+	artifacts := make(map[string]any, len(result.Artifacts))
+	for _, art := range result.Artifacts {
+		key := exprSafeKey(art.Name)
+		artifacts[key] = map[string]any{"id": art.ID, "name": art.Name, "media_type": art.MediaType}
+	}
 	s.nodes[id] = map[string]any{
 		"status": string(result.Status), "output": result.Output, "outputs": result.Outputs, "declared_outputs": result.DeclaredOutputs,
 		"stdout": result.Stdout, "stderr": result.Stderr, "exit_code": result.ExitCode, "error": result.Error, "path": result.Path,
+		"artifacts": artifacts,
 	}
 }
 
@@ -204,10 +210,11 @@ func (s *ExecutionState) spawn(plan coreworkflow.ExecutionPlan, path []string) *
 	}
 }
 
-func (e *Executor) recordNode(ctx context.Context, state *ExecutionState, result corerun.NodeResult) {
+func (e *Executor) recordNode(ctx context.Context, state *ExecutionState, node coreworkflow.NodeSpec, result corerun.NodeResult) {
 	if len(result.Path) == 0 {
 		result.Path = append([]string(nil), state.path...)
 	}
+	result.Artifacts = e.saveNodeArtifacts(ctx, state, node, result)
 	state.set(result.NodeID, result)
 	if isFailure(result.Status) {
 		state.failed = true
@@ -291,7 +298,15 @@ func (e *Executor) evaluateAndPersistWorkflowOutputs(ctx context.Context, state 
 		return fmt.Errorf("failed to marshal workflow outputs: %w", err)
 	}
 	maskedData := []byte(state.masker.MaskString(string(data)))
-	if err := e.svc.Runs.SaveArtifact(ctx, state.runID, "workflow/outputs.json", maskedData); err != nil {
+	art := corerun.Artifact{
+		ID:           "workflow/outputs.json",
+		RunID:        state.runID,
+		Name:         "outputs.json",
+		RelativePath: "workflow/outputs.json",
+		MediaType:    "application/json",
+		Kind:         corerun.ArtifactKindResult,
+	}
+	if err := e.svc.Runs.SaveArtifact(ctx, state.runID, art, maskedData); err != nil {
 		return fmt.Errorf("failed to save workflow outputs artifact: %w", err)
 	}
 	_ = e.emitState(ctx, state, corerun.Event{Type: "workflow.outputs", Data: outputs})
@@ -301,15 +316,26 @@ func (e *Executor) evaluateAndPersistWorkflowOutputs(ctx context.Context, state 
 func (e *Executor) finish(ctx context.Context, plan coreworkflow.ExecutionPlan, state *ExecutionState, status corerun.RunStatus, finalErr error) (Result, error) {
 	persistCtx := context.WithoutCancel(ctx)
 	var wtMeta corerun.WorktreeMetadata
+	var pauseReason corerun.PauseReason
 	if state.worktreeEnabled && e.svc.Worktrees != nil && state.worktree.Path != "" {
 		switch status {
 		case corerun.RunSuccess:
 			meta, wtErr := e.finalizeWorktree(persistCtx, state)
 			wtMeta = meta
+			worktreeComplete := wtErr == nil && (meta.MergeStatus == corerun.WorktreeMergeMerged || meta.MergeStatus == corerun.WorktreeMergeNoChanges)
 			if wtErr != nil {
-				// Worktree finalize failure does not change run status to failed;
-				// it is recorded in metadata and artifacts.
 				_ = e.emitState(persistCtx, state, corerun.Event{Type: "worktree.finalize_failed", Data: map[string]any{"error": wtErr.Error()}})
+			}
+			if !worktreeComplete {
+				if wtErr == nil {
+					msg := wtMeta.MergeFailureCause
+					if msg == "" {
+						msg = fmt.Sprintf("worktree merge did not complete: %s", wtMeta.MergeStatus)
+					}
+					_ = e.emitState(persistCtx, state, corerun.Event{Type: "worktree.finalize_failed", Data: map[string]any{"error": msg}})
+				}
+				status = corerun.RunPaused
+				pauseReason = corerun.PauseReasonWorktreeMerge
 			}
 			e.cleanupWorktree(persistCtx, state, &wtMeta, status)
 			_ = e.saveWorktreeStatus(persistCtx, state, wtMeta)
@@ -390,7 +416,11 @@ func (e *Executor) finish(ctx context.Context, plan coreworkflow.ExecutionPlan, 
 		eventType = "run.failed"
 		_ = e.svc.Runs.ClearCheckpoint(persistCtx, state.runID)
 	}
-	_ = e.emitState(persistCtx, state, corerun.Event{Type: eventType, Data: map[string]any{"status": status}})
+	eventData := map[string]any{"status": status}
+	if status == corerun.RunPaused && pauseReason != "" {
+		eventData["reason"] = pauseReason
+	}
+	_ = e.emitState(persistCtx, state, corerun.Event{Type: eventType, Data: eventData})
 	_ = e.svc.Events.Close(persistCtx)
 	dir, _ := e.svc.Runs.RunDir(state.runID)
 	if status == corerun.RunPaused {

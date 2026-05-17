@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -55,7 +56,7 @@ func (e *Executor) finalizeWorktree(ctx context.Context, state *ExecutionState) 
 		return meta, nil
 	}
 
-	if err := e.saveArtifact(ctx, state, "worktree/diff.patch", []byte(changeSet.Diff)); err != nil {
+	if err := e.saveArtifact(ctx, state, "worktree/diff.patch", "text/plain", []byte(changeSet.Diff)); err != nil {
 		return meta, fmt.Errorf("failed to save diff.patch: %w", err)
 	}
 
@@ -155,6 +156,7 @@ func (e *Executor) requestWorktreeResolution(ctx context.Context, state *Executi
 	meta.AgentResolutionStatus = corerun.WorktreeAgentResolutionRequested
 	meta.AgentResolutionProvider = providerName
 	prompt := buildConflictResolutionPrompt(state, meta, changeSet)
+	beforeHead := e.currentGitHead(ctx, state.destinationWorkingDir)
 	_ = e.emitState(ctx, state, corerun.Event{Type: "worktree.resolution_agent.requested", Data: map[string]any{
 		"provider": providerName,
 		"files":    len(meta.Conflicts),
@@ -180,7 +182,7 @@ func (e *Executor) requestWorktreeResolution(ctx context.Context, state *Executi
 		return meta, err
 	}
 
-	resolved, commands, validateErr := e.validateDestinationAfterResolution(ctx, state.destinationWorkingDir, beforeStatus)
+	resolved, commands, validateErr := e.validateDestinationAfterResolution(ctx, state.destinationWorkingDir, beforeStatus, beforeHead)
 	meta.Commands = appendGitCommands(meta.Commands, commands)
 	if validateErr != nil {
 		meta.AgentResolutionStatus = corerun.WorktreeAgentResolutionFailed
@@ -239,7 +241,7 @@ func (e *Executor) currentGitHead(ctx context.Context, workingDir string) string
 	return strings.TrimSpace(res.Stdout)
 }
 
-func (e *Executor) validateDestinationAfterResolution(ctx context.Context, workingDir string, beforeStatus string) (bool, []coreports.GitCommand, error) {
+func (e *Executor) validateDestinationAfterResolution(ctx context.Context, workingDir string, beforeStatus string, beforeHead string) (bool, []coreports.GitCommand, error) {
 	if e.svc.Shell == nil || workingDir == "" {
 		return false, nil, fmt.Errorf("shell runner unavailable for resolution validation")
 	}
@@ -283,12 +285,27 @@ func (e *Executor) validateDestinationAfterResolution(ctx context.Context, worki
 		return false, commands, fmt.Errorf("failed to validate destination diff: %s", diff.Stderr)
 	}
 
-	if strings.TrimSpace(status) == strings.TrimSpace(beforeStatus) {
-		return false, commands, nil
+	headCmd := "git rev-parse HEAD"
+	head, err := e.svc.Shell.Run(ctx, coreports.ShellRequest{Command: headCmd, WorkingDir: workingDir})
+	commands = append(commands, shellResultToWorktreeCommand(headCmd, head))
+	if err != nil || head.ExitCode != 0 {
+		if err != nil && head.ExitCode == -1 {
+			return false, commands, fmt.Errorf("failed to validate destination head: %w", err)
+		}
+		return false, commands, fmt.Errorf("failed to validate destination head: %s", head.Stderr)
 	}
-	return strings.TrimSpace(status) != "" ||
+
+	if beforeHead != "" && strings.TrimSpace(head.Stdout) != "" && strings.TrimSpace(head.Stdout) != strings.TrimSpace(beforeHead) {
+		return true, commands, nil
+	}
+
+	if strings.TrimSpace(status) != strings.TrimSpace(beforeStatus) ||
 		strings.TrimSpace(cached.Stdout) != "" ||
-		strings.TrimSpace(diff.Stdout) != "", commands, nil
+		strings.TrimSpace(diff.Stdout) != "" {
+		return true, commands, nil
+	}
+
+	return false, commands, nil
 }
 
 func (e *Executor) destinationPorcelainStatus(ctx context.Context, workingDir string) (string, []coreports.GitCommand, error) {
@@ -395,16 +412,30 @@ func (e *Executor) saveWorktreeStatus(ctx context.Context, state *ExecutionState
 		return err
 	}
 	masked := []byte(state.masker.MaskString(string(data)))
-	return e.svc.Runs.SaveArtifact(ctx, state.runID, "worktree/status.json", masked)
+	art := corerun.Artifact{
+		ID:           "worktree/status.json",
+		Name:         "status.json",
+		RelativePath: "worktree/status.json",
+		MediaType:    "application/json",
+		Kind:         corerun.ArtifactKindCustom,
+	}
+	return e.svc.Runs.SaveArtifact(ctx, state.runID, art, masked)
 }
 
-func (e *Executor) saveArtifact(ctx context.Context, state *ExecutionState, name string, data []byte) error {
+func (e *Executor) saveArtifact(ctx context.Context, state *ExecutionState, name string, mediaType string, data []byte) error {
 	masked := []byte(state.masker.MaskString(string(data)))
-	return e.svc.Runs.SaveArtifact(ctx, state.runID, name, masked)
+	art := corerun.Artifact{
+		ID:           name,
+		Name:         filepath.Base(name),
+		RelativePath: name,
+		MediaType:    mediaType,
+		Kind:         corerun.ArtifactKindCustom,
+	}
+	return e.svc.Runs.SaveArtifact(ctx, state.runID, art, masked)
 }
 
 func (e *Executor) saveConflictsArtifact(ctx context.Context, state *ExecutionState, meta corerun.WorktreeMetadata) error {
-	artifact := map[string]any{
+	body := map[string]any{
 		"files":                           meta.Conflicts,
 		"base_commit":                     meta.BaseCommit,
 		"destination_commit_before_merge": meta.DestinationCommitBefore,
@@ -414,11 +445,11 @@ func (e *Executor) saveConflictsArtifact(ctx context.Context, state *ExecutionSt
 		"changed_files":                   meta.ChangedFiles,
 		"commands":                        meta.Commands,
 	}
-	data, err := json.MarshalIndent(artifact, "", "  ")
+	data, err := json.MarshalIndent(body, "", "  ")
 	if err != nil {
 		return err
 	}
-	return e.saveArtifact(ctx, state, "worktree/conflicts.json", data)
+	return e.saveArtifact(ctx, state, "worktree/conflicts.json", "application/json", data)
 }
 
 func (e *Executor) saveMergeLogArtifact(ctx context.Context, state *ExecutionState, meta corerun.WorktreeMetadata) error {
@@ -431,7 +462,7 @@ func (e *Executor) saveMergeLogArtifact(ctx context.Context, state *ExecutionSta
 	if err != nil {
 		return err
 	}
-	return e.saveArtifact(ctx, state, "worktree/merge.log", data)
+	return e.saveArtifact(ctx, state, "worktree/merge.log", "application/json", data)
 }
 
 func toSortedChangedFiles(files []coreports.FileChange) []corerun.WorktreeChangedFile {

@@ -10,7 +10,52 @@ import (
 	"time"
 
 	"github.com/diasYuri/agentflow/internal/daemon"
+	"github.com/spf13/cobra"
 )
+
+func TestTUICommandExists(t *testing.T) {
+	cmd := NewRootCommand()
+	if cmd := findSubcommand(cmd, "tui"); cmd == nil {
+		t.Fatal("expected tui command to be registered")
+	}
+}
+
+func TestTUICommandAcceptsFlags(t *testing.T) {
+	cmd := NewRootCommand()
+	tui := findSubcommand(cmd, "tui")
+	if tui == nil {
+		t.Fatal("expected tui command")
+	}
+	if err := tui.ParseFlags([]string{"--workflow", "build", "--run", "run-1", "--no-mouse", "--theme", "dark"}); err != nil {
+		t.Fatalf("unexpected flag parse error: %v", err)
+	}
+}
+
+func TestTUICommandHelp(t *testing.T) {
+	cmd := NewRootCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"tui", "--help"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got := out.String()
+	for _, want := range []string{"tui", "--workflow", "--run", "--daemon", "--no-mouse", "--theme"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected %q in help output:\n%s", want, got)
+		}
+	}
+}
+
+func findSubcommand(cmd *cobra.Command, name string) *cobra.Command {
+	for _, c := range cmd.Commands() {
+		if c.Name() == name {
+			return c
+		}
+	}
+	return nil
+}
 
 func TestGraphCommandPrintsMermaid(t *testing.T) {
 	dir := t.TempDir()
@@ -603,6 +648,137 @@ func TestWorkflowStatusRendersPausedHintAndStopsWatch(t *testing.T) {
 	}
 }
 
+func TestWorkflowArtifactsRendersTextAndJson(t *testing.T) {
+	oldClient := newDaemonClient
+	newDaemonClient = func(socketPath string) workflowDaemonClient {
+		return workflowDaemonClientFunc{
+			workflowArtifacts: func(ctx context.Context, id string) (daemon.WorkflowArtifactsResponse, error) {
+				return daemon.WorkflowArtifactsResponse{
+					RunID: id,
+					Artifacts: []daemon.WorkflowArtifactDTO{
+						{ID: "nodes/n1/stdout.txt", Name: "stdout.txt", MediaType: "text/plain", SizeBytes: 12, NodeID: "n1"},
+						{ID: "nodes/n1/result.json", Name: "result.json", MediaType: "application/json", SizeBytes: 256, NodeID: "n1"},
+					},
+				}, nil
+			},
+		}
+	}
+	t.Cleanup(func() { newDaemonClient = oldClient })
+
+	cmd := NewRootCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"workflow", "artifacts", "run-1"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "nodes/n1/stdout.txt") {
+		t.Fatalf("expected artifact id in output, got %q", got)
+	}
+	if !strings.Contains(got, "text/plain") {
+		t.Fatalf("expected media type in output, got %q", got)
+	}
+
+	out.Reset()
+	cmd = NewRootCommand()
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"workflow", "artifacts", "run-1", "--output", "json"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), `"id":"nodes/n1/stdout.txt"`) {
+		t.Fatalf("expected json output, got %q", out.String())
+	}
+}
+
+func TestWorkflowArtifactShowRendersTextContent(t *testing.T) {
+	oldClient := newDaemonClient
+	newDaemonClient = func(socketPath string) workflowDaemonClient {
+		return workflowDaemonClientFunc{
+			workflowArtifact: func(ctx context.Context, runID, artifactID string) (daemon.WorkflowArtifactResponse, error) {
+				return daemon.WorkflowArtifactResponse{
+					ID: artifactID, Name: "stdout.txt", MediaType: "text/plain",
+					SizeBytes: 5, IsText: true, TextContent: "hello",
+					Encoding: "text", Kind: "stdout", NodeID: "n1",
+				}, nil
+			},
+		}
+	}
+	t.Cleanup(func() { newDaemonClient = oldClient })
+
+	cmd := NewRootCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"workflow", "artifact", "show", "run-1", "nodes/n1/stdout.txt"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "hello") {
+		t.Fatalf("expected text content, got %q", got)
+	}
+	if !strings.Contains(got, "media_type: text/plain") {
+		t.Fatalf("expected media_type, got %q", got)
+	}
+}
+
+func TestWorkflowArtifactShowRendersBinaryOmission(t *testing.T) {
+	oldClient := newDaemonClient
+	newDaemonClient = func(socketPath string) workflowDaemonClient {
+		return workflowDaemonClientFunc{
+			workflowArtifact: func(ctx context.Context, runID, artifactID string) (daemon.WorkflowArtifactResponse, error) {
+				return daemon.WorkflowArtifactResponse{
+					ID: artifactID, Name: "image.png", MediaType: "image/png",
+					SizeBytes: 2048, IsText: false, Encoding: "base64",
+				}, nil
+			},
+		}
+	}
+	t.Cleanup(func() { newDaemonClient = oldClient })
+
+	cmd := NewRootCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"workflow", "artifact", "show", "run-1", "nodes/n1/image.png"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "binary content omitted") {
+		t.Fatalf("expected binary omission message, got %q", got)
+	}
+}
+
+func TestWorkflowArtifactPathPrintsPath(t *testing.T) {
+	oldClient := newDaemonClient
+	newDaemonClient = func(socketPath string) workflowDaemonClient {
+		return workflowDaemonClientFunc{
+			artifactPath: func(ctx context.Context, runID, artifactID string) (string, error) {
+				return "/tmp/run-1/artifacts/" + artifactID, nil
+			},
+		}
+	}
+	t.Cleanup(func() { newDaemonClient = oldClient })
+
+	cmd := NewRootCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"workflow", "artifact", "path", "run-1", "nodes/n1/stdout.txt"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	got := strings.TrimSpace(out.String())
+	if got != "/tmp/run-1/artifacts/nodes/n1/stdout.txt" {
+		t.Fatalf("expected path, got %q", got)
+	}
+}
+
 type workflowRunClientFunc func(context.Context, daemon.RunWorkflowRequest) (daemon.RunWorkflowResponse, error)
 
 func (f workflowRunClientFunc) RunWorkflow(ctx context.Context, req daemon.RunWorkflowRequest) (daemon.RunWorkflowResponse, error) {
@@ -610,14 +786,17 @@ func (f workflowRunClientFunc) RunWorkflow(ctx context.Context, req daemon.RunWo
 }
 
 type workflowDaemonClientFunc struct {
-	list           func(context.Context) (daemon.ListWorkflowsResponse, error)
-	workflowStatus func(context.Context, string) (daemon.RunWorkflowResponse, error)
-	workflowLogs   func(context.Context, string) (daemon.LogsResponse, error)
-	cancelWorkflow func(context.Context, string) (daemon.CancelWorkflowResponse, error)
-	pauseWorkflow  func(context.Context, string) (daemon.PauseWorkflowResponse, error)
-	resumeWorkflow func(context.Context, string) (daemon.ResumeWorkflowResponse, error)
-	status         func(context.Context) (daemon.DaemonStatus, error)
-	stop           func(context.Context) (daemon.StopResponse, error)
+	list              func(context.Context) (daemon.ListWorkflowsResponse, error)
+	workflowStatus    func(context.Context, string) (daemon.RunWorkflowResponse, error)
+	workflowLogs      func(context.Context, string) (daemon.LogsResponse, error)
+	workflowArtifacts func(context.Context, string) (daemon.WorkflowArtifactsResponse, error)
+	workflowArtifact  func(context.Context, string, string) (daemon.WorkflowArtifactResponse, error)
+	artifactPath      func(context.Context, string, string) (string, error)
+	cancelWorkflow    func(context.Context, string) (daemon.CancelWorkflowResponse, error)
+	pauseWorkflow     func(context.Context, string) (daemon.PauseWorkflowResponse, error)
+	resumeWorkflow    func(context.Context, string) (daemon.ResumeWorkflowResponse, error)
+	status            func(context.Context) (daemon.DaemonStatus, error)
+	stop              func(context.Context) (daemon.StopResponse, error)
 }
 
 func (f workflowDaemonClientFunc) ListWorkflows(ctx context.Context) (daemon.ListWorkflowsResponse, error) {
@@ -628,6 +807,24 @@ func (f workflowDaemonClientFunc) WorkflowStatus(ctx context.Context, id string)
 }
 func (f workflowDaemonClientFunc) WorkflowLogs(ctx context.Context, id string) (daemon.LogsResponse, error) {
 	return f.workflowLogs(ctx, id)
+}
+func (f workflowDaemonClientFunc) WorkflowArtifacts(ctx context.Context, id string) (daemon.WorkflowArtifactsResponse, error) {
+	if f.workflowArtifacts == nil {
+		return daemon.WorkflowArtifactsResponse{}, nil
+	}
+	return f.workflowArtifacts(ctx, id)
+}
+func (f workflowDaemonClientFunc) WorkflowArtifact(ctx context.Context, runID, artifactID string) (daemon.WorkflowArtifactResponse, error) {
+	if f.workflowArtifact == nil {
+		return daemon.WorkflowArtifactResponse{}, nil
+	}
+	return f.workflowArtifact(ctx, runID, artifactID)
+}
+func (f workflowDaemonClientFunc) WorkflowArtifactPath(ctx context.Context, runID, artifactID string) (string, error) {
+	if f.artifactPath == nil {
+		return "", nil
+	}
+	return f.artifactPath(ctx, runID, artifactID)
 }
 func (f workflowDaemonClientFunc) CancelWorkflow(ctx context.Context, id string) (daemon.CancelWorkflowResponse, error) {
 	return f.cancelWorkflow(ctx, id)

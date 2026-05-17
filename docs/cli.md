@@ -26,10 +26,14 @@ Em [`internal/cli/root.go`](/Users/yuri/git/diasYuri/agentflow/internal/cli/root
 - `workflow status <id>`: mostra o estado de um run. Aceita `--watch` para acompanhar até o run alcançar um estado terminal (`success`, `failed`, `cancelled`, `timeout` ou `paused`).
 - `workflow watch <id>`: forma curta do `status --watch`.
 - `workflow logs <id>`: imprime o `events.jsonl` do run.
+- `workflow artifacts <id>`: lista artefatos indexados do run. Aceita `--output json`.
+- `workflow artifact show <run_id> <artifact_id>`: exibe metadados e conteúdo textual inline de um artefato. Para binários, exibe metadados sem payload. Aceita `--output json`.
+- `workflow artifact path <run_id> <artifact_id>`: imprime o path local absoluto do artefato (exige índice; rejeita IDs não indexados e path traversal).
 - `workflow cancel <id>`: cancela um run em execução ou pausado, removendo o checkpoint salvo.
 - `workflow pause <id>`: solicita pausa cooperativa no próximo checkpoint seguro do runtime. Nodes em andamento concluem antes da pausa.
 - `workflow resume <id>`: retoma um run pausado a partir do checkpoint. Usa o request original; novos `--input`/`--var` não são aceitos no resume para manter reprodutibilidade.
 - `daemon start|stop|status`: controla o processo `agentflowd`.
+- `tui`: lança a interface terminal interativa (TUI). Aceita `--workflow`, `--run`, `--daemon`, `--no-mouse` e `--theme`. Veja [`docs/tui.md`](docs/tui.md) para detalhes completos.
 
 O alias legado `run <workflow>` chama `workflow run <workflow>`. Para execução local foreground, use `run -it <workflow>` ou `workflow run -it <workflow>`.
 
@@ -69,7 +73,7 @@ Os workflows são resolvidos por nome/ref, seguindo a convenção documentada em
 - [`internal/cli/root.go`](/Users/yuri/git/diasYuri/agentflow/internal/cli/root.go): definição dos comandos `validate`, `graph`, `dry-run` e `run`, além do parsing de flags e inputs.
 - [`cmd/agentflowd/main.go`](/Users/yuri/git/diasYuri/agentflow/cmd/agentflowd/main.go): ponto de entrada do daemon.
 - [`internal/daemon`](/Users/yuri/git/diasYuri/agentflow/internal/daemon): RPC local, supervisão e gerenciamento de workflows em background.
-- [`internal/cli/root_test.go`](/Users/yuri/git/diasYuri/agentflow/internal/cli/root_test.go): cobertura dos comportamentos visíveis do CLI, incluindo grafo Mermaid e flags suportadas.
+- [`internal/cli/root_test.go`](/Users/yuri/git/diasYuri/agentflow/internal/cli/root_test.go): cobertura dos comportamentos visíveis do CLI, incluindo grafo Mermaid, flags suportadas e comando `tui`.
 - [`readme.md`](/Users/yuri/git/diasYuri/agentflow/readme.md): ponto de entrada de uso rápido do projeto e referência para instalação do binário.
 
 ## Observações relevantes
@@ -88,3 +92,4 @@ Os workflows são resolvidos por nome/ref, seguindo a convenção documentada em
 - `workflow pause` é cooperativa: o runtime só pausa em pontos seguros (entre nodes, depois de gravar um resultado, durante atraso de retry). Um node ainda em execução conclui antes da pausa.
 - `workflow resume` reaproveita o request salvo no daemon. Novos `--input` ou `--var` precisam de um novo `workflow run`; o resume mantém entradas, working dir, paths de provider e demais opções do run original.
 - Tags não precisam ser únicas e não substituem o `run_id`; servem apenas para identificação visual.
+- `agentflow tui` não conflita com subcomandos existentes; é um comando independente que não aceita positional args. Sua execução bloqueia o terminal até que o usuário pressione `q` ou `ctrl+c`.

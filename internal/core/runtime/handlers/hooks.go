@@ -98,7 +98,15 @@ func (e *Executor) runHook(ctx context.Context, state *ExecutionState, hook core
 		resultData["error"] = err.Error()
 	}
 	resultJSON, _ := json.MarshalIndent(resultData, "", "  ")
-	_ = e.svc.Runs.SaveArtifact(ctx, state.runID, filepath.Join(artifactBase, "result.json"), resultJSON)
+	art := corerun.Artifact{
+		ID:           filepath.Join(artifactBase, "result.json"),
+		RunID:        state.runID,
+		Name:         "result.json",
+		RelativePath: filepath.Join(artifactBase, "result.json"),
+		MediaType:    "application/json",
+		Kind:         corerun.ArtifactKindResult,
+	}
+	_ = e.svc.Runs.SaveArtifact(ctx, state.runID, art, resultJSON)
 
 	maskedStdout := state.masker.MaskString(result.Stdout)
 	maskedStderr := state.masker.MaskString(result.Stderr)
@@ -140,5 +148,13 @@ func (e *Executor) saveHookArtifact(ctx context.Context, state *ExecutionState, 
 		return nil
 	}
 	masked := state.masker.MaskString(content)
-	return e.svc.Runs.SaveArtifact(ctx, state.runID, filepath.Join(base, name), []byte(masked))
+	art := corerun.Artifact{
+		ID:           filepath.Join(base, name),
+		RunID:        state.runID,
+		Name:         name,
+		RelativePath: filepath.Join(base, name),
+		MediaType:    "text/plain",
+		Kind:         corerun.ArtifactKindCustom,
+	}
+	return e.svc.Runs.SaveArtifact(ctx, state.runID, art, []byte(masked))
 }

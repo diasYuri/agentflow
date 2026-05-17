@@ -36,6 +36,7 @@ type PauseReason string
 const (
 	PauseReasonManual        PauseReason = "manual"
 	PauseReasonPauseWhenFail PauseReason = "pause_when_fail"
+	PauseReasonWorktreeMerge PauseReason = "worktree_merge"
 )
 
 type Event struct {
@@ -47,6 +48,12 @@ type Event struct {
 	Path       []string       `json:"path,omitempty"`
 	Attempt    int            `json:"attempt,omitempty"`
 	Data       map[string]any `json:"data,omitempty"`
+}
+
+type ArtifactRef struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	MediaType string `json:"media_type,omitempty"`
 }
 
 type NodeResult struct {
@@ -65,6 +72,7 @@ type NodeResult struct {
 	Error           string         `json:"error,omitempty"`
 	Duration        time.Duration  `json:"duration,omitempty"`
 	Attempts        int            `json:"attempts,omitempty"`
+	Artifacts       []ArtifactRef  `json:"artifacts,omitempty"`
 }
 
 type RunMetadata struct {
@@ -177,6 +185,32 @@ type WorktreeCheckpoint struct {
 	BaseCommit            string `json:"base_commit"`
 	WorkflowName          string `json:"workflow_name"`
 	DestinationWorkingDir string `json:"destination_working_dir"`
+}
+
+type ArtifactKind string
+
+const (
+	ArtifactKindFile    ArtifactKind = "file"
+	ArtifactKindStdout  ArtifactKind = "stdout"
+	ArtifactKindStderr  ArtifactKind = "stderr"
+	ArtifactKindResult  ArtifactKind = "result"
+	ArtifactKindSummary ArtifactKind = "summary"
+	ArtifactKindCustom  ArtifactKind = "custom"
+)
+
+// Artifact represents a run artifact with public metadata.
+type Artifact struct {
+	ID           string       `json:"id"`
+	RunID        string       `json:"run_id"`
+	NodeID       string       `json:"node_id,omitempty"`
+	InstanceID   string       `json:"instance_id,omitempty"`
+	Name         string       `json:"name"`
+	RelativePath string       `json:"relative_path"`
+	MediaType    string       `json:"media_type,omitempty"`
+	SizeBytes    int64        `json:"size_bytes"`
+	CreatedAt    time.Time    `json:"created_at"`
+	Kind         ArtifactKind `json:"kind"`
+	Description  string       `json:"description,omitempty"`
 }
 
 type Checkpoint struct {

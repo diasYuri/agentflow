@@ -87,7 +87,9 @@ type RunRepository interface {
 	SaveCheckpoint(ctx context.Context, checkpoint run.Checkpoint) error
 	LoadCheckpoint(ctx context.Context, runID string) (run.Checkpoint, error)
 	ClearCheckpoint(ctx context.Context, runID string) error
-	SaveArtifact(ctx context.Context, runID string, name string, data []byte) error
+	SaveArtifact(ctx context.Context, runID string, artifact run.Artifact, data []byte) error
+	ListArtifacts(ctx context.Context, runID string) ([]run.Artifact, error)
+	ReadArtifact(ctx context.Context, runID, artifactID string) ([]byte, run.Artifact, error)
 	FinalizeRun(ctx context.Context, runID string, summary run.Summary) error
 	RunDir(runID string) (string, bool)
 }

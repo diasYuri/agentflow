@@ -18,6 +18,8 @@ import (
 	runworkflow "github.com/diasYuri/agentflow/internal/core/runtime"
 	"github.com/diasYuri/agentflow/internal/core/workflow"
 	"github.com/diasYuri/agentflow/internal/daemon"
+	tuiapp "github.com/diasYuri/agentflow/internal/tui/app"
+	"github.com/diasYuri/agentflow/internal/tui/theme"
 )
 
 type options struct {
@@ -49,6 +51,9 @@ type workflowDaemonClient interface {
 	CancelWorkflow(context.Context, string) (daemon.CancelWorkflowResponse, error)
 	PauseWorkflow(context.Context, string) (daemon.PauseWorkflowResponse, error)
 	ResumeWorkflow(context.Context, string) (daemon.ResumeWorkflowResponse, error)
+	WorkflowArtifacts(context.Context, string) (daemon.WorkflowArtifactsResponse, error)
+	WorkflowArtifact(context.Context, string, string) (daemon.WorkflowArtifactResponse, error)
+	WorkflowArtifactPath(context.Context, string, string) (string, error)
 	Status(context.Context) (daemon.DaemonStatus, error)
 	Stop(context.Context) (daemon.StopResponse, error)
 }
@@ -77,6 +82,7 @@ func NewRootCommand() *cobra.Command {
 		newMigrateCommand(),
 		newDaemonCommand(opts),
 		newWorkflowCommand(opts),
+		newTUICommand(),
 	)
 	return cmd
 }
@@ -206,6 +212,8 @@ func newWorkflowCommand(opts *options) *cobra.Command {
 		newWorkflowStatusCommand(),
 		newWorkflowWatchCommand(),
 		newWorkflowLogsCommand(),
+		newWorkflowArtifactsCommand(),
+		newWorkflowArtifactCommand(),
 		newWorkflowCancelCommand(),
 		newWorkflowPauseCommand(),
 		newWorkflowResumeCommand(),
@@ -325,6 +333,150 @@ func newWorkflowLogsCommand() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+func newWorkflowArtifactsCommand() *cobra.Command {
+	var outputFormat string
+	cmd := &cobra.Command{
+		Use:   "artifacts <run_id>",
+		Short: "List artifacts for a workflow run",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			resp, err := newDaemonClient("").WorkflowArtifacts(cmd.Context(), args[0])
+			if err != nil {
+				return err
+			}
+			return renderWorkflowArtifacts(cmd.OutOrStdout(), resp, outputFormat)
+		},
+	}
+	cmd.Flags().StringVar(&outputFormat, "output", "text", "output format (text or json)")
+	return cmd
+}
+
+func newWorkflowArtifactCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "artifact",
+		Short: "Inspect a workflow artifact",
+	}
+	cmd.AddCommand(newWorkflowArtifactShowCommand(), newWorkflowArtifactPathCommand())
+	return cmd
+}
+
+func newWorkflowArtifactShowCommand() *cobra.Command {
+	var outputFormat string
+	cmd := &cobra.Command{
+		Use:   "show <run_id> <artifact_id>",
+		Short: "Show artifact content and metadata",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			resp, err := newDaemonClient("").WorkflowArtifact(cmd.Context(), args[0], args[1])
+			if err != nil {
+				return err
+			}
+			return renderWorkflowArtifact(cmd.OutOrStdout(), resp, outputFormat)
+		},
+	}
+	cmd.Flags().StringVar(&outputFormat, "output", "text", "output format (text or json)")
+	return cmd
+}
+
+func newWorkflowArtifactPathCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "path <run_id> <artifact_id>",
+		Short: "Print local filesystem path for an artifact",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			path, err := newDaemonClient("").WorkflowArtifactPath(cmd.Context(), args[0], args[1])
+			if err != nil {
+				return err
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), path)
+			return nil
+		},
+	}
+	return cmd
+}
+
+func renderWorkflowArtifacts(w io.Writer, resp daemon.WorkflowArtifactsResponse, format string) error {
+	if workflowOutputFormat(format) == workflowOutputJSON {
+		data, err := json.Marshal(resp)
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintln(w, string(data))
+		return err
+	}
+	if len(resp.Artifacts) == 0 {
+		_, err := fmt.Fprintln(w, "no artifacts")
+		return err
+	}
+	for _, a := range resp.Artifacts {
+		size := humanizeBytes(a.SizeBytes)
+		line := fmt.Sprintf("%s\t%s\t%s\t%s", a.ID, a.Name, a.MediaType, size)
+		if a.NodeID != "" {
+			line += "\tnode=" + a.NodeID
+		}
+		if a.InstanceID != "" {
+			line += "\tinstance=" + a.InstanceID
+		}
+		fmt.Fprintln(w, line)
+	}
+	return nil
+}
+
+func renderWorkflowArtifact(w io.Writer, resp daemon.WorkflowArtifactResponse, format string) error {
+	if workflowOutputFormat(format) == workflowOutputJSON {
+		data, err := json.Marshal(resp)
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintln(w, string(data))
+		return err
+	}
+	lines := []string{
+		fmt.Sprintf("id: %s", resp.ID),
+		fmt.Sprintf("name: %s", resp.Name),
+		fmt.Sprintf("size: %s", humanizeBytes(resp.SizeBytes)),
+		fmt.Sprintf("media_type: %s", resp.MediaType),
+		fmt.Sprintf("kind: %s", resp.Kind),
+	}
+	if resp.NodeID != "" {
+		lines = append(lines, fmt.Sprintf("node_id: %s", resp.NodeID))
+	}
+	if resp.InstanceID != "" {
+		lines = append(lines, fmt.Sprintf("instance_id: %s", resp.InstanceID))
+	}
+	if resp.Description != "" {
+		lines = append(lines, fmt.Sprintf("description: %s", resp.Description))
+	}
+	if resp.Truncated {
+		lines = append(lines, fmt.Sprintf("truncated: true (limit %d bytes)", daemon.MaxArtifactInline))
+	}
+	if resp.IsText {
+		lines = append(lines, "---")
+		lines = append(lines, resp.TextContent)
+	} else if resp.Content != "" {
+		lines = append(lines, "---")
+		lines = append(lines, fmt.Sprintf("[binary content, %s encoded, %s]", resp.Encoding, humanizeBytes(resp.SizeBytes)))
+	} else {
+		lines = append(lines, fmt.Sprintf("[binary content omitted, size %s]", humanizeBytes(resp.SizeBytes)))
+	}
+	for _, line := range lines {
+		if _, err := fmt.Fprintln(w, line); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func humanizeBytes(n int64) string {
+	if n < 1024 {
+		return fmt.Sprintf("%d B", n)
+	}
+	if n < 1024*1024 {
+		return fmt.Sprintf("%.1f KiB", float64(n)/1024)
+	}
+	return fmt.Sprintf("%.1f MiB", float64(n)/(1024*1024))
 }
 
 func newWorkflowCancelCommand() *cobra.Command {
@@ -924,6 +1076,44 @@ func parseScalar(value string) any {
 	}
 	return value
 }
+
+func newTUICommand() *cobra.Command {
+	var opts tuiapp.Options
+	var noMouse bool
+	cmd := &cobra.Command{
+		Use:   "tui",
+		Short: "Launch the interactive TUI",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			settings := tuiapp.LoadTUISettings()
+			opts = tuiapp.ResolveStartupOptions(opts, settings, noMouse)
+			p := tuiapp.NewProgram(opts)
+			_, err := p.Run()
+			return err
+		},
+	}
+	cmd.Flags().StringVar(&opts.Workflow, "workflow", "", "initial workflow to select")
+	cmd.Flags().StringVar(&opts.Run, "run", "", "initial run to select")
+	cmd.Flags().BoolVar(&opts.Daemon, "daemon", false, "require daemon connection")
+	cmd.Flags().BoolVar(&noMouse, "no-mouse", false, "disable mouse support")
+	cmd.Flags().Var(&themeValue{mode: &opts.Theme}, "theme", "theme mode (auto, light, dark)")
+	return cmd
+}
+
+type themeValue struct {
+	mode *theme.Mode
+}
+
+func (v *themeValue) String() string { return string(*v.mode) }
+func (v *themeValue) Set(s string) error {
+	switch s {
+	case "auto", "light", "dark":
+		*v.mode = theme.Mode(s)
+		return nil
+	default:
+		return fmt.Errorf("invalid theme %q", s)
+	}
+}
+func (v *themeValue) Type() string { return "string" }
 
 func Execute(ctx context.Context) error {
 	cmd := NewRootCommand()

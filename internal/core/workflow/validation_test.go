@@ -544,6 +544,127 @@ func TestValidateAllowsValidWorktree(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsArtifactWithoutName(t *testing.T) {
+	spec := &WorkflowSpec{
+		Version: "1",
+		Name:    "artifact-no-name",
+		Nodes: []NodeSpec{
+			{ID: "shell", Kind: NodeKindBash, Command: "echo ok", Artifacts: []ArtifactSpec{{Path: "report.txt"}}},
+		},
+	}
+
+	err := Validate(spec, DefaultProviders(), nil)
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+	if !strings.Contains(err.Error(), "artifacts[0].name is required") {
+		t.Fatalf("expected artifact name error, got %v", err)
+	}
+}
+
+func TestValidateRejectsArtifactAbsolutePath(t *testing.T) {
+	spec := &WorkflowSpec{
+		Version: "1",
+		Name:    "artifact-absolute",
+		Nodes: []NodeSpec{
+			{ID: "shell", Kind: NodeKindBash, Command: "echo ok", Artifacts: []ArtifactSpec{{Name: "report", Path: "/etc/passwd"}}},
+		},
+	}
+
+	err := Validate(spec, DefaultProviders(), nil)
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+	if !strings.Contains(err.Error(), "artifacts[0].path must be relative") {
+		t.Fatalf("expected artifact relative path error, got %v", err)
+	}
+}
+
+func TestValidateRejectsArtifactPathTraversal(t *testing.T) {
+	spec := &WorkflowSpec{
+		Version: "1",
+		Name:    "artifact-traversal",
+		Nodes: []NodeSpec{
+			{ID: "shell", Kind: NodeKindBash, Command: "echo ok", Artifacts: []ArtifactSpec{{Name: "secret", Path: "../secret.txt"}}},
+		},
+	}
+
+	err := Validate(spec, DefaultProviders(), nil)
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+	if !strings.Contains(err.Error(), "artifacts[0].path must not contain ..") {
+		t.Fatalf("expected artifact traversal error, got %v", err)
+	}
+}
+
+func TestValidateAllowsValidArtifact(t *testing.T) {
+	spec := &WorkflowSpec{
+		Version: "1",
+		Name:    "artifact-valid",
+		Nodes: []NodeSpec{
+			{ID: "shell", Kind: NodeKindBash, Command: "echo ok", Artifacts: []ArtifactSpec{{Name: "report", Path: "reports/security.md", MediaType: "text/markdown"}}},
+		},
+	}
+
+	if err := Validate(spec, DefaultProviders(), nil); err != nil {
+		t.Fatalf("expected valid artifact, got %v", err)
+	}
+}
+
+func TestValidateRejectsArtifactNameCollisionsAfterNormalization(t *testing.T) {
+	spec := &WorkflowSpec{
+		Version: "1",
+		Name:    "artifact-collision",
+		Nodes: []NodeSpec{
+			{
+				ID:      "shell",
+				Kind:    NodeKindBash,
+				Command: "echo ok",
+				Artifacts: []ArtifactSpec{
+					{Name: "report-1", Path: "reports/report-1.txt"},
+					{Name: "report_1", Path: "reports/report_1.txt"},
+				},
+			},
+		},
+	}
+
+	err := Validate(spec, DefaultProviders(), nil)
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+	if !strings.Contains(err.Error(), "collides with artifacts[0].name") {
+		t.Fatalf("expected collision error, got %v", err)
+	}
+}
+
+func TestValidateRejectsReservedArtifactNames(t *testing.T) {
+	for _, name := range []string{"stdout.txt", "result.json"} {
+		spec := &WorkflowSpec{
+			Version: "1",
+			Name:    "artifact-reserved",
+			Nodes: []NodeSpec{
+				{
+					ID:      "shell",
+					Kind:    NodeKindBash,
+					Command: "echo ok",
+					Artifacts: []ArtifactSpec{
+						{Name: name, Path: "reports/" + name},
+					},
+				},
+			},
+		}
+
+		err := Validate(spec, DefaultProviders(), nil)
+		if err == nil {
+			t.Fatalf("expected validation error for %q", name)
+		}
+		if !strings.Contains(err.Error(), "is reserved") {
+			t.Fatalf("expected reserved-name error for %q, got %v", name, err)
+		}
+	}
+}
+
 func TestValidateRejectsInvalidSchema(t *testing.T) {
 	spec := &WorkflowSpec{
 		Version: WorkflowVersion2,

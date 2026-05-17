@@ -165,6 +165,7 @@ agentflow graph <workflow>                 # imprime grafo Mermaid
 agentflow dry-run <workflow>               # resolve inputs e mostra o plano
 agentflow run <workflow>                   # inicia no daemon
 agentflow run <workflow> -it               # executa localmente no foreground
+agentflow tui                              # lança a interface terminal interativa
 agentflow workflow list                    # lista runs conhecidos
 agentflow workflow status <run_id>         # mostra status de um run
 agentflow workflow logs <run_id>           # imprime eventos do run
@@ -251,6 +252,24 @@ agentflow dry-run <workflow>
 
 Revise especialmente nodes `bash`, permissões de agents, `--working-dir`, `--codex-path`, `--claude-path`, `--pi-path` e qualquer workflow vindo de fora do seu repositório.
 
+## Interface Terminal (TUI)
+
+Alem da CLI tradicional, o Agentflow oferece uma interface terminal interativa (`agentflow tui`) para navegar por workflows, acompanhar runs em tempo real, inspecionar logs e artefatos, e ajustar preferencias — tudo via teclado (com suporte opcional a mouse).
+
+```bash
+# Lançar a TUI
+agentflow tui
+
+# Abrir direto em um run ou workflow
+agentflow tui --run <run_id>
+agentflow tui --workflow <ref>
+
+# Tema claro e sem mouse
+agentflow tui --theme light --no-mouse
+```
+
+A TUI funciona mesmo sem o daemon para operacoes locais (validacao, grafo, dry-run). Para detalhes completos de atalhos e comportamentos, consulte [`docs/tui.md`](docs/tui.md).
+
 ## Aplicação Desktop
 
 O Agentflow possui uma aplicação desktop construída com [Wails v3](https://v3.wails.io/), oferecendo uma interface gráfica para carregar, editar, validar, visualizar e executar workflows.
@@ -280,6 +299,7 @@ A pasta [`docs/`](docs/) detalha CLI, runtime, DSL, validação, transformaçõe
 Para começar pelos fundamentos:
 
 - [`docs/cli.md`](docs/cli.md)
+- [`docs/tui.md`](docs/tui.md)
 - [`docs/workflow-dsl.md`](docs/workflow-dsl.md)
 - [`docs/runtime-execution.md`](docs/runtime-execution.md)
 - [`docs/claude-agent.md`](docs/claude-agent.md)

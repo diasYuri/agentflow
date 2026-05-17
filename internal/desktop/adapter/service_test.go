@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/diasYuri/agentflow/internal/core/ports"
+	corerun "github.com/diasYuri/agentflow/internal/core/run"
 	runworkflow "github.com/diasYuri/agentflow/internal/core/runtime"
 	"github.com/diasYuri/agentflow/internal/core/workflow"
 	"github.com/diasYuri/agentflow/internal/desktop/runtime"
@@ -494,32 +496,242 @@ func TestAdapter_GetRunArtifacts(t *testing.T) {
 	}
 }
 
-func TestAdapter_GetRunArtifact(t *testing.T) {
+func TestAdapter_GetRunArtifacts_Index(t *testing.T) {
 	tmp := t.TempDir()
 	runDir := filepath.Join(tmp, "run-1")
 	_ = os.MkdirAll(filepath.Join(runDir, "artifacts"), 0o755)
-	_ = os.WriteFile(filepath.Join(runDir, "artifacts", "file.txt"), []byte("hello"), 0o644)
+	_ = os.WriteFile(filepath.Join(runDir, "artifacts", "hello.txt"), []byte("hello"), 0o644)
+
+	index := map[string]corerun.Artifact{
+		"nodes/a/stdout.txt": {
+			ID:           "nodes/a/stdout.txt",
+			Name:         "stdout.txt",
+			RelativePath: "nodes/a/stdout.txt",
+			MediaType:    "text/plain",
+			SizeBytes:    5,
+			Kind:         corerun.ArtifactKindStdout,
+			NodeID:       "a",
+		},
+	}
+	idxData, _ := json.Marshal(index)
+	_ = os.WriteFile(filepath.Join(runDir, "artifacts", "index.json"), idxData, 0o644)
 
 	m := runtime.NewManager(tmp, "", "", "", "")
 	a := NewAdapter(nil, nil, &mockSettingsStore{}, &mockFS{}, m)
 
-	resp, err := a.GetRunArtifact("run-1", "file.txt")
+	resp, err := a.GetRunArtifacts("run-1")
+	if err != nil {
+		t.Fatalf("get artifacts: %v", err)
+	}
+	if len(resp.Artifacts) != 1 {
+		t.Fatalf("expected 1 artifact from index, got %d", len(resp.Artifacts))
+	}
+	art := resp.Artifacts[0]
+	if art.ID != "nodes/a/stdout.txt" {
+		t.Errorf("expected id nodes/a/stdout.txt, got %s", art.ID)
+	}
+	if art.Kind != corerun.ArtifactKindStdout {
+		t.Errorf("expected kind stdout, got %s", art.Kind)
+	}
+	if art.NodeID != "a" {
+		t.Errorf("expected node_id a, got %s", art.NodeID)
+	}
+	if art.MediaType != "text/plain" {
+		t.Errorf("expected media_type text/plain, got %s", art.MediaType)
+	}
+}
+
+func TestAdapter_GetRunArtifacts_Fallback(t *testing.T) {
+	tmp := t.TempDir()
+	runDir := filepath.Join(tmp, "run-1")
+	_ = os.MkdirAll(filepath.Join(runDir, "artifacts"), 0o755)
+	_ = os.WriteFile(filepath.Join(runDir, "artifacts", "legacy.txt"), []byte("legacy"), 0o644)
+
+	m := runtime.NewManager(tmp, "", "", "", "")
+	a := NewAdapter(nil, nil, &mockSettingsStore{}, &mockFS{}, m)
+
+	resp, err := a.GetRunArtifacts("run-1")
+	if err != nil {
+		t.Fatalf("get artifacts: %v", err)
+	}
+	if len(resp.Artifacts) != 1 {
+		t.Fatalf("expected 1 artifact from fallback scan, got %d", len(resp.Artifacts))
+	}
+	if resp.Artifacts[0].Name != "legacy.txt" {
+		t.Errorf("expected name legacy.txt, got %s", resp.Artifacts[0].Name)
+	}
+}
+
+func TestAdapter_GetRunArtifact_Text(t *testing.T) {
+	tmp := t.TempDir()
+	runDir := filepath.Join(tmp, "run-1")
+	_ = os.MkdirAll(filepath.Join(runDir, "artifacts", "nodes", "a"), 0o755)
+	_ = os.WriteFile(filepath.Join(runDir, "artifacts", "nodes", "a", "stdout.txt"), []byte("hello"), 0o644)
+
+	index := map[string]corerun.Artifact{
+		"nodes/a/stdout.txt": {
+			ID:           "nodes/a/stdout.txt",
+			Name:         "stdout.txt",
+			RelativePath: "nodes/a/stdout.txt",
+			MediaType:    "text/plain",
+			SizeBytes:    5,
+			Kind:         corerun.ArtifactKindStdout,
+			NodeID:       "a",
+		},
+	}
+	idxData, _ := json.Marshal(index)
+	_ = os.WriteFile(filepath.Join(runDir, "artifacts", "index.json"), idxData, 0o644)
+
+	m := runtime.NewManager(tmp, "", "", "", "")
+	a := NewAdapter(nil, nil, &mockSettingsStore{}, &mockFS{}, m)
+
+	resp, err := a.GetRunArtifact("run-1", "nodes/a/stdout.txt")
 	if err != nil {
 		t.Fatalf("get artifact: %v", err)
 	}
-	if resp.Name != "file.txt" {
-		t.Errorf("expected name file.txt, got %s", resp.Name)
+	if resp.Name != "stdout.txt" {
+		t.Errorf("expected name stdout.txt, got %s", resp.Name)
 	}
-	decoded, err := os.ReadFile(filepath.Join(runDir, "artifacts", "file.txt"))
+	if !resp.IsText {
+		t.Error("expected is_text true")
+	}
+	if resp.TextContent != "hello" {
+		t.Errorf("expected text_content hello, got %s", resp.TextContent)
+	}
+	if resp.Encoding != "text" {
+		t.Errorf("expected encoding text, got %s", resp.Encoding)
+	}
+}
+
+func TestAdapter_GetRunArtifact_Binary(t *testing.T) {
+	tmp := t.TempDir()
+	runDir := filepath.Join(tmp, "run-1")
+	_ = os.MkdirAll(filepath.Join(runDir, "artifacts"), 0o755)
+	_ = os.WriteFile(filepath.Join(runDir, "artifacts", "image.png"), []byte{0x89, 0x50, 0x4E, 0x47}, 0o644)
+
+	index := map[string]corerun.Artifact{
+		"image.png": {
+			ID:           "image.png",
+			Name:         "image.png",
+			RelativePath: "image.png",
+			MediaType:    "image/png",
+			SizeBytes:    4,
+			Kind:         corerun.ArtifactKindCustom,
+		},
+	}
+	idxData, _ := json.Marshal(index)
+	_ = os.WriteFile(filepath.Join(runDir, "artifacts", "index.json"), idxData, 0o644)
+
+	m := runtime.NewManager(tmp, "", "", "", "")
+	a := NewAdapter(nil, nil, &mockSettingsStore{}, &mockFS{}, m)
+
+	resp, err := a.GetRunArtifact("run-1", "image.png")
 	if err != nil {
-		t.Fatalf("read original: %v", err)
+		t.Fatalf("get artifact: %v", err)
 	}
-	if resp.Content == "" {
-		t.Error("expected encoded content")
+	if resp.IsText {
+		t.Error("expected is_text false for binary")
 	}
-	// verify base64 roundtrip indirectly via size
-	if resp.Size != int64(len(decoded)) {
-		t.Errorf("expected size %d, got %d", len(decoded), resp.Size)
+	if resp.TextContent != "" {
+		t.Error("expected empty text_content for binary")
+	}
+	if !resp.Truncated {
+		t.Error("expected truncated true for binary")
+	}
+}
+
+func TestAdapter_GetRunArtifact_Truncated(t *testing.T) {
+	tmp := t.TempDir()
+	runDir := filepath.Join(tmp, "run-1")
+	_ = os.MkdirAll(filepath.Join(runDir, "artifacts"), 0o755)
+	large := make([]byte, MaxArtifactInline+100)
+	for i := range large {
+		large[i] = 'a'
+	}
+	_ = os.WriteFile(filepath.Join(runDir, "artifacts", "large.txt"), large, 0o644)
+
+	index := map[string]corerun.Artifact{
+		"large.txt": {
+			ID:           "large.txt",
+			Name:         "large.txt",
+			RelativePath: "large.txt",
+			MediaType:    "text/plain",
+			SizeBytes:    int64(len(large)),
+			Kind:         corerun.ArtifactKindFile,
+		},
+	}
+	idxData, _ := json.Marshal(index)
+	_ = os.WriteFile(filepath.Join(runDir, "artifacts", "index.json"), idxData, 0o644)
+
+	m := runtime.NewManager(tmp, "", "", "", "")
+	a := NewAdapter(nil, nil, &mockSettingsStore{}, &mockFS{}, m)
+
+	resp, err := a.GetRunArtifact("run-1", "large.txt")
+	if err != nil {
+		t.Fatalf("get artifact: %v", err)
+	}
+	if !resp.IsText {
+		t.Error("expected is_text true")
+	}
+	if !resp.Truncated {
+		t.Error("expected truncated true")
+	}
+	if len(resp.TextContent) != MaxArtifactInline {
+		t.Errorf("expected text_content length %d, got %d", MaxArtifactInline, len(resp.TextContent))
+	}
+}
+
+func TestAdapter_GetRunArtifactPath(t *testing.T) {
+	tmp := t.TempDir()
+	runDir := filepath.Join(tmp, "run-1")
+	_ = os.MkdirAll(filepath.Join(runDir, "artifacts", "nodes", "a"), 0o755)
+	_ = os.WriteFile(filepath.Join(runDir, "artifacts", "nodes", "a", "stdout.txt"), []byte("hello"), 0o644)
+
+	index := map[string]corerun.Artifact{
+		"nodes/a/stdout.txt": {
+			ID:           "nodes/a/stdout.txt",
+			Name:         "stdout.txt",
+			RelativePath: "nodes/a/stdout.txt",
+			MediaType:    "text/plain",
+			SizeBytes:    5,
+			Kind:         corerun.ArtifactKindStdout,
+			NodeID:       "a",
+		},
+	}
+	idxData, _ := json.Marshal(index)
+	_ = os.WriteFile(filepath.Join(runDir, "artifacts", "index.json"), idxData, 0o644)
+
+	m := runtime.NewManager(tmp, "", "", "", "")
+	a := NewAdapter(nil, nil, &mockSettingsStore{}, &mockFS{}, m)
+
+	path, err := a.GetRunArtifactPath("run-1", "nodes/a/stdout.txt")
+	if err != nil {
+		t.Fatalf("get artifact path: %v", err)
+	}
+	if !strings.Contains(path, "artifacts/nodes/a/stdout.txt") {
+		t.Errorf("expected path to contain artifacts/nodes/a/stdout.txt, got %s", path)
+	}
+}
+
+func TestAdapter_GetRunArtifactPath_NotIndexed(t *testing.T) {
+	tmp := t.TempDir()
+	runDir := filepath.Join(tmp, "run-1")
+	_ = os.MkdirAll(filepath.Join(runDir, "artifacts"), 0o755)
+	_ = os.WriteFile(filepath.Join(runDir, "artifacts", "legacy.txt"), []byte("legacy"), 0o644)
+
+	m := runtime.NewManager(tmp, "", "", "", "")
+	a := NewAdapter(nil, nil, &mockSettingsStore{}, &mockFS{}, m)
+
+	_, err := a.GetRunArtifactPath("run-1", "legacy.txt")
+	if err == nil {
+		t.Fatal("expected error for non-indexed run")
+	}
+	de, ok := err.(DesktopError)
+	if !ok {
+		t.Fatalf("expected DesktopError, got %T", err)
+	}
+	if de.Code != ErrCodeWorkflowNotFound {
+		t.Errorf("expected code %s, got %s", ErrCodeWorkflowNotFound, de.Code)
 	}
 }
 
@@ -544,6 +756,30 @@ func TestAdapter_GetRunArtifact_PathTraversal(t *testing.T) {
 	}
 	if de.Code != ErrCodeInvalidPath {
 		t.Errorf("expected code %s, got %s", ErrCodeInvalidPath, de.Code)
+	}
+}
+
+func TestAdapter_GetRunArtifact_Fallback(t *testing.T) {
+	tmp := t.TempDir()
+	runDir := filepath.Join(tmp, "run-1")
+	_ = os.MkdirAll(filepath.Join(runDir, "artifacts"), 0o755)
+	_ = os.WriteFile(filepath.Join(runDir, "artifacts", "fallback.txt"), []byte("fallback content"), 0o644)
+
+	m := runtime.NewManager(tmp, "", "", "", "")
+	a := NewAdapter(nil, nil, &mockSettingsStore{}, &mockFS{}, m)
+
+	resp, err := a.GetRunArtifact("run-1", "fallback.txt")
+	if err != nil {
+		t.Fatalf("get artifact fallback: %v", err)
+	}
+	if resp.Name != "fallback.txt" {
+		t.Errorf("expected name fallback.txt, got %s", resp.Name)
+	}
+	if !resp.IsText {
+		t.Error("expected is_text true for fallback text file")
+	}
+	if resp.TextContent != "fallback content" {
+		t.Errorf("expected text_content fallback content, got %s", resp.TextContent)
 	}
 }
 

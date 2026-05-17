@@ -1,4 +1,5 @@
 import * as DesktopService from "../../bindings/github.com/diasYuri/agentflow/internal/desktop/binding/desktopservice.js";
+import { Call } from "@wailsio/runtime";
 
 export type {
 	DesktopError,
@@ -136,6 +137,14 @@ export async function getRunArtifact(runID: string, artifactID: string) {
 
 export async function getRunLogs(runID: string) {
 	return DesktopService.GetRunLogs(runID) as import("./types.js").LogsResponse;
+}
+
+export async function getRunArtifactPath(runID: string, artifactID: string) {
+	return Call.ByName(
+		"github.com/diasYuri/agentflow/internal/desktop/binding.DesktopService.GetRunArtifactPath",
+		runID,
+		artifactID,
+	) as Promise<string>;
 }
 
 export async function openPath(path: string) {

@@ -1,0 +1,23 @@
+version: "1"
+name: bash-with-artifacts
+description: Demonstra declaração de artefatos em nodes bash e referência downstream.
+execution:
+  output_dir: .agentflow/runs
+nodes:
+  - id: producer
+    kind: bash
+    command: 'mkdir -p reports && echo ''# Security Report'' > reports/security.md && echo ''{"findings": 3}'' > reports/security.json'
+    artifacts:
+      - name: markdown-report
+        path: reports/security.md
+        media_type: text/markdown
+        description: Human-readable security report
+      - name: json-report
+        path: reports/security.json
+        media_type: application/json
+        description: Machine-readable security findings
+
+  - id: consumer
+    kind: bash
+    depends_on: [producer]
+    command: "echo markdown=${nodes.producer.artifacts.markdown_report.id} json=${nodes.producer.artifacts.json_report.id}"

@@ -137,6 +137,14 @@ export interface ArtifactInfo {
 	size: number;
 	content_type?: string;
 	modified_at?: string;
+	kind?: string;
+	node_id?: string;
+	instance_id?: string;
+	relative_path?: string;
+	media_type?: string;
+	size_bytes?: number;
+	created_at?: string;
+	description?: string;
 }
 
 export interface ArtifactsResponse {
@@ -151,7 +159,18 @@ export interface ArtifactResponse {
 	size: number;
 	content_type?: string;
 	encoding?: string;
-	content: string;
+	content?: string;
+	text_content?: string;
+	truncated?: boolean;
+	is_text?: boolean;
+	kind?: string;
+	node_id?: string;
+	instance_id?: string;
+	relative_path?: string;
+	media_type?: string;
+	size_bytes?: number;
+	created_at?: string;
+	description?: string;
 }
 
 export interface LogsResponse {

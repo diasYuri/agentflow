@@ -801,6 +801,51 @@ nodes:
 	}
 }
 
+func TestDecodeArtifacts(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "artifacts.yaml")
+	content := []byte(`version: "1"
+name: artifacts
+nodes:
+  - id: shell
+    kind: bash
+    command: "echo ok"
+    artifacts:
+      - name: report
+        path: reports/security.md
+        media_type: text/markdown
+        description: Security scan results
+`)
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	spec, err := decodeWorkflow(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	node, ok := spec.NodeByID("shell")
+	if !ok {
+		t.Fatal("expected shell node")
+	}
+	if len(node.Artifacts) != 1 {
+		t.Fatalf("expected 1 artifact, got %d", len(node.Artifacts))
+	}
+	art := node.Artifacts[0]
+	if art.Name != "report" {
+		t.Fatalf("expected artifact name report, got %q", art.Name)
+	}
+	if art.Path != "reports/security.md" {
+		t.Fatalf("expected artifact path reports/security.md, got %q", art.Path)
+	}
+	if art.MediaType != "text/markdown" {
+		t.Fatalf("expected artifact media_type text/markdown, got %q", art.MediaType)
+	}
+	if art.Description != "Security scan results" {
+		t.Fatalf("expected artifact description, got %q", art.Description)
+	}
+}
+
 func writeWorkflowFile(t *testing.T, root string, filename string, name string, description string) string {
 	t.Helper()
 	if err := os.MkdirAll(root, 0o755); err != nil {

@@ -74,7 +74,7 @@ Metodos expostos:
 - `ListWorkflows`, `LoadWorkflow`
 - `ValidateWorkflow`, `GenerateGraph`, `DryRunWorkflow`
 - `RunWorkflow`, `CancelRun`, `ListRuns`, `GetRun`
-- `GetRunEvents`, `GetRunArtifacts`, `GetRunArtifact`
+- `GetRunEvents`, `GetRunArtifacts`, `GetRunArtifact`, `GetRunArtifactPath`
 - `GetRunNodes`, `GetRunNode`, `GetRunPlan`, `GetRunLogs`
 - `ResolveInput`, `SaveWorkflow`, `SaveInput`
 - `GetAppSettings`, `UpdateAppSettings`, `OpenPath`
@@ -111,5 +111,8 @@ go build ./cmd/agentflow-desktop
 - O adapter traduz chamadas da UI para a API existente do Agentflow, normalizando erros em `DesktopError`.
 - O runtime desktop reutiliza o mesmo armazenamento de runs da CLI (`~/.agentflow/runs` ou `.agentflow/runs`).
 - O empacotamento Wails requer o diretorio `frontend/desktop/dist`; o `assets.go` faz embed via `//go:embed all:frontend/desktop/dist`.
-- Preview de artefatos binarios no desktop e limitado; arquivos textuais sao decodificados de base64 para exibicao.
+- O desktop consome o contrato de artefatos de primeira classe (`kind`, `node_id`, `instance_id`, `media_type`, `size_bytes`, `created_at`, `description`).
+- Preview textual e retornado inline pelo backend (`text_content`) ate 128 KiB; binarios nao sao decodificados no frontend.
+- Acoes de open/export para binarios usam `GetRunArtifactPath`, que resolve o path absoluto controlado pelo backend sem reconstruir paths no frontend.
+- Nao ha TUI neste checkout; se uma TUI for adicionada depois, ela deve consumir os mesmos DTOs/bindings, nao o filesystem diretamente.
 - Cancelamento de runs e cooperative: a run interrompe no proximo ponto de checagem de contexto.

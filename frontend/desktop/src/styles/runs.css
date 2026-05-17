@@ -469,6 +469,26 @@
 	font-weight: 600;
 }
 
+.artifact-preview-actions {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+}
+
+.artifact-preview-open {
+	padding: 0.25rem 0.5rem;
+	border: none;
+	border-radius: var(--radius-sm);
+	background: var(--accent);
+	color: #fff;
+	font-size: 0.75rem;
+	cursor: pointer;
+}
+
+.artifact-preview-open:hover {
+	background: var(--accent-hover);
+}
+
 .artifact-preview-close {
 	padding: 0.25rem 0.5rem;
 	border: none;
@@ -477,6 +497,18 @@
 	color: var(--text);
 	font-size: 0.75rem;
 	cursor: pointer;
+}
+
+.artifact-preview-binary {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 0.75rem;
+	padding: 1.5rem;
+	color: var(--text-secondary);
+	font-size: 0.8125rem;
 }
 
 .artifact-preview-content {

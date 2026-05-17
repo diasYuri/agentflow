@@ -179,6 +179,7 @@ type NodeSpec struct {
 	System       string          `json:"system,omitempty" yaml:"system"`
 	Sandbox      SandboxSpec     `json:"sandbox,omitempty" yaml:"sandbox"`
 	OutputSchema map[string]any  `json:"output_schema,omitempty" yaml:"output_schema"`
+	Artifacts    []ArtifactSpec  `json:"artifacts,omitempty" yaml:"artifacts"`
 
 	Command    string            `json:"command,omitempty" yaml:"command"`
 	Shell      string            `json:"shell,omitempty" yaml:"shell"`
@@ -195,6 +196,13 @@ type NodeSpec struct {
 	Ref     string                    `json:"ref,omitempty" yaml:"ref"`
 	Params  map[string]any            `json:"params,omitempty" yaml:"params"`
 	Outputs map[string]NodeOutputSpec `json:"outputs,omitempty" yaml:"outputs"`
+}
+
+type ArtifactSpec struct {
+	Name        string `json:"name" yaml:"name"`
+	Path        string `json:"path" yaml:"path"`
+	MediaType   string `json:"media_type,omitempty" yaml:"media_type"`
+	Description string `json:"description,omitempty" yaml:"description"`
 }
 
 type SandboxSpec struct {

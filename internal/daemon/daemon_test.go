@@ -3,9 +3,10 @@ package daemon
 import (
 	"context"
 	"database/sql"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1267,11 +1268,10 @@ func TestManagerWorkflowArtifactMasksSecretsBeforeEncoding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	decoded, err := base64.StdEncoding.DecodeString(resp.Content)
-	if err != nil {
-		t.Fatal(err)
+	if resp.Encoding != "text" {
+		t.Fatalf("expected text encoding, got %s", resp.Encoding)
 	}
-	content := string(decoded)
+	content := resp.TextContent
 	if strings.Contains(content, secret) {
 		t.Fatalf("expected artifact content to be masked, got %q", content)
 	}
@@ -1345,15 +1345,11 @@ func TestServerWorkflowArtifactsEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if artResp.Encoding != "base64" {
-		t.Fatalf("expected base64 encoding, got %s", artResp.Encoding)
+	if artResp.Encoding != "text" {
+		t.Fatalf("expected text encoding, got %s", artResp.Encoding)
 	}
-	decoded, err := base64.StdEncoding.DecodeString(artResp.Content)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(decoded) != "hello" {
-		t.Fatalf("expected hello, got %s", string(decoded))
+	if artResp.TextContent != "hello" {
+		t.Fatalf("expected hello, got %s", artResp.TextContent)
 	}
 }
 
@@ -1709,6 +1705,478 @@ nodes:
 		if !strings.Contains(err.Error(), "only paused runs can be resumed") {
 			t.Fatalf("unexpected resume error: %v", err)
 		}
+	}
+}
+
+func TestManagerWorkflowArtifactsReadsFromIndex(t *testing.T) {
+	dir := shortTempDir(t)
+	cfg := Config{RunRoot: filepath.Join(dir, "runs")}
+	manager := NewManager(cfg, nil, nil)
+
+	runID := "test-run-index"
+	runDir := filepath.Join(cfg.RunRoot, runID)
+	if err := os.MkdirAll(filepath.Join(runDir, "artifacts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	index := map[string]corerun.Artifact{
+		"nodes/n1/stdout.txt": {
+			ID: "nodes/n1/stdout.txt", RunID: runID, NodeID: "n1", Name: "stdout.txt",
+			RelativePath: "nodes/n1/stdout.txt", MediaType: "text/plain", SizeBytes: 5,
+			Kind: corerun.ArtifactKindStdout, CreatedAt: time.Now().UTC(),
+		},
+		"nodes/n1/result.json": {
+			ID: "nodes/n1/result.json", RunID: runID, NodeID: "n1", Name: "result.json",
+			RelativePath: "nodes/n1/result.json", MediaType: "application/json", SizeBytes: 256,
+			Kind: corerun.ArtifactKindResult, CreatedAt: time.Now().UTC(),
+		},
+	}
+	indexData, _ := json.Marshal(index)
+	if err := os.WriteFile(filepath.Join(runDir, "artifacts", "index.json"), indexData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	manager.mu.Lock()
+	manager.records[runID] = &runRecord{
+		run: WorkflowRun{
+			ID:     runID,
+			RunDir: runDir,
+			Status: corerun.RunSuccess,
+		},
+	}
+	manager.mu.Unlock()
+
+	resp, err := manager.WorkflowArtifacts(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Artifacts) != 2 {
+		t.Fatalf("expected 2 artifacts from index, got %d", len(resp.Artifacts))
+	}
+	for _, a := range resp.Artifacts {
+		if a.NodeID != "n1" {
+			t.Fatalf("expected node_id n1, got %q", a.NodeID)
+		}
+	}
+}
+
+func TestManagerWorkflowArtifactsFallbackWithoutIndex(t *testing.T) {
+	dir := shortTempDir(t)
+	cfg := Config{RunRoot: filepath.Join(dir, "runs")}
+	manager := NewManager(cfg, nil, nil)
+
+	runID := "test-run-fallback"
+	runDir := filepath.Join(cfg.RunRoot, runID)
+	if err := os.MkdirAll(filepath.Join(runDir, "artifacts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runDir, "artifacts", "data.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	manager.mu.Lock()
+	manager.records[runID] = &runRecord{
+		run: WorkflowRun{
+			ID:     runID,
+			RunDir: runDir,
+			Status: corerun.RunSuccess,
+		},
+	}
+	manager.mu.Unlock()
+
+	resp, err := manager.WorkflowArtifacts(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Artifacts) != 1 {
+		t.Fatalf("expected 1 artifact from fallback scan, got %d", len(resp.Artifacts))
+	}
+	if resp.Artifacts[0].Name != "data.txt" {
+		t.Fatalf("expected data.txt, got %s", resp.Artifacts[0].Name)
+	}
+}
+
+func TestManagerWorkflowArtifactReturnsTextInline(t *testing.T) {
+	dir := shortTempDir(t)
+	cfg := Config{RunRoot: filepath.Join(dir, "runs")}
+	manager := NewManager(cfg, nil, nil)
+
+	runID := "test-run-text"
+	runDir := filepath.Join(cfg.RunRoot, runID)
+	if err := os.MkdirAll(filepath.Join(runDir, "artifacts", "nodes", "n1"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runDir, "artifacts", "nodes", "n1", "stdout.txt"), []byte("hello world"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	index := map[string]corerun.Artifact{
+		"nodes/n1/stdout.txt": {
+			ID: "nodes/n1/stdout.txt", RunID: runID, NodeID: "n1", Name: "stdout.txt",
+			RelativePath: "nodes/n1/stdout.txt", MediaType: "text/plain", SizeBytes: 11,
+			Kind: corerun.ArtifactKindStdout, CreatedAt: time.Now().UTC(),
+		},
+	}
+	indexData, _ := json.Marshal(index)
+	if err := os.WriteFile(filepath.Join(runDir, "artifacts", "index.json"), indexData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	manager.mu.Lock()
+	manager.records[runID] = &runRecord{
+		run: WorkflowRun{
+			ID:     runID,
+			RunDir: runDir,
+			Status: corerun.RunSuccess,
+		},
+	}
+	manager.mu.Unlock()
+
+	resp, err := manager.WorkflowArtifact(runID, "nodes/n1/stdout.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Encoding != "text" {
+		t.Fatalf("expected text encoding, got %s", resp.Encoding)
+	}
+	if resp.TextContent != "hello world" {
+		t.Fatalf("expected text content, got %q", resp.TextContent)
+	}
+	if !resp.IsText {
+		t.Fatal("expected is_text true")
+	}
+}
+
+func TestManagerWorkflowArtifactTruncatesLargeText(t *testing.T) {
+	dir := shortTempDir(t)
+	cfg := Config{RunRoot: filepath.Join(dir, "runs")}
+	manager := NewManager(cfg, nil, nil)
+
+	runID := "test-run-truncate"
+	runDir := filepath.Join(cfg.RunRoot, runID)
+	if err := os.MkdirAll(filepath.Join(runDir, "artifacts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	big := make([]byte, MaxArtifactInline+1)
+	for i := range big {
+		big[i] = 'x'
+	}
+	if err := os.WriteFile(filepath.Join(runDir, "artifacts", "big.txt"), big, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	manager.mu.Lock()
+	manager.records[runID] = &runRecord{
+		run: WorkflowRun{
+			ID:     runID,
+			RunDir: runDir,
+			Status: corerun.RunSuccess,
+		},
+	}
+	manager.mu.Unlock()
+
+	resp, err := manager.WorkflowArtifact(runID, "big.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.Truncated {
+		t.Fatal("expected truncated true")
+	}
+	if len(resp.TextContent) != MaxArtifactInline {
+		t.Fatalf("expected text content length %d, got %d", MaxArtifactInline, len(resp.TextContent))
+	}
+}
+
+func TestManagerWorkflowArtifactOmitsBinaryByDefault(t *testing.T) {
+	dir := shortTempDir(t)
+	cfg := Config{RunRoot: filepath.Join(dir, "runs")}
+	manager := NewManager(cfg, nil, nil)
+
+	runID := "test-run-binary"
+	runDir := filepath.Join(cfg.RunRoot, runID)
+	if err := os.MkdirAll(filepath.Join(runDir, "artifacts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runDir, "artifacts", "image.png"), []byte{0x89, 0x50, 0x4e, 0x47}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	index := map[string]corerun.Artifact{
+		"image.png": {
+			ID: "image.png", RunID: runID, Name: "image.png",
+			RelativePath: "image.png", MediaType: "image/png", SizeBytes: 4,
+			Kind: corerun.ArtifactKindFile, CreatedAt: time.Now().UTC(),
+		},
+	}
+	indexData, _ := json.Marshal(index)
+	if err := os.WriteFile(filepath.Join(runDir, "artifacts", "index.json"), indexData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	manager.mu.Lock()
+	manager.records[runID] = &runRecord{
+		run: WorkflowRun{
+			ID:     runID,
+			RunDir: runDir,
+			Status: corerun.RunSuccess,
+		},
+	}
+	manager.mu.Unlock()
+
+	resp, err := manager.WorkflowArtifact(runID, "image.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.IsText {
+		t.Fatal("expected is_text false")
+	}
+	if resp.Content != "" {
+		t.Fatalf("expected no inline content for binary, got %d chars", len(resp.Content))
+	}
+	if !resp.Truncated {
+		t.Fatal("expected truncated true for oversized binary")
+	}
+}
+
+func TestManagerWorkflowArtifactPathRequiresIndex(t *testing.T) {
+	dir := shortTempDir(t)
+	cfg := Config{RunRoot: filepath.Join(dir, "runs")}
+	manager := NewManager(cfg, nil, nil)
+
+	runID := "test-run-path"
+	runDir := filepath.Join(cfg.RunRoot, runID)
+	if err := os.MkdirAll(filepath.Join(runDir, "artifacts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runDir, "artifacts", "data.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	manager.mu.Lock()
+	manager.records[runID] = &runRecord{
+		run: WorkflowRun{
+			ID:     runID,
+			RunDir: runDir,
+			Status: corerun.RunSuccess,
+		},
+	}
+	manager.mu.Unlock()
+
+	_, err := manager.WorkflowArtifactPath(runID, "data.txt")
+	if err == nil {
+		t.Fatal("expected error when index is missing")
+	}
+}
+
+func TestManagerWorkflowArtifactPathRejectsTraversal(t *testing.T) {
+	dir := shortTempDir(t)
+	cfg := Config{RunRoot: filepath.Join(dir, "runs")}
+	manager := NewManager(cfg, nil, nil)
+
+	runID := "test-run-path-traversal"
+	runDir := filepath.Join(cfg.RunRoot, runID)
+	if err := os.MkdirAll(filepath.Join(runDir, "artifacts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runDir, "run.json"), []byte("secret"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	index := map[string]corerun.Artifact{
+		"../../../run.json": {
+			ID: "../../../run.json", RunID: runID, Name: "run.json",
+			RelativePath: "../../../run.json", MediaType: "application/json", SizeBytes: 6,
+			Kind: corerun.ArtifactKindFile, CreatedAt: time.Now().UTC(),
+		},
+	}
+	indexData, _ := json.Marshal(index)
+	if err := os.WriteFile(filepath.Join(runDir, "artifacts", "index.json"), indexData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	manager.mu.Lock()
+	manager.records[runID] = &runRecord{
+		run: WorkflowRun{
+			ID:     runID,
+			RunDir: runDir,
+			Status: corerun.RunSuccess,
+		},
+	}
+	manager.mu.Unlock()
+
+	_, err := manager.WorkflowArtifactPath(runID, "../../../run.json")
+	if err == nil {
+		t.Fatal("expected error for traversal path")
+	}
+}
+
+func TestManagerWorkflowArtifactPathReturnsResolvedPath(t *testing.T) {
+	dir := shortTempDir(t)
+	cfg := Config{RunRoot: filepath.Join(dir, "runs")}
+	manager := NewManager(cfg, nil, nil)
+
+	runID := "test-run-path-ok"
+	runDir := filepath.Join(cfg.RunRoot, runID)
+	if err := os.MkdirAll(filepath.Join(runDir, "artifacts", "nodes", "n1"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runDir, "artifacts", "nodes", "n1", "stdout.txt"), []byte("ok"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	index := map[string]corerun.Artifact{
+		"nodes/n1/stdout.txt": {
+			ID: "nodes/n1/stdout.txt", RunID: runID, NodeID: "n1", Name: "stdout.txt",
+			RelativePath: "nodes/n1/stdout.txt", MediaType: "text/plain", SizeBytes: 2,
+			Kind: corerun.ArtifactKindStdout, CreatedAt: time.Now().UTC(),
+		},
+	}
+	indexData, _ := json.Marshal(index)
+	if err := os.WriteFile(filepath.Join(runDir, "artifacts", "index.json"), indexData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	manager.mu.Lock()
+	manager.records[runID] = &runRecord{
+		run: WorkflowRun{
+			ID:     runID,
+			RunDir: runDir,
+			Status: corerun.RunSuccess,
+		},
+	}
+	manager.mu.Unlock()
+
+	p, err := manager.WorkflowArtifactPath(runID, "nodes/n1/stdout.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(p, "artifacts/nodes/n1/stdout.txt") {
+		t.Fatalf("expected path suffix, got %q", p)
+	}
+}
+
+func TestManagerWorkflowArtifactRejectsSymlinkAncestor(t *testing.T) {
+	dir := shortTempDir(t)
+	cfg := Config{RunRoot: filepath.Join(dir, "runs")}
+	manager := NewManager(cfg, nil, nil)
+
+	runID := "test-run-symlink-ancestor"
+	runDir := filepath.Join(cfg.RunRoot, runID)
+	artifactsDir := filepath.Join(runDir, "artifacts")
+	targetDir := filepath.Join(dir, "escape")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(artifactsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(targetDir, filepath.Join(artifactsDir, "link")); err != nil {
+		t.Skip("skipping symlink test: " + err.Error())
+	}
+	index := map[string]corerun.Artifact{
+		"link/foo.txt": {
+			ID:           "link/foo.txt",
+			RunID:        runID,
+			Name:         "foo.txt",
+			RelativePath: "link/foo.txt",
+			MediaType:    "text/plain",
+			SizeBytes:    4,
+			Kind:         corerun.ArtifactKindFile,
+			CreatedAt:    time.Now().UTC(),
+		},
+	}
+	indexData, _ := json.Marshal(index)
+	if err := os.WriteFile(filepath.Join(artifactsDir, "index.json"), indexData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(targetDir, "foo.txt"), []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	manager.mu.Lock()
+	manager.records[runID] = &runRecord{
+		run: WorkflowRun{
+			ID:     runID,
+			RunDir: runDir,
+			Status: corerun.RunSuccess,
+		},
+	}
+	manager.mu.Unlock()
+
+	if _, err := manager.WorkflowArtifact(runID, "link/foo.txt"); err == nil {
+		t.Fatal("expected show to reject symlink ancestor")
+	}
+	if _, err := manager.WorkflowArtifactPath(runID, "link/foo.txt"); err == nil {
+		t.Fatal("expected path to reject symlink ancestor")
+	}
+}
+
+func TestServerArtifactPathRouteSupportsArtifactNamedPath(t *testing.T) {
+	dir := shortTempDir(t)
+	cfg := Config{RunRoot: filepath.Join(dir, "runs")}
+	manager := NewManager(cfg, nil, nil)
+
+	runID := "test-run-artifact-path"
+	runDir := filepath.Join(cfg.RunRoot, runID)
+	if err := os.MkdirAll(filepath.Join(runDir, "artifacts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	artifactsDir := filepath.Join(runDir, "artifacts")
+	artifact := corerun.Artifact{
+		ID:           "path",
+		RunID:        runID,
+		Name:         "path",
+		RelativePath: "path",
+		MediaType:    "text/plain",
+		SizeBytes:    4,
+		Kind:         corerun.ArtifactKindFile,
+		CreatedAt:    time.Now().UTC(),
+	}
+	index := map[string]corerun.Artifact{"path": artifact}
+	indexData, _ := json.Marshal(index)
+	if err := os.WriteFile(filepath.Join(artifactsDir, "index.json"), indexData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(artifactsDir, "path"), []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	manager.mu.Lock()
+	manager.records[runID] = &runRecord{
+		run: WorkflowRun{
+			ID:     runID,
+			RunDir: runDir,
+			Status: corerun.RunSuccess,
+		},
+	}
+	manager.mu.Unlock()
+
+	server := NewServer(cfg, manager, time.Now(), func() {}, nil)
+
+	showReq := httptest.NewRequest(http.MethodGet, "/v1/workflows/"+runID+"/artifacts/path", nil)
+	showRR := httptest.NewRecorder()
+	server.handleWorkflow(showRR, showReq)
+	if showRR.Code != http.StatusOK {
+		t.Fatalf("expected show route to succeed, got %d: %s", showRR.Code, showRR.Body.String())
+	}
+	var showResp WorkflowArtifactResponse
+	if err := json.Unmarshal(showRR.Body.Bytes(), &showResp); err != nil {
+		t.Fatalf("unmarshal show response: %v", err)
+	}
+	if showResp.ID != "path" {
+		t.Fatalf("expected artifact id path, got %q", showResp.ID)
+	}
+
+	pathReq := httptest.NewRequest(http.MethodGet, "/v1/workflows/"+runID+"/artifact-path?artifact_id=path", nil)
+	pathRR := httptest.NewRecorder()
+	server.handleWorkflow(pathRR, pathReq)
+	if pathRR.Code != http.StatusOK {
+		t.Fatalf("expected path route to succeed, got %d: %s", pathRR.Code, pathRR.Body.String())
+	}
+	var pathResp map[string]string
+	if err := json.Unmarshal(pathRR.Body.Bytes(), &pathResp); err != nil {
+		t.Fatalf("unmarshal path response: %v", err)
+	}
+	if pathResp["artifact_id"] != "path" {
+		t.Fatalf("expected artifact_id path, got %q", pathResp["artifact_id"])
+	}
+	if !strings.HasSuffix(pathResp["path"], filepath.Join("artifacts", "path")) {
+		t.Fatalf("expected resolved path, got %q", pathResp["path"])
 	}
 }
 

@@ -162,7 +162,14 @@ func (e *Executor) setupWorktree(ctx context.Context, state *ExecutionState, pla
 		return fmt.Errorf("failed to marshal worktree artifact: %w", err)
 	}
 	maskedData := []byte(state.masker.MaskString(string(data)))
-	if err := e.svc.Runs.SaveArtifact(ctx, state.runID, "worktree/status.json", maskedData); err != nil {
+	art := corerun.Artifact{
+		ID:           "worktree/status.json",
+		Name:         "status.json",
+		RelativePath: "worktree/status.json",
+		MediaType:    "application/json",
+		Kind:         corerun.ArtifactKindCustom,
+	}
+	if err := e.svc.Runs.SaveArtifact(ctx, state.runID, art, maskedData); err != nil {
 		return fmt.Errorf("failed to save worktree status artifact: %w", err)
 	}
 
@@ -402,7 +409,7 @@ func (e *Executor) executeNodes(ctx context.Context, state *ExecutionState, plan
 		ok, err := coreworkflow.EvalBool(node.When, state.evalContext(state.index, state.total, state.item))
 		if err != nil {
 			result := corerun.NodeResult{RunID: state.runID, NodeID: nodeID, Status: corerun.NodeFailed, Error: err.Error(), Path: append([]string(nil), state.path...)}
-			e.recordNode(ctx, state, result)
+			e.recordNode(ctx, state, node, result)
 			if !node.ContinueOnError {
 				if plan.Workflow.Execution.PauseWhenFail {
 					return e.pauseOnFailure(ctx, state, pc, nodeID)
@@ -415,7 +422,7 @@ func (e *Executor) executeNodes(ctx context.Context, state *ExecutionState, plan
 		}
 		if !ok {
 			result := corerun.NodeResult{RunID: state.runID, NodeID: nodeID, Status: corerun.NodeSkipped, Path: append([]string(nil), state.path...)}
-			e.recordNode(ctx, state, result)
+			e.recordNode(ctx, state, node, result)
 			_ = e.emitState(ctx, state, corerun.Event{Type: "node.skipped", NodeID: nodeID})
 			pc++
 			_ = e.saveCheckpoint(ctx, state, true, pc, "", "")
@@ -423,7 +430,7 @@ func (e *Executor) executeNodes(ctx context.Context, state *ExecutionState, plan
 		}
 		_ = e.emitState(ctx, state, corerun.Event{Type: "node.ready", NodeID: nodeID})
 		result := e.executeNode(ctx, state, node)
-		e.recordNode(ctx, state, result)
+		e.recordNode(ctx, state, node, result)
 		if isFailure(result.Status) && !node.ContinueOnError {
 			if plan.Workflow.Execution.PauseWhenFail {
 				return e.pauseOnFailure(ctx, state, pc, nodeID)
@@ -436,7 +443,7 @@ func (e *Executor) executeNodes(ctx context.Context, state *ExecutionState, plan
 				failedResult := result
 				failedResult.Status = corerun.NodeFailed
 				failedResult.Error = jumpErr.Error()
-				e.recordNode(ctx, state, failedResult)
+				e.recordNode(ctx, state, node, failedResult)
 				if !node.ContinueOnError {
 					if plan.Workflow.Execution.PauseWhenFail {
 						return e.pauseOnFailure(ctx, state, pc, nodeID)
@@ -569,13 +576,16 @@ func (e *Executor) executeFanOut(
 			status = result.Status
 			errs = append(errs, result.Error)
 		}
+		result.Artifacts = e.saveNodeArtifacts(ctx, state, node, result)
+		results[i] = result
+		state.set(result.NodeID, result)
 		_ = e.svc.Runs.SaveNodeResult(ctx, state.runID, state.masker.MaskNodeResult(result))
 	}
 	finalResult := corerun.NodeResult{RunID: state.runID, NodeID: node.ID, Status: status, Outputs: outputs, Error: strings.Join(errs, "; ")}
 	if finalPath != nil {
 		finalResult.Path = append([]string(nil), finalPath...)
 	}
-	e.recordNode(ctx, state, finalResult)
+	e.recordNode(ctx, state, node, finalResult)
 	return finalResult
 }
 

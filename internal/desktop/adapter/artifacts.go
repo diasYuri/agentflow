@@ -2,7 +2,6 @@ package adapter
 
 import (
 	"bufio"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,14 +17,24 @@ import (
 	"github.com/diasYuri/agentflow/internal/desktop/runtime"
 )
 
+const MaxArtifactInline = 128 * 1024
+
 // ArtifactInfo resume um artefato.
 type ArtifactInfo struct {
-	ID          string    `json:"id"`
-	Name        string    `json:"name"`
-	Path        string    `json:"path"`
-	Size        int64     `json:"size"`
-	ContentType string    `json:"content_type,omitempty"`
-	ModifiedAt  time.Time `json:"modified_at,omitempty"`
+	ID           string               `json:"id"`
+	Name         string               `json:"name"`
+	Path         string               `json:"path"`
+	Size         int64                `json:"size"`
+	ContentType  string               `json:"content_type,omitempty"`
+	ModifiedAt   time.Time            `json:"modified_at,omitempty"`
+	NodeID       string               `json:"node_id,omitempty"`
+	InstanceID   string               `json:"instance_id,omitempty"`
+	RelativePath string               `json:"relative_path,omitempty"`
+	MediaType    string               `json:"media_type,omitempty"`
+	SizeBytes    int64                `json:"size_bytes,omitempty"`
+	CreatedAt    time.Time            `json:"created_at,omitempty"`
+	Kind         corerun.ArtifactKind `json:"kind,omitempty"`
+	Description  string               `json:"description,omitempty"`
 }
 
 // ArtifactsResponse retorna artefatos de uma run.
@@ -36,13 +45,24 @@ type ArtifactsResponse struct {
 
 // ArtifactResponse retorna conteudo de um artefato.
 type ArtifactResponse struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Path        string `json:"path"`
-	Size        int64  `json:"size"`
-	ContentType string `json:"content_type,omitempty"`
-	Encoding    string `json:"encoding,omitempty"`
-	Content     string `json:"content"`
+	ID           string               `json:"id"`
+	Name         string               `json:"name"`
+	Path         string               `json:"path"`
+	Size         int64                `json:"size"`
+	ContentType  string               `json:"content_type,omitempty"`
+	NodeID       string               `json:"node_id,omitempty"`
+	InstanceID   string               `json:"instance_id,omitempty"`
+	RelativePath string               `json:"relative_path,omitempty"`
+	MediaType    string               `json:"media_type,omitempty"`
+	SizeBytes    int64                `json:"size_bytes,omitempty"`
+	CreatedAt    time.Time            `json:"created_at,omitempty"`
+	Kind         corerun.ArtifactKind `json:"kind,omitempty"`
+	Description  string               `json:"description,omitempty"`
+	Encoding     string               `json:"encoding,omitempty"`
+	Content      string               `json:"content,omitempty"`
+	TextContent  string               `json:"text_content,omitempty"`
+	Truncated    bool                 `json:"truncated,omitempty"`
+	IsText       bool                 `json:"is_text,omitempty"`
 }
 
 // NodeResultDTO representa resultado de um no.
@@ -109,41 +129,26 @@ func (a *Adapter) GetRunArtifacts(runID string) (ArtifactsResponse, error) {
 	}
 
 	resp := ArtifactsResponse{RunID: runID}
-	artifactsDir := filepath.Join(runDir, "artifacts")
-
-	if err := filepath.WalkDir(artifactsDir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				return nil
-			}
-			return err
-		}
-		if d.IsDir() {
-			return nil
-		}
-		if isSymlink(path) {
-			return nil
-		}
-		info, err := d.Info()
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(artifactsDir, path)
-		if err != nil {
-			return err
-		}
-		resp.Artifacts = append(resp.Artifacts, ArtifactInfo{
-			ID:          rel,
-			Name:        filepath.Base(rel),
-			Path:        rel,
-			Size:        info.Size(),
-			ContentType: detectFileContentType(path),
-			ModifiedAt:  info.ModTime(),
-		})
-		return nil
-	}); err != nil {
+	index, err := a.loadArtifactIndex(runDir)
+	if err != nil {
 		return ArtifactsResponse{}, DesktopError{Message: err.Error(), Code: ErrCodeFileSystem}
 	}
+	if len(index) > 0 {
+		for _, art := range index {
+			resp.Artifacts = append(resp.Artifacts, artifactInfoToDTO(art))
+		}
+		sort.Slice(resp.Artifacts, func(i, j int) bool {
+			return resp.Artifacts[i].ID < resp.Artifacts[j].ID
+		})
+		return resp, nil
+	}
+
+	// Fallback para runs antigas sem indice.
+	artifacts, err := a.fallbackScanArtifacts(runDir)
+	if err != nil {
+		return ArtifactsResponse{}, DesktopError{Message: err.Error(), Code: ErrCodeFileSystem}
+	}
+	resp.Artifacts = artifacts
 	return resp, nil
 }
 
@@ -157,11 +162,33 @@ func (a *Adapter) GetRunArtifact(runID, artifactID string) (ArtifactResponse, er
 		return ArtifactResponse{}, DesktopError{Message: "run not found", Code: ErrCodeWorkflowNotFound}
 	}
 
-	artifactsDir := filepath.Join(runDir, "artifacts")
-	path, err := safeJoin(artifactsDir, artifactID)
+	index, err := a.loadArtifactIndex(runDir)
 	if err != nil {
-		return ArtifactResponse{}, DesktopError{Message: err.Error(), Code: ErrCodeInvalidPath}
+		return ArtifactResponse{}, DesktopError{Message: err.Error(), Code: ErrCodeFileSystem}
 	}
+
+	artifactsDir := filepath.Join(runDir, "artifacts")
+	var artifact corerun.Artifact
+	var path string
+
+	if len(index) > 0 {
+		var found bool
+		artifact, found = index[artifactID]
+		if !found {
+			return ArtifactResponse{}, DesktopError{Message: "artifact not found", Code: ErrCodeWorkflowNotFound}
+		}
+		path, err = safeJoin(artifactsDir, artifact.RelativePath)
+		if err != nil {
+			return ArtifactResponse{}, DesktopError{Message: err.Error(), Code: ErrCodeInvalidPath}
+		}
+	} else {
+		// Fallback para runs antigas sem indice.
+		path, err = safeJoin(artifactsDir, artifactID)
+		if err != nil {
+			return ArtifactResponse{}, DesktopError{Message: err.Error(), Code: ErrCodeInvalidPath}
+		}
+	}
+
 	if isSymlink(path) {
 		return ArtifactResponse{}, DesktopError{Message: "symlink not allowed", Code: ErrCodeInvalidPath}
 	}
@@ -179,16 +206,83 @@ func (a *Adapter) GetRunArtifact(runID, artifactID string) (ArtifactResponse, er
 		return ArtifactResponse{}, DesktopError{Message: err.Error(), Code: ErrCodeFileSystem}
 	}
 
-	content := base64.StdEncoding.EncodeToString(data)
-	return ArtifactResponse{
-		ID:          artifactID,
-		Name:        filepath.Base(artifactID),
-		Path:        artifactID,
-		Size:        info.Size(),
-		ContentType: http.DetectContentType(data),
-		Encoding:    "base64",
-		Content:     content,
-	}, nil
+	mt := artifact.MediaType
+	if mt == "" {
+		mt = http.DetectContentType(data)
+	}
+	text := isTextMediaType(mt)
+
+	resp := ArtifactResponse{
+		ID:           artifactID,
+		Name:         filepath.Base(artifactID),
+		Path:         artifactID,
+		Size:         info.Size(),
+		ContentType:  mt,
+		NodeID:       artifact.NodeID,
+		InstanceID:   artifact.InstanceID,
+		RelativePath: artifact.RelativePath,
+		MediaType:    mt,
+		SizeBytes:    info.Size(),
+		CreatedAt:    artifact.CreatedAt,
+		Kind:         artifact.Kind,
+		Description:  artifact.Description,
+		IsText:       text,
+	}
+
+	if text {
+		resp.Encoding = "text"
+		if len(data) > MaxArtifactInline {
+			resp.Truncated = true
+			resp.TextContent = string(data[:MaxArtifactInline])
+		} else {
+			resp.TextContent = string(data)
+		}
+	} else {
+		resp.Encoding = "base64"
+		resp.Truncated = true
+	}
+
+	return resp, nil
+}
+
+// GetRunArtifactPath resolve o path absoluto de um artefato indexado para open/export controlado.
+func (a *Adapter) GetRunArtifactPath(runID, artifactID string) (string, error) {
+	if a.runtime == nil {
+		return "", DesktopError{Message: "runtime not initialized", Code: ErrCodeInternalError}
+	}
+	runDir, ok := a.runtime.RunDir(runID)
+	if !ok {
+		return "", DesktopError{Message: "run not found", Code: ErrCodeWorkflowNotFound}
+	}
+
+	index, err := a.loadArtifactIndex(runDir)
+	if err != nil {
+		return "", DesktopError{Message: err.Error(), Code: ErrCodeFileSystem}
+	}
+	if len(index) == 0 {
+		return "", DesktopError{Message: "artifact index not available", Code: ErrCodeWorkflowNotFound}
+	}
+
+	artifact, found := index[artifactID]
+	if !found {
+		return "", DesktopError{Message: "artifact not found", Code: ErrCodeWorkflowNotFound}
+	}
+
+	artifactsDir := filepath.Join(runDir, "artifacts")
+	path, err := safeJoin(artifactsDir, artifact.RelativePath)
+	if err != nil {
+		return "", DesktopError{Message: err.Error(), Code: ErrCodeInvalidPath}
+	}
+	if isSymlink(path) {
+		return "", DesktopError{Message: "symlink not allowed", Code: ErrCodeInvalidPath}
+	}
+	if _, err := os.Stat(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", DesktopError{Message: "artifact not found", Code: ErrCodeWorkflowNotFound}
+		}
+		return "", DesktopError{Message: err.Error(), Code: ErrCodeFileSystem}
+	}
+	return path, nil
 }
 
 // GetRunNodes lista resultados de nos.
@@ -429,25 +523,137 @@ func nodeResultToDTO(result corerun.NodeResult) NodeResultDTO {
 }
 
 func safeJoin(base, rel string) (string, error) {
+	if err := validateArtifactRelativePath(rel); err != nil {
+		return "", err
+	}
+	if err := validateArtifactAncestors(base, rel); err != nil {
+		return "", err
+	}
+	return filepath.Join(base, filepath.FromSlash(rel)), nil
+}
+
+func (a *Adapter) loadArtifactIndex(runDir string) (map[string]corerun.Artifact, error) {
+	indexPath := filepath.Join(runDir, "artifacts", "index.json")
+	data, err := os.ReadFile(indexPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var index map[string]corerun.Artifact
+	if err := json.Unmarshal(data, &index); err != nil {
+		return nil, err
+	}
+	if index == nil {
+		return map[string]corerun.Artifact{}, nil
+	}
+	return index, nil
+}
+
+func artifactInfoToDTO(a corerun.Artifact) ArtifactInfo {
+	return ArtifactInfo{
+		ID:           a.ID,
+		Name:         a.Name,
+		Path:         a.ID,
+		Size:         a.SizeBytes,
+		ContentType:  a.MediaType,
+		NodeID:       a.NodeID,
+		InstanceID:   a.InstanceID,
+		RelativePath: a.RelativePath,
+		MediaType:    a.MediaType,
+		SizeBytes:    a.SizeBytes,
+		CreatedAt:    a.CreatedAt,
+		Kind:         a.Kind,
+		Description:  a.Description,
+	}
+}
+
+func (a *Adapter) fallbackScanArtifacts(runDir string) ([]ArtifactInfo, error) {
+	var artifacts []ArtifactInfo
+	artifactsDir := filepath.Join(runDir, "artifacts")
+	if err := filepath.WalkDir(artifactsDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if isSymlink(path) {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(artifactsDir, path)
+		if err != nil {
+			return err
+		}
+		artifacts = append(artifacts, ArtifactInfo{
+			ID:          rel,
+			Name:        filepath.Base(rel),
+			Path:        rel,
+			Size:        info.Size(),
+			ContentType: detectFileContentType(path),
+			ModifiedAt:  info.ModTime(),
+		})
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	return artifacts, nil
+}
+
+func isTextMediaType(mt string) bool {
+	return strings.HasPrefix(mt, "text/") ||
+		mt == "application/json" ||
+		mt == "application/x-yaml" ||
+		mt == "application/javascript" ||
+		mt == "application/xml" ||
+		mt == "application/sql"
+}
+
+func validateArtifactRelativePath(rel string) error {
 	if rel == "" {
-		return "", fmt.Errorf("path is empty")
+		return fmt.Errorf("path is empty")
 	}
 	clean := filepath.Clean(rel)
 	if filepath.IsAbs(clean) {
-		return "", fmt.Errorf("path is absolute")
+		return fmt.Errorf("path is absolute")
 	}
 	if strings.Contains(clean, "..") {
-		return "", fmt.Errorf("path contains ..")
+		return fmt.Errorf("path contains ..")
 	}
-	full := filepath.Join(base, clean)
-	relOut, err := filepath.Rel(base, full)
-	if err != nil {
-		return "", err
+	if strings.HasPrefix(filepath.ToSlash(clean), "..") {
+		return fmt.Errorf("path escapes base directory")
 	}
-	if strings.HasPrefix(relOut, "..") {
-		return "", fmt.Errorf("path escapes base directory")
+	return nil
+}
+
+func validateArtifactAncestors(baseDir, rel string) error {
+	current := baseDir
+	parts := strings.Split(filepath.ToSlash(filepath.Clean(rel)), "/")
+	for i, part := range parts {
+		current = filepath.Join(current, part)
+		info, err := os.Lstat(current)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("artifact path is a symlink")
+		}
+		if i < len(parts)-1 && !info.IsDir() {
+			return fmt.Errorf("path is not a directory")
+		}
 	}
-	return full, nil
+	return nil
 }
 
 func isSymlink(path string) bool {

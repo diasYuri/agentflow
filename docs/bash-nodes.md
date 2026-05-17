@@ -51,4 +51,7 @@ No estado de execução, o resultado do node inclui campos explícitos para `out
 - As variáveis de `node.env` têm precedência sobre o ambiente herdado quando usam a mesma chave.
 - O limite de saída por node vem de `execution.max_node_output_bytes`; quando não é informado, o runtime usa o padrão de 1 MiB.
 - Os exemplos em `samples/` usam `capture` para deixar explícito que a saída do shell é parte do contrato do node, mesmo quando o runtime já expõe esses campos no resultado.
+- Nodes `bash` podem declarar `artifacts` para copiar arquivos produzidos no `working_dir` para o
+  índice de artefatos do run. Veja [`docs/workflow-dsl.md`](workflow-dsl.md#artefatos) e
+  [`samples/workflows/bash-with-artifacts.yaml`](../samples/workflows/bash-with-artifacts.yaml).
 - O padrão `bash -lc` favorece compatibilidade com scripts e expansão de variáveis do shell, mas também significa que o comando será interpretado pela shell local do host.

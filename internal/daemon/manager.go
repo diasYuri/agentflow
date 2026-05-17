@@ -3,7 +3,6 @@ package daemon
 import (
 	"bufio"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -783,25 +782,13 @@ func sortedNodeIDs(nodes map[string]corerun.NodeResult) []string {
 }
 
 func safeJoin(base, rel string) (string, error) {
-	if rel == "" {
-		return "", fmt.Errorf("path is empty")
-	}
-	clean := filepath.Clean(rel)
-	if filepath.IsAbs(clean) {
-		return "", fmt.Errorf("path is absolute")
-	}
-	if strings.Contains(clean, "..") {
-		return "", fmt.Errorf("path contains ..")
-	}
-	full := filepath.Join(base, clean)
-	relOut, err := filepath.Rel(base, full)
-	if err != nil {
+	if err := validateArtifactRelativePath(rel); err != nil {
 		return "", err
 	}
-	if strings.HasPrefix(relOut, "..") {
-		return "", fmt.Errorf("path escapes base directory")
+	if err := validateArtifactAncestors(base, rel); err != nil {
+		return "", err
 	}
-	return full, nil
+	return filepath.Join(base, filepath.FromSlash(rel)), nil
 }
 
 func isSymlink(path string) bool {
@@ -834,16 +821,47 @@ func (m *Manager) maskerForRun(run WorkflowRun) *corerun.SecretMasker {
 	return nil
 }
 
-func (m *Manager) WorkflowArtifacts(runID string) (WorkflowArtifactsResponse, error) {
-	run, ok := m.WorkflowStatus(runID)
-	if !ok {
-		return WorkflowArtifactsResponse{}, os.ErrNotExist
+func (m *Manager) loadArtifactIndex(runDir string) (map[string]corerun.Artifact, error) {
+	indexPath := filepath.Join(runDir, "artifacts", "index.json")
+	data, err := os.ReadFile(indexPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
 	}
-	resp := WorkflowArtifactsResponse{
-		RunID:     runID,
-		Artifacts: []WorkflowArtifactDTO{},
+	var index map[string]corerun.Artifact
+	if err := json.Unmarshal(data, &index); err != nil {
+		return nil, err
 	}
-	artifactsDir := filepath.Join(run.RunDir, "artifacts")
+	if index == nil {
+		return map[string]corerun.Artifact{}, nil
+	}
+	return index, nil
+}
+
+func artifactToDTO(a corerun.Artifact) WorkflowArtifactDTO {
+	return WorkflowArtifactDTO{
+		ID:           a.ID,
+		Name:         a.Name,
+		Path:         a.ID,
+		Size:         a.SizeBytes,
+		ContentType:  a.MediaType,
+		RunID:        a.RunID,
+		NodeID:       a.NodeID,
+		InstanceID:   a.InstanceID,
+		RelativePath: a.RelativePath,
+		MediaType:    a.MediaType,
+		SizeBytes:    a.SizeBytes,
+		CreatedAt:    a.CreatedAt,
+		Kind:         a.Kind,
+		Description:  a.Description,
+	}
+}
+
+func (m *Manager) fallbackScanArtifacts(runDir string) ([]WorkflowArtifactDTO, error) {
+	var artifacts []WorkflowArtifactDTO
+	artifactsDir := filepath.Join(runDir, "artifacts")
 	if err := filepath.WalkDir(artifactsDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
@@ -865,7 +883,7 @@ func (m *Manager) WorkflowArtifacts(runID string) (WorkflowArtifactsResponse, er
 		if err != nil {
 			return err
 		}
-		resp.Artifacts = append(resp.Artifacts, WorkflowArtifactDTO{
+		artifacts = append(artifacts, WorkflowArtifactDTO{
 			ID:          rel,
 			Name:        filepath.Base(rel),
 			Path:        rel,
@@ -875,9 +893,49 @@ func (m *Manager) WorkflowArtifacts(runID string) (WorkflowArtifactsResponse, er
 		})
 		return nil
 	}); err != nil {
+		return nil, err
+	}
+	return artifacts, nil
+}
+
+func (m *Manager) WorkflowArtifacts(runID string) (WorkflowArtifactsResponse, error) {
+	run, ok := m.WorkflowStatus(runID)
+	if !ok {
+		return WorkflowArtifactsResponse{}, os.ErrNotExist
+	}
+	resp := WorkflowArtifactsResponse{
+		RunID:     runID,
+		Artifacts: []WorkflowArtifactDTO{},
+	}
+	index, err := m.loadArtifactIndex(run.RunDir)
+	if err != nil {
 		return WorkflowArtifactsResponse{}, err
 	}
+	if len(index) > 0 {
+		for _, a := range index {
+			resp.Artifacts = append(resp.Artifacts, artifactToDTO(a))
+		}
+		sort.Slice(resp.Artifacts, func(i, j int) bool {
+			return resp.Artifacts[i].ID < resp.Artifacts[j].ID
+		})
+		return resp, nil
+	}
+	// Fallback to filesystem scan for old runs without index.
+	artifacts, err := m.fallbackScanArtifacts(run.RunDir)
+	if err != nil {
+		return WorkflowArtifactsResponse{}, err
+	}
+	resp.Artifacts = artifacts
 	return resp, nil
+}
+
+func isTextMediaType(mt string) bool {
+	return strings.HasPrefix(mt, "text/") ||
+		mt == "application/json" ||
+		mt == "application/x-yaml" ||
+		mt == "application/javascript" ||
+		mt == "application/xml" ||
+		mt == "application/sql"
 }
 
 func (m *Manager) WorkflowArtifact(runID, artifactID string) (WorkflowArtifactResponse, error) {
@@ -889,22 +947,34 @@ func (m *Manager) WorkflowArtifact(runID, artifactID string) (WorkflowArtifactRe
 	if !ok {
 		return WorkflowArtifactResponse{}, os.ErrNotExist
 	}
-	artifactsDir := filepath.Join(run.RunDir, "artifacts")
-	path, err := safeJoin(artifactsDir, artifactID)
+	index, err := m.loadArtifactIndex(run.RunDir)
 	if err != nil {
-		return WorkflowArtifactResponse{}, fmt.Errorf("invalid artifact id: %w", err)
+		return WorkflowArtifactResponse{}, err
+	}
+	var artifact corerun.Artifact
+	if len(index) > 0 {
+		var found bool
+		artifact, found = index[artifactID]
+		if !found {
+			return WorkflowArtifactResponse{}, os.ErrNotExist
+		}
+	}
+	artifactsDir := filepath.Join(run.RunDir, "artifacts")
+	var path string
+	if artifact.ID != "" {
+		path, err = safeJoin(artifactsDir, artifact.RelativePath)
+		if err != nil {
+			return WorkflowArtifactResponse{}, err
+		}
+	} else {
+		path, err = safeJoin(artifactsDir, artifactID)
+		if err != nil {
+			return WorkflowArtifactResponse{}, fmt.Errorf("invalid artifact id: %w", err)
+		}
 	}
 	if isSymlink(path) {
 		return WorkflowArtifactResponse{}, fmt.Errorf("symlink not allowed")
 	}
-	info, err := os.Stat(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return WorkflowArtifactResponse{}, os.ErrNotExist
-		}
-		return WorkflowArtifactResponse{}, err
-	}
-	logMemStats(m.logger, "WorkflowArtifact stat", slog.String("run_id", runID), slog.String("artifact_id", artifactID), slog.Int64("size_bytes", info.Size()))
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -912,20 +982,121 @@ func (m *Manager) WorkflowArtifact(runID, artifactID string) (WorkflowArtifactRe
 		}
 		return WorkflowArtifactResponse{}, err
 	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return WorkflowArtifactResponse{}, err
+	}
 	masker := m.maskerForRun(run)
 	if masker != nil {
 		data = []byte(masker.MaskString(string(data)))
 	}
-	content := base64.StdEncoding.EncodeToString(data)
-	return WorkflowArtifactResponse{
-		ID:          artifactID,
-		Name:        filepath.Base(artifactID),
-		Path:        artifactID,
-		Size:        info.Size(),
-		ContentType: http.DetectContentType(data),
-		Encoding:    "base64",
-		Content:     content,
-	}, nil
+	mt := artifact.MediaType
+	if mt == "" {
+		mt = http.DetectContentType(data)
+	}
+	text := isTextMediaType(mt)
+	resp := WorkflowArtifactResponse{
+		ID:           artifactID,
+		Name:         filepath.Base(artifactID),
+		Path:         artifactID,
+		Size:         info.Size(),
+		ContentType:  mt,
+		RunID:        runID,
+		NodeID:       artifact.NodeID,
+		InstanceID:   artifact.InstanceID,
+		RelativePath: artifact.RelativePath,
+		MediaType:    mt,
+		SizeBytes:    info.Size(),
+		CreatedAt:    artifact.CreatedAt,
+		Kind:         artifact.Kind,
+		Description:  artifact.Description,
+		IsText:       text,
+	}
+	if text {
+		resp.Encoding = "text"
+		if len(data) > MaxArtifactInline {
+			resp.Truncated = true
+			resp.TextContent = string(data[:MaxArtifactInline])
+		} else {
+			resp.TextContent = string(data)
+		}
+	} else {
+		resp.Encoding = "base64"
+		resp.Truncated = true
+	}
+	return resp, nil
+}
+
+func validateArtifactRelativePath(rel string) error {
+	if rel == "" {
+		return fmt.Errorf("path is empty")
+	}
+	clean := filepath.Clean(rel)
+	if filepath.IsAbs(clean) {
+		return fmt.Errorf("path is absolute")
+	}
+	if strings.Contains(clean, "..") {
+		return fmt.Errorf("path contains ..")
+	}
+	if strings.HasPrefix(filepath.ToSlash(clean), "..") {
+		return fmt.Errorf("path escapes base directory")
+	}
+	return nil
+}
+
+func validateArtifactAncestors(baseDir, rel string) error {
+	current := baseDir
+	parts := strings.Split(filepath.ToSlash(filepath.Clean(rel)), "/")
+	for i, part := range parts {
+		current = filepath.Join(current, part)
+		info, err := os.Lstat(current)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("artifact path is a symlink")
+		}
+		if i < len(parts)-1 && !info.IsDir() {
+			return fmt.Errorf("path is not a directory")
+		}
+	}
+	return nil
+}
+
+func (m *Manager) WorkflowArtifactPath(runID, artifactID string) (string, error) {
+	run, ok := m.WorkflowStatus(runID)
+	if !ok {
+		return "", os.ErrNotExist
+	}
+	index, err := m.loadArtifactIndex(run.RunDir)
+	if err != nil {
+		return "", err
+	}
+	if len(index) == 0 {
+		return "", fmt.Errorf("artifact index not available for run %s", runID)
+	}
+	artifact, found := index[artifactID]
+	if !found {
+		return "", os.ErrNotExist
+	}
+	artifactsDir := filepath.Join(run.RunDir, "artifacts")
+	path, err := safeJoin(artifactsDir, artifact.RelativePath)
+	if err != nil {
+		return "", err
+	}
+	if isSymlink(path) {
+		return "", fmt.Errorf("symlink not allowed")
+	}
+	if _, err := os.Stat(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", os.ErrNotExist
+		}
+		return "", err
+	}
+	return path, nil
 }
 
 func nodeResultToDTO(result corerun.NodeResult) WorkflowNodeResultDTO {

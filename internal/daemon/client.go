@@ -109,6 +109,15 @@ func (c *Client) WorkflowArtifact(ctx context.Context, runID string, artifactID 
 	return out, err
 }
 
+func (c *Client) WorkflowArtifactPath(ctx context.Context, runID string, artifactID string) (string, error) {
+	var out map[string]string
+	path := "/v1/workflows/" + runID + "/artifact-path?artifact_id=" + url.QueryEscape(artifactID)
+	if err := c.do(ctx, http.MethodGet, path, nil, &out); err != nil {
+		return "", err
+	}
+	return out["path"], nil
+}
+
 func (c *Client) WorkflowNodes(ctx context.Context, runID string) (WorkflowNodesResponse, error) {
 	var out WorkflowNodesResponse
 	err := c.do(ctx, http.MethodGet, "/v1/workflows/"+runID+"/nodes", nil, &out)
