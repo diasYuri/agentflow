@@ -41,6 +41,8 @@ func (e *Executor) saveNodeArtifacts(
 		masked := []byte(state.masker.MaskString(result.Stdout))
 		if err := e.svc.Runs.SaveArtifact(ctx, state.runID, art, masked); err == nil {
 			refs = append(refs, corerun.ArtifactRef{ID: art.ID, Name: art.Name, MediaType: art.MediaType})
+			state.recordArtifact(1)
+			_ = e.emitState(ctx, state, corerun.Event{Type: "artifact.created", NodeID: node.ID, InstanceID: result.InstanceID, Data: map[string]any{"id": art.ID, "name": art.Name, "kind": art.Kind, "size_bytes": art.SizeBytes}})
 		}
 	}
 
@@ -58,6 +60,8 @@ func (e *Executor) saveNodeArtifacts(
 		masked := []byte(state.masker.MaskString(result.Stderr))
 		if err := e.svc.Runs.SaveArtifact(ctx, state.runID, art, masked); err == nil {
 			refs = append(refs, corerun.ArtifactRef{ID: art.ID, Name: art.Name, MediaType: art.MediaType})
+			state.recordArtifact(1)
+			_ = e.emitState(ctx, state, corerun.Event{Type: "artifact.created", NodeID: node.ID, InstanceID: result.InstanceID, Data: map[string]any{"id": art.ID, "name": art.Name, "kind": art.Kind, "size_bytes": art.SizeBytes}})
 		}
 	}
 
@@ -89,6 +93,8 @@ func (e *Executor) saveNodeArtifacts(
 		masked := []byte(state.masker.MaskString(string(data)))
 		if err := e.svc.Runs.SaveArtifact(ctx, state.runID, art, masked); err == nil {
 			refs = append(refs, corerun.ArtifactRef{ID: art.ID, Name: art.Name, MediaType: art.MediaType})
+			state.recordArtifact(1)
+			_ = e.emitState(ctx, state, corerun.Event{Type: "artifact.created", NodeID: node.ID, InstanceID: result.InstanceID, Data: map[string]any{"id": art.ID, "name": art.Name, "kind": art.Kind, "size_bytes": art.SizeBytes}})
 		}
 	}
 
@@ -159,6 +165,8 @@ func (e *Executor) copyDeclaredArtifact(
 	if err := e.svc.Runs.SaveArtifact(ctx, state.runID, art, data); err != nil {
 		return corerun.ArtifactRef{}
 	}
+	state.recordArtifact(1)
+	_ = e.emitState(ctx, state, corerun.Event{Type: "artifact.created", NodeID: node.ID, InstanceID: result.InstanceID, Data: map[string]any{"id": art.ID, "name": art.Name, "kind": art.Kind, "size_bytes": art.SizeBytes}})
 	return corerun.ArtifactRef{ID: art.ID, Name: art.Name, MediaType: art.MediaType}
 }
 

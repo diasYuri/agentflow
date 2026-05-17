@@ -11,6 +11,9 @@ type FakeClient struct {
 	GetRunEventsFunc       func(ctx context.Context, runID string, cursor int, limit int) (EventBatch, error)
 	GetRunNodesFunc        func(ctx context.Context, runID string) ([]NodeSummary, error)
 	GetRunPlanFunc         func(ctx context.Context, runID string) (PlanSummary, error)
+	GetRunDiagnosticsFunc  func(ctx context.Context, runID string) (RunDiagnosticSummary, error)
+	GetRunTimelineFunc     func(ctx context.Context, runID string, cursor int, limit int) (RunTimeline, error)
+	GetRunChartSeriesFunc  func(ctx context.Context, runID string) ([]ChartSeries, error)
 	ListArtifactsFunc      func(ctx context.Context, runID string) ([]ArtifactSummary, error)
 	GetArtifactFunc        func(ctx context.Context, runID, artifactID string) (ArtifactSummary, error)
 	CancelRunFunc          func(ctx context.Context, runID string) error
@@ -76,6 +79,30 @@ func (f *FakeClient) GetRunPlan(ctx context.Context, runID string) (PlanSummary,
 		return f.GetRunPlanFunc(ctx, runID)
 	}
 	return PlanSummary{}, nil
+}
+
+// GetRunDiagnostics implements RunClient.
+func (f *FakeClient) GetRunDiagnostics(ctx context.Context, runID string) (RunDiagnosticSummary, error) {
+	if f.GetRunDiagnosticsFunc != nil {
+		return f.GetRunDiagnosticsFunc(ctx, runID)
+	}
+	return RunDiagnosticSummary{}, nil
+}
+
+// GetRunTimeline implements RunClient.
+func (f *FakeClient) GetRunTimeline(ctx context.Context, runID string, cursor int, limit int) (RunTimeline, error) {
+	if f.GetRunTimelineFunc != nil {
+		return f.GetRunTimelineFunc(ctx, runID, cursor, limit)
+	}
+	return RunTimeline{}, nil
+}
+
+// GetRunChartSeries implements RunClient.
+func (f *FakeClient) GetRunChartSeries(ctx context.Context, runID string) ([]ChartSeries, error) {
+	if f.GetRunChartSeriesFunc != nil {
+		return f.GetRunChartSeriesFunc(ctx, runID)
+	}
+	return nil, nil
 }
 
 // ListArtifacts implements ArtifactClient.

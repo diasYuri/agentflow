@@ -99,6 +99,14 @@ func (m SecretMasker) MaskNodeResult(result NodeResult) NodeResult {
 	return result
 }
 
+func (m SecretMasker) MaskNodeMetrics(metrics NodeMetrics) NodeMetrics {
+	if m.Empty() {
+		return metrics
+	}
+	metrics.FirstError = m.MaskString(metrics.FirstError)
+	return metrics
+}
+
 func (m SecretMasker) MaskSummary(summary Summary) Summary {
 	if m.Empty() {
 		return summary
@@ -108,6 +116,7 @@ func (m SecretMasker) MaskSummary(summary Summary) Summary {
 		nodes[id] = m.MaskNodeResult(result)
 	}
 	summary.Nodes = nodes
+	summary.FirstError = m.MaskString(summary.FirstError)
 	return summary
 }
 
@@ -121,6 +130,12 @@ func (m SecretMasker) MaskCheckpoint(checkpoint Checkpoint) Checkpoint {
 		nodes[id] = m.MaskNodeResult(result)
 	}
 	checkpoint.Nodes = nodes
+	nodeMetrics := make(map[string]NodeMetrics, len(checkpoint.Metrics.NodeMetrics))
+	for id, metrics := range checkpoint.Metrics.NodeMetrics {
+		nodeMetrics[id] = m.MaskNodeMetrics(metrics)
+	}
+	checkpoint.Metrics.NodeMetrics = nodeMetrics
+	checkpoint.Metrics.FirstError = m.MaskString(checkpoint.Metrics.FirstError)
 	return checkpoint
 }
 

@@ -210,6 +210,44 @@ type WorkflowPlanResponse struct {
 	Plan       map[string]any `json:"plan,omitempty"`
 }
 
+type WorkflowSummaryResponse struct {
+	RunID   string          `json:"run_id"`
+	Summary corerun.Summary `json:"summary"`
+}
+
+type WorkflowTimelineResponse struct {
+	RunID      string                  `json:"run_id"`
+	Entries    []corerun.TimelineEntry `json:"entries"`
+	NextCursor int                     `json:"next_cursor"`
+	HasMore    bool                    `json:"has_more"`
+}
+
+type WorkflowInspectResponse struct {
+	RunID          string                `json:"run_id"`
+	Workflow       string                `json:"workflow"`
+	Status         corerun.RunStatus     `json:"status"`
+	StartedAt      time.Time             `json:"started_at"`
+	FinishedAt     time.Time             `json:"finished_at,omitempty"`
+	DurationMS     int64                 `json:"duration_ms"`
+	CurrentStep    string                `json:"current_step,omitempty"`
+	CompletedSteps []string              `json:"completed_steps,omitempty"`
+	PendingSteps   []string              `json:"pending_steps,omitempty"`
+	TotalSteps     int                   `json:"total_steps"`
+	FailedNodes    int                   `json:"failed_nodes"`
+	Retries        int                   `json:"retries"`
+	AgentCalls     int                   `json:"agent_calls"`
+	BashCalls      int                   `json:"bash_calls"`
+	FirstError     string                `json:"first_error,omitempty"`
+	Error          string                `json:"error,omitempty"`
+	TerminalError  string                `json:"terminal_error,omitempty"`
+	FailureReason  string                `json:"failure_reason,omitempty"`
+	Tag            string                `json:"tag,omitempty"`
+	ArtifactCount  int                   `json:"artifact_count"`
+	NodeCount      int                   `json:"node_count"`
+	SlowestNodes   []corerun.SlowestNode `json:"slowest_nodes,omitempty"`
+	AgentUsage     []corerun.AgentUsage  `json:"agent_usage,omitempty"`
+}
+
 const (
 	defaultEventLimit = 100
 	maxEventLimit     = 1000

@@ -1264,6 +1264,333 @@ func (m *Manager) WorkflowNode(runID, nodeID string) (WorkflowNodeResponse, erro
 	return resp, nil
 }
 
+func (m *Manager) WorkflowSummary(runID string) (WorkflowSummaryResponse, error) {
+	run, ok := m.WorkflowStatus(runID)
+	if !ok {
+		return WorkflowSummaryResponse{}, os.ErrNotExist
+	}
+	summary, err := m.loadRunSummary(run)
+	if err != nil {
+		return WorkflowSummaryResponse{}, err
+	}
+	return WorkflowSummaryResponse{RunID: runID, Summary: summary}, nil
+}
+
+func (m *Manager) loadRunSummary(run WorkflowRun) (corerun.Summary, error) {
+	var summary corerun.Summary
+	if run.RunDir == "" {
+		return summary, os.ErrNotExist
+	}
+	data, err := os.ReadFile(filepath.Join(run.RunDir, "summary.json"))
+	if err != nil {
+		return summary, err
+	}
+	if err := json.Unmarshal(data, &summary); err != nil {
+		return summary, err
+	}
+	masker := m.maskerForRun(run)
+	if masker != nil {
+		summary = masker.MaskSummary(summary)
+	}
+	if len(summary.Timeline) == 0 || len(summary.AgentUsage) == 0 {
+		timeline, usage, err := m.loadRunDiagnostics(run.RunDir)
+		if err == nil {
+			if len(summary.Timeline) == 0 {
+				summary.Timeline = timeline
+			}
+			if len(summary.AgentUsage) == 0 {
+				summary.AgentUsage = usage
+			}
+		}
+	}
+	return summary, nil
+}
+
+func (m *Manager) WorkflowTimeline(runID string, cursor, limit int) (WorkflowTimelineResponse, error) {
+	run, ok := m.WorkflowStatus(runID)
+	if !ok {
+		return WorkflowTimelineResponse{}, os.ErrNotExist
+	}
+	if limit <= 0 {
+		limit = defaultEventLimit
+	}
+	if limit > maxEventLimit {
+		limit = maxEventLimit
+	}
+	if cursor < 0 {
+		cursor = 0
+	}
+
+	summary, err := m.loadRunSummary(run)
+	if err == nil && len(summary.Timeline) > 0 {
+		entries := summary.Timeline
+		total := len(entries)
+		if cursor > total {
+			cursor = total
+		}
+		end := cursor + limit
+		hasMore := false
+		if end > total {
+			end = total
+		} else {
+			hasMore = true
+		}
+		return WorkflowTimelineResponse{
+			RunID:      runID,
+			Entries:    append([]corerun.TimelineEntry(nil), entries[cursor:end]...),
+			NextCursor: end,
+			HasMore:    hasMore,
+		}, nil
+	}
+
+	entries, err := m.loadRunTimeline(run.RunDir)
+	if err != nil {
+		return WorkflowTimelineResponse{}, err
+	}
+	if cursor > len(entries) {
+		cursor = len(entries)
+	}
+	end := cursor + limit
+	hasMore := false
+	if end > len(entries) {
+		end = len(entries)
+	} else {
+		hasMore = true
+	}
+	return WorkflowTimelineResponse{
+		RunID:      runID,
+		Entries:    append([]corerun.TimelineEntry(nil), entries[cursor:end]...),
+		NextCursor: end,
+		HasMore:    hasMore,
+	}, nil
+}
+
+func (m *Manager) WorkflowInspect(runID string) (WorkflowInspectResponse, error) {
+	run, ok := m.WorkflowStatus(runID)
+	if !ok {
+		return WorkflowInspectResponse{}, os.ErrNotExist
+	}
+	resp := WorkflowInspectResponse{
+		RunID:          runID,
+		Workflow:       run.Workflow,
+		Status:         run.Status,
+		StartedAt:      run.StartedAt,
+		FinishedAt:     run.FinishedAt,
+		CurrentStep:    run.CurrentStep,
+		CompletedSteps: append([]string(nil), run.CompletedSteps...),
+		PendingSteps:   append([]string(nil), run.PendingSteps...),
+		TotalSteps:     run.TotalSteps,
+		Error:          run.Error,
+		TerminalError:  run.TerminalError,
+		FailureReason:  run.FailureReason,
+		Tag:            run.Tag,
+	}
+
+	summary, err := m.loadRunSummary(run)
+	if err == nil {
+		if resp.Workflow == "" {
+			resp.Workflow = summary.Workflow
+		}
+		resp.DurationMS = summary.DurationMS
+		resp.FailedNodes = summary.FailedNodes
+		resp.Retries = summary.Retries
+		resp.AgentCalls = summary.AgentCalls
+		resp.BashCalls = summary.BashCalls
+		resp.FirstError = summary.FirstError
+		resp.SlowestNodes = append([]corerun.SlowestNode(nil), summary.SlowestNodes...)
+		resp.AgentUsage = append([]corerun.AgentUsage(nil), summary.AgentUsage...)
+		resp.ArtifactCount = summary.ArtifactCount
+	}
+
+	nodeCount, _ := m.countNodeResults(run.RunDir)
+	resp.NodeCount = nodeCount
+
+	if resp.ArtifactCount == 0 {
+		artifactCount, _ := m.countArtifacts(run.RunDir)
+		resp.ArtifactCount = artifactCount
+	}
+
+	return resp, nil
+}
+
+func (m *Manager) loadRunTimeline(runDir string) ([]corerun.TimelineEntry, error) {
+	eventsPath := filepath.Join(runDir, "events.jsonl")
+	file, err := os.Open(eventsPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	const maxCapacity = 1024 * 1024
+	buf := make([]byte, maxCapacity)
+	scanner.Buffer(buf, maxCapacity)
+
+	entries := make([]corerun.TimelineEntry, 0, defaultEventLimit)
+	for scanner.Scan() {
+		var event corerun.Event
+		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
+			continue
+		}
+		entries = append(entries, corerun.TimelineEntry{
+			Timestamp:  event.Timestamp,
+			Type:       event.Type,
+			NodeID:     event.NodeID,
+			InstanceID: event.InstanceID,
+			Attempt:    event.Attempt,
+		})
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return entries, nil
+}
+
+func (m *Manager) loadRunAgentUsage(runDir string) ([]corerun.AgentUsage, error) {
+	eventsPath := filepath.Join(runDir, "events.jsonl")
+	file, err := os.Open(eventsPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	const maxCapacity = 1024 * 1024
+	buf := make([]byte, maxCapacity)
+	scanner.Buffer(buf, maxCapacity)
+
+	usage := make([]corerun.AgentUsage, 0)
+	for scanner.Scan() {
+		var event corerun.Event
+		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
+			continue
+		}
+		if event.Type != "agent.usage" {
+			continue
+		}
+		entry := corerun.AgentUsage{}
+		if provider, ok := event.Data["provider"].(string); ok {
+			entry.Provider = provider
+		}
+		if model, ok := event.Data["model"].(string); ok {
+			entry.Model = model
+		}
+		if inputTokens, ok := numericValue(event.Data["input_tokens"]); ok {
+			entry.InputTokens = inputTokens
+		}
+		if outputTokens, ok := numericValue(event.Data["output_tokens"]); ok {
+			entry.OutputTokens = outputTokens
+		}
+		if totalTokens, ok := numericValue(event.Data["total_tokens"]); ok {
+			entry.TotalTokens = totalTokens
+		}
+		if costUSD, ok := floatValue(event.Data["cost_usd"]); ok {
+			entry.CostUSD = costUSD
+		}
+		usage = append(usage, entry)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return usage, nil
+}
+
+func (m *Manager) loadRunDiagnostics(runDir string) ([]corerun.TimelineEntry, []corerun.AgentUsage, error) {
+	timeline, err := m.loadRunTimeline(runDir)
+	if err != nil {
+		return nil, nil, err
+	}
+	usage, err := m.loadRunAgentUsage(runDir)
+	if err != nil {
+		return nil, nil, err
+	}
+	return timeline, usage, nil
+}
+
+func numericValue(value any) (int64, bool) {
+	switch v := value.(type) {
+	case float64:
+		return int64(v), true
+	case float32:
+		return int64(v), true
+	case int:
+		return int64(v), true
+	case int64:
+		return v, true
+	case json.Number:
+		n, err := v.Int64()
+		if err == nil {
+			return n, true
+		}
+	}
+	return 0, false
+}
+
+func floatValue(value any) (float64, bool) {
+	switch v := value.(type) {
+	case float64:
+		return v, true
+	case float32:
+		return float64(v), true
+	case int:
+		return float64(v), true
+	case int64:
+		return float64(v), true
+	case json.Number:
+		n, err := v.Float64()
+		if err == nil {
+			return n, true
+		}
+	}
+	return 0, false
+}
+
+func (m *Manager) countNodeResults(runDir string) (int, error) {
+	nodesDir := filepath.Join(runDir, "nodes")
+	count := 0
+	err := filepath.WalkDir(nodesDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
+			return err
+		}
+		if !d.IsDir() && d.Name() == "result.json" {
+			count++
+		}
+		return nil
+	})
+	return count, err
+}
+
+func (m *Manager) countArtifacts(runDir string) (int, error) {
+	index, err := m.loadArtifactIndex(runDir)
+	if err == nil && len(index) > 0 {
+		return len(index), nil
+	}
+	artifactsDir := filepath.Join(runDir, "artifacts")
+	count := 0
+	err = filepath.WalkDir(artifactsDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
+			return err
+		}
+		if !d.IsDir() {
+			count++
+		}
+		return nil
+	})
+	return count, err
+}
+
 func (m *Manager) WorkflowPlan(runID string) (WorkflowPlanResponse, error) {
 	run, ok := m.WorkflowStatus(runID)
 	if !ok {

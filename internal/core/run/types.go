@@ -89,25 +89,76 @@ type RunHandle struct {
 	Dir   string `json:"dir"`
 }
 
+// NodeMetrics holds aggregated metrics for a single node execution.
+type NodeMetrics struct {
+	NodeID        string `json:"node_id"`
+	InstanceID    string `json:"instance_id,omitempty"`
+	DurationMS    int64  `json:"duration_ms"`
+	Attempts      int    `json:"attempts"`
+	Retries       int    `json:"retries"`
+	BashCalls     int    `json:"bash_calls"`
+	AgentCalls    int    `json:"agent_calls"`
+	StdoutBytes   int64  `json:"stdout_bytes"`
+	StderrBytes   int64  `json:"stderr_bytes"`
+	ArtifactCount int    `json:"artifact_count"`
+	FirstError    string `json:"first_error,omitempty"`
+}
+
+// AgentUsage tracks token and cost usage reported by an agent provider.
+type AgentUsage struct {
+	Provider     string  `json:"provider"`
+	Model        string  `json:"model,omitempty"`
+	InputTokens  int64   `json:"input_tokens,omitempty"`
+	OutputTokens int64   `json:"output_tokens,omitempty"`
+	TotalTokens  int64   `json:"total_tokens,omitempty"`
+	CostUSD      float64 `json:"cost_usd,omitempty"`
+}
+
+// TimelineEntry represents a single event in the run timeline.
+type TimelineEntry struct {
+	Timestamp  time.Time `json:"ts"`
+	Type       string    `json:"type"`
+	NodeID     string    `json:"node_id,omitempty"`
+	InstanceID string    `json:"instance_id,omitempty"`
+	Attempt    int       `json:"attempt,omitempty"`
+	DurationMS int64     `json:"duration_ms,omitempty"`
+}
+
+// SlowestNode is a lightweight snapshot for the summary top list.
+type SlowestNode struct {
+	NodeID     string `json:"node_id"`
+	DurationMS int64  `json:"duration_ms"`
+}
+
 type Summary struct {
-	RunID       string                `json:"run_id"`
-	Workflow    string                `json:"workflow"`
-	Status      RunStatus             `json:"status"`
-	StartedAt   time.Time             `json:"started_at"`
-	FinishedAt  time.Time             `json:"finished_at"`
-	DurationMS  int64                 `json:"duration_ms"`
-	AgentCalls  int                   `json:"agent_calls"`
-	BashCalls   int                   `json:"bash_calls"`
-	FailedNodes int                   `json:"failed_nodes"`
-	Retries     int                   `json:"retries"`
-	Nodes       map[string]NodeResult `json:"nodes"`
-	Tag         string                `json:"tag,omitempty"`
+	RunID         string                `json:"run_id"`
+	Workflow      string                `json:"workflow"`
+	Status        RunStatus             `json:"status"`
+	StartedAt     time.Time             `json:"started_at"`
+	FinishedAt    time.Time             `json:"finished_at"`
+	DurationMS    int64                 `json:"duration_ms"`
+	AgentCalls    int                   `json:"agent_calls"`
+	BashCalls     int                   `json:"bash_calls"`
+	FailedNodes   int                   `json:"failed_nodes"`
+	Retries       int                   `json:"retries"`
+	Nodes         map[string]NodeResult `json:"nodes"`
+	Tag           string                `json:"tag,omitempty"`
+	SlowestNodes  []SlowestNode         `json:"slowest_nodes,omitempty"`
+	AgentUsage    []AgentUsage          `json:"agent_usage,omitempty"`
+	Timeline      []TimelineEntry       `json:"timeline,omitempty"`
+	ArtifactCount int                   `json:"artifact_count"`
+	FirstError    string                `json:"first_error,omitempty"`
 }
 
 type CheckpointMetrics struct {
-	AgentCalls int `json:"agent_calls"`
-	BashCalls  int `json:"bash_calls"`
-	Retries    int `json:"retries"`
+	AgentCalls    int                    `json:"agent_calls"`
+	BashCalls     int                    `json:"bash_calls"`
+	Retries       int                    `json:"retries"`
+	NodeMetrics   map[string]NodeMetrics `json:"node_metrics,omitempty"`
+	AgentUsage    []AgentUsage           `json:"agent_usage,omitempty"`
+	Timeline      []TimelineEntry        `json:"timeline,omitempty"`
+	ArtifactCount int                    `json:"artifact_count"`
+	FirstError    string                 `json:"first_error,omitempty"`
 }
 
 type WorktreeMergeStatus string

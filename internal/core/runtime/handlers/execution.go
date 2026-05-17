@@ -79,6 +79,7 @@ func (e *Executor) execute(ctx context.Context, req ExecutionRequest) (Result, e
 		return Result{}, err
 	}
 	_ = e.emitState(ctx, state, corerun.Event{Type: "run.started"})
+	state.addTimeline(corerun.TimelineEntry{Timestamp: e.now(), Type: "run.started"})
 
 	globalLimit := req.Plan.Workflow.Execution.MaxConcurrency
 	if globalLimit <= 0 {
@@ -172,6 +173,8 @@ func (e *Executor) setupWorktree(ctx context.Context, state *ExecutionState, pla
 	if err := e.svc.Runs.SaveArtifact(ctx, state.runID, art, maskedData); err != nil {
 		return fmt.Errorf("failed to save worktree status artifact: %w", err)
 	}
+	state.recordArtifact(1)
+	_ = e.emitState(ctx, state, corerun.Event{Type: "artifact.created", Data: map[string]any{"id": art.ID, "name": art.Name, "kind": art.Kind, "size_bytes": art.SizeBytes}})
 
 	eventData := map[string]any{
 		"enabled":      true,
@@ -396,12 +399,14 @@ func (e *Executor) executeNodes(ctx context.Context, state *ExecutionState, plan
 		node := plan.Nodes[nodeID].Spec
 		if state.failed && !node.ContinueOnError {
 			state.set(nodeID, corerun.NodeResult{RunID: state.runID, NodeID: nodeID, Status: corerun.NodeSkipped, Error: "run already failed", Path: append([]string(nil), state.path...)})
+			state.addTimeline(corerun.TimelineEntry{Timestamp: e.now(), Type: "node.skipped", NodeID: nodeID})
 			pc++
 			_ = e.saveCheckpoint(ctx, state, true, pc, "", "")
 			continue
 		}
 		if err := state.dependenciesReady(node); err != nil {
 			state.set(nodeID, corerun.NodeResult{RunID: state.runID, NodeID: nodeID, Status: corerun.NodeSkipped, Error: err.Error(), Path: append([]string(nil), state.path...)})
+			state.addTimeline(corerun.TimelineEntry{Timestamp: e.now(), Type: "node.skipped", NodeID: nodeID})
 			pc++
 			_ = e.saveCheckpoint(ctx, state, true, pc, "", "")
 			continue
@@ -424,6 +429,7 @@ func (e *Executor) executeNodes(ctx context.Context, state *ExecutionState, plan
 			result := corerun.NodeResult{RunID: state.runID, NodeID: nodeID, Status: corerun.NodeSkipped, Path: append([]string(nil), state.path...)}
 			e.recordNode(ctx, state, node, result)
 			_ = e.emitState(ctx, state, corerun.Event{Type: "node.skipped", NodeID: nodeID})
+			state.addTimeline(corerun.TimelineEntry{Timestamp: e.now(), Type: "node.skipped", NodeID: nodeID})
 			pc++
 			_ = e.saveCheckpoint(ctx, state, true, pc, "", "")
 			continue
@@ -546,17 +552,30 @@ func (e *Executor) executeFanOut(
 			defer wg.Done()
 			defer local.Release(1)
 			instanceID := fmt.Sprintf("%04d", index)
+			startedAt := e.now()
 			startedEvent := corerun.Event{Type: "node.instance.started", NodeID: node.ID, InstanceID: instanceID}
 			if instanceEventPath != nil {
 				startedEvent.Path = instanceEventPath(index, instanceID)
 			}
 			_ = e.emitState(cancelCtx, state, startedEvent)
+			state.addTimeline(corerun.TimelineEntry{Timestamp: startedAt, Type: "node.instance.started", NodeID: node.ID, InstanceID: instanceID})
 			result := runItem(cancelCtx, index, item, instanceID)
+			if isFailure(result.Status) && result.Error != "" {
+				state.recordFirstError(result.Error)
+			}
+			completedAt := e.now()
 			completedEvent := corerun.Event{Type: eventForResult("node.instance.completed", "node.instance.failed", result.Status), NodeID: node.ID, InstanceID: instanceID}
 			if instanceEventPath != nil {
 				completedEvent.Path = instanceEventPath(index, instanceID)
 			}
 			_ = e.emitState(cancelCtx, state, completedEvent)
+			state.addTimeline(corerun.TimelineEntry{
+				Timestamp:  completedAt,
+				Type:       completedEvent.Type,
+				NodeID:     node.ID,
+				InstanceID: instanceID,
+				DurationMS: result.Duration.Milliseconds(),
+			})
 			mu.Lock()
 			results[index] = result
 			if failFast && isFailure(result.Status) {
@@ -579,6 +598,7 @@ func (e *Executor) executeFanOut(
 		result.Artifacts = e.saveNodeArtifacts(ctx, state, node, result)
 		results[i] = result
 		state.set(result.NodeID, result)
+		state.recordNodeMetrics(result)
 		_ = e.svc.Runs.SaveNodeResult(ctx, state.runID, state.masker.MaskNodeResult(result))
 	}
 	finalResult := corerun.NodeResult{RunID: state.runID, NodeID: node.ID, Status: status, Outputs: outputs, Error: strings.Join(errs, "; ")}
@@ -611,6 +631,7 @@ func (e *Executor) executeMap(ctx context.Context, state *ExecutionState, node c
 		expansionData["max_items"] = node.MaxItems
 	}
 	_ = e.emitState(ctx, state, corerun.Event{Type: "node.expanded", NodeID: node.ID, Data: expansionData})
+	state.addTimeline(corerun.TimelineEntry{Timestamp: e.now(), Type: "node.expanded", NodeID: node.ID})
 	childPlan := state.plan.Nodes[node.ID].ChildPlan
 	if childPlan == nil {
 		return corerun.NodeResult{RunID: state.runID, NodeID: node.ID, Status: corerun.NodeFailed, Error: "map node is missing nested plan", Path: append([]string(nil), state.path...)}
@@ -681,6 +702,7 @@ func (e *Executor) executeExpanded(ctx context.Context, state *ExecutionState, n
 		expansionData["max_items"] = node.MaxItems
 	}
 	_ = e.emitState(ctx, state, corerun.Event{Type: "node.expanded", NodeID: node.ID, Data: expansionData})
+	state.addTimeline(corerun.TimelineEntry{Timestamp: e.now(), Type: "node.expanded", NodeID: node.ID})
 	if len(items) == 0 {
 		return corerun.NodeResult{RunID: state.runID, NodeID: node.ID, Status: corerun.NodeSuccess, Outputs: []any{}}
 	}
@@ -723,6 +745,7 @@ func (e *Executor) executeSingle(ctx context.Context, state *ExecutionState, nod
 					"previous_error":  last.Error,
 				},
 			})
+			state.addTimeline(corerun.TimelineEntry{Timestamp: e.now(), Type: "node.retrying", NodeID: node.ID, InstanceID: instanceID, Attempt: attempt})
 			_ = e.saveCheckpoint(ctx, state, true, state.cursor, "", "")
 			time.Sleep(delay)
 		}
@@ -753,6 +776,7 @@ func (e *Executor) executeAttempt(ctx context.Context, state *ExecutionState, no
 		eventType = "node.instance.started"
 	}
 	_ = e.emitState(ctx, state, corerun.Event{Type: eventType, NodeID: node.ID, InstanceID: instanceID, Attempt: attempt})
+	state.addTimeline(corerun.TimelineEntry{Timestamp: start, Type: eventType, NodeID: node.ID, InstanceID: instanceID, Attempt: attempt})
 	result := corerun.NodeResult{RunID: state.runID, NodeID: node.ID, InstanceID: instanceID, Index: index, Path: append([]string(nil), state.path...)}
 	output, status, err := e.dispatch(ctx, state, node, instanceID, index, total, item, attempt)
 	result.Duration = e.now().Sub(start)
@@ -779,6 +803,8 @@ func (e *Executor) executeAttempt(ctx context.Context, state *ExecutionState, no
 			result.Status = corerun.NodeCancelled
 		}
 	}
-	_ = e.emitState(ctx, state, corerun.Event{Type: eventForResult("node.completed", "node.failed", result.Status), NodeID: node.ID, InstanceID: instanceID, Attempt: attempt})
+	completedEventType := eventForResult("node.completed", "node.failed", result.Status)
+	_ = e.emitState(ctx, state, corerun.Event{Type: completedEventType, NodeID: node.ID, InstanceID: instanceID, Attempt: attempt})
+	state.addTimeline(corerun.TimelineEntry{Timestamp: e.now(), Type: completedEventType, NodeID: node.ID, InstanceID: instanceID, Attempt: attempt, DurationMS: result.Duration.Milliseconds()})
 	return result
 }

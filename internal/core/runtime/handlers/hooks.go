@@ -106,7 +106,10 @@ func (e *Executor) runHook(ctx context.Context, state *ExecutionState, hook core
 		MediaType:    "application/json",
 		Kind:         corerun.ArtifactKindResult,
 	}
-	_ = e.svc.Runs.SaveArtifact(ctx, state.runID, art, resultJSON)
+	if err := e.svc.Runs.SaveArtifact(ctx, state.runID, art, resultJSON); err == nil {
+		state.recordArtifact(1)
+		_ = e.emitState(ctx, state, corerun.Event{Type: "artifact.created", Data: map[string]any{"id": art.ID, "name": art.Name, "kind": art.Kind, "size_bytes": art.SizeBytes}})
+	}
 
 	maskedStdout := state.masker.MaskString(result.Stdout)
 	maskedStderr := state.masker.MaskString(result.Stderr)
@@ -156,5 +159,10 @@ func (e *Executor) saveHookArtifact(ctx context.Context, state *ExecutionState, 
 		MediaType:    "text/plain",
 		Kind:         corerun.ArtifactKindCustom,
 	}
-	return e.svc.Runs.SaveArtifact(ctx, state.runID, art, []byte(masked))
+	if err := e.svc.Runs.SaveArtifact(ctx, state.runID, art, []byte(masked)); err != nil {
+		return err
+	}
+	state.recordArtifact(1)
+	_ = e.emitState(ctx, state, corerun.Event{Type: "artifact.created", Data: map[string]any{"id": art.ID, "name": art.Name, "kind": art.Kind, "size_bytes": art.SizeBytes}})
+	return nil
 }

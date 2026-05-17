@@ -137,6 +137,25 @@ func (c *Client) WorkflowPlan(ctx context.Context, runID string) (WorkflowPlanRe
 	return out, err
 }
 
+func (c *Client) WorkflowSummary(ctx context.Context, runID string) (WorkflowSummaryResponse, error) {
+	var out WorkflowSummaryResponse
+	err := c.do(ctx, http.MethodGet, "/v1/workflows/"+runID+"/summary", nil, &out)
+	return out, err
+}
+
+func (c *Client) WorkflowTimeline(ctx context.Context, runID string, cursor int, limit int) (WorkflowTimelineResponse, error) {
+	var out WorkflowTimelineResponse
+	query := fmt.Sprintf("?cursor=%d&limit=%d", cursor, limit)
+	err := c.do(ctx, http.MethodGet, "/v1/workflows/"+runID+"/timeline"+query, nil, &out)
+	return out, err
+}
+
+func (c *Client) WorkflowInspect(ctx context.Context, runID string) (WorkflowInspectResponse, error) {
+	var out WorkflowInspectResponse
+	err := c.do(ctx, http.MethodGet, "/v1/workflows/"+runID+"/inspect", nil, &out)
+	return out, err
+}
+
 func (c *Client) do(ctx context.Context, method string, path string, body any, out any) error {
 	var reader io.Reader
 	if body != nil {

@@ -973,3 +973,129 @@ func TestAdapter_GetRunEvents(t *testing.T) {
 		t.Error("expected has_more false")
 	}
 }
+
+func TestAdapter_GetRunDiagnostics(t *testing.T) {
+	tmp := t.TempDir()
+	m := runtime.NewManager(tmp, "", "", "", "")
+	a := NewAdapter(nil, nil, &mockSettingsStore{}, nil, &mockFS{}, m)
+
+	// Sem runs deve retornar erro
+	_, err := a.GetRunDiagnostics("missing")
+	if err == nil {
+		t.Fatal("expected error for missing run")
+	}
+}
+
+func TestAdapter_GetRunTimeline(t *testing.T) {
+	tmp := t.TempDir()
+	runDir := filepath.Join(tmp, "run-1")
+	_ = os.MkdirAll(runDir, 0o755)
+	_ = os.WriteFile(filepath.Join(runDir, "events.jsonl"), []byte(
+		`{"ts":"2024-01-01T00:00:00Z","run_id":"run-1","type":"run.started"}`+"\n",
+	), 0o644)
+
+	m := runtime.NewManager(tmp, "", "", "", "")
+	a := NewAdapter(nil, nil, &mockSettingsStore{}, nil, &mockFS{}, m)
+
+	resp, err := a.GetRunTimeline("run-1", 0, 10)
+	if err != nil {
+		t.Fatalf("get timeline: %v", err)
+	}
+	if len(resp.Entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(resp.Entries))
+	}
+	if resp.Entries[0].Type != "run.started" {
+		t.Errorf("expected type run.started, got %s", resp.Entries[0].Type)
+	}
+}
+
+func TestAdapter_GetRunChartSeries(t *testing.T) {
+	tmp := t.TempDir()
+	runDir := filepath.Join(tmp, "run-1")
+	_ = os.MkdirAll(filepath.Join(runDir, "nodes", "a"), 0o755)
+	result := map[string]any{"node_id": "a", "status": "success", "duration_ms": 150, "attempts": 2}
+	data, _ := json.Marshal(result)
+	_ = os.WriteFile(filepath.Join(runDir, "nodes", "a", "result.json"), data, 0o644)
+
+	m := runtime.NewManager(tmp, "", "", "", "")
+	a := NewAdapter(nil, nil, &mockSettingsStore{}, nil, &mockFS{}, m)
+
+	series, err := a.GetRunChartSeries("run-1")
+	if err != nil {
+		t.Fatalf("get chart series: %v", err)
+	}
+	if len(series) != 2 {
+		t.Fatalf("expected 2 series, got %d", len(series))
+	}
+	if series[0].Name != "Duration (ms)" {
+		t.Errorf("expected first series Duration (ms), got %s", series[0].Name)
+	}
+	if series[1].Name != "Retries" {
+		t.Errorf("expected second series Retries, got %s", series[1].Name)
+	}
+}
+
+func TestAdapter_toRunSummary_WithDiagnostics(t *testing.T) {
+	rs := runtime.RunSummary{
+		ID:            "r1",
+		Workflow:      "wf1",
+		Status:        "success",
+		DurationMS:    1234,
+		FailedNodes:   1,
+		Retries:       2,
+		AgentCalls:    3,
+		BashCalls:     4,
+		ArtifactCount: 5,
+		NodeCount:     6,
+		FirstError:    "oops",
+		SlowestNodes:  []corerun.SlowestNode{{NodeID: "a", DurationMS: 100}},
+		AgentUsage:    []corerun.AgentUsage{{Provider: "openai", TotalTokens: 42}},
+	}
+	summary := toRunSummary(rs)
+	if summary.DiagnosticSummary == nil {
+		t.Fatal("expected diagnostic summary")
+	}
+	d := summary.DiagnosticSummary
+	if d.DurationMS != 1234 {
+		t.Errorf("expected duration 1234, got %d", d.DurationMS)
+	}
+	if d.FailedNodes != 1 {
+		t.Errorf("expected failed 1, got %d", d.FailedNodes)
+	}
+	if d.Retries != 2 {
+		t.Errorf("expected retries 2, got %d", d.Retries)
+	}
+	if d.AgentCalls != 3 {
+		t.Errorf("expected agent calls 3, got %d", d.AgentCalls)
+	}
+	if d.BashCalls != 4 {
+		t.Errorf("expected bash calls 4, got %d", d.BashCalls)
+	}
+	if d.ArtifactCount != 5 {
+		t.Errorf("expected artifacts 5, got %d", d.ArtifactCount)
+	}
+	if d.NodeCount != 6 {
+		t.Errorf("expected nodes 6, got %d", d.NodeCount)
+	}
+	if d.FirstError != "oops" {
+		t.Errorf("expected first error oops, got %s", d.FirstError)
+	}
+	if len(d.SlowestNodes) != 1 || d.SlowestNodes[0].NodeID != "a" {
+		t.Errorf("unexpected slowest nodes: %+v", d.SlowestNodes)
+	}
+	if len(d.AgentUsage) != 1 || d.AgentUsage[0].Provider != "openai" {
+		t.Errorf("unexpected agent usage: %+v", d.AgentUsage)
+	}
+}
+
+func TestAdapter_toRunSummary_WithoutDiagnostics(t *testing.T) {
+	rs := runtime.RunSummary{
+		ID:       "r1",
+		Workflow: "wf1",
+		Status:   "success",
+	}
+	summary := toRunSummary(rs)
+	if summary.DiagnosticSummary != nil {
+		t.Fatal("expected nil diagnostic summary when no metrics")
+	}
+}

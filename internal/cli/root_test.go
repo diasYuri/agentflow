@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	corerun "github.com/diasYuri/agentflow/internal/core/run"
 	"github.com/diasYuri/agentflow/internal/daemon"
 	"github.com/spf13/cobra"
 )
@@ -931,6 +932,9 @@ type workflowDaemonClientFunc struct {
 	cancelWorkflow    func(context.Context, string) (daemon.CancelWorkflowResponse, error)
 	pauseWorkflow     func(context.Context, string) (daemon.PauseWorkflowResponse, error)
 	resumeWorkflow    func(context.Context, string) (daemon.ResumeWorkflowResponse, error)
+	workflowSummary   func(context.Context, string) (daemon.WorkflowSummaryResponse, error)
+	workflowTimeline  func(context.Context, string, int, int) (daemon.WorkflowTimelineResponse, error)
+	workflowInspect   func(context.Context, string) (daemon.WorkflowInspectResponse, error)
 	status            func(context.Context) (daemon.DaemonStatus, error)
 	stop              func(context.Context) (daemon.StopResponse, error)
 }
@@ -976,6 +980,24 @@ func (f workflowDaemonClientFunc) ResumeWorkflow(ctx context.Context, id string)
 		return daemon.ResumeWorkflowResponse{}, nil
 	}
 	return f.resumeWorkflow(ctx, id)
+}
+func (f workflowDaemonClientFunc) WorkflowSummary(ctx context.Context, id string) (daemon.WorkflowSummaryResponse, error) {
+	if f.workflowSummary == nil {
+		return daemon.WorkflowSummaryResponse{}, nil
+	}
+	return f.workflowSummary(ctx, id)
+}
+func (f workflowDaemonClientFunc) WorkflowTimeline(ctx context.Context, id string, cursor int, limit int) (daemon.WorkflowTimelineResponse, error) {
+	if f.workflowTimeline == nil {
+		return daemon.WorkflowTimelineResponse{}, nil
+	}
+	return f.workflowTimeline(ctx, id, cursor, limit)
+}
+func (f workflowDaemonClientFunc) WorkflowInspect(ctx context.Context, id string) (daemon.WorkflowInspectResponse, error) {
+	if f.workflowInspect == nil {
+		return daemon.WorkflowInspectResponse{}, nil
+	}
+	return f.workflowInspect(ctx, id)
 }
 func (f workflowDaemonClientFunc) Status(ctx context.Context) (daemon.DaemonStatus, error) {
 	return f.status(ctx)
@@ -1163,5 +1185,169 @@ nodes:
 	}
 	if !strings.Contains(out.String(), "valid: e2e-migrate") {
 		t.Fatalf("expected validation success, got %q", out.String())
+	}
+}
+
+func TestWorkflowSummaryRendersTextAndJson(t *testing.T) {
+	oldClient := newDaemonClient
+	newDaemonClient = func(socketPath string) workflowDaemonClient {
+		return workflowDaemonClientFunc{
+			workflowSummary: func(ctx context.Context, id string) (daemon.WorkflowSummaryResponse, error) {
+				return daemon.WorkflowSummaryResponse{
+					RunID: id,
+					Summary: corerun.Summary{
+						RunID: id, Workflow: "build", Status: "success",
+						AgentCalls: 2, BashCalls: 5, FailedNodes: 0, Retries: 1,
+						ArtifactCount: 3, DurationMS: 12345,
+					},
+				}, nil
+			},
+		}
+	}
+	t.Cleanup(func() { newDaemonClient = oldClient })
+
+	cmd := NewRootCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"workflow", "summary", "run-1", "--no-color"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "Workflow summary") {
+		t.Fatalf("expected summary header, got %q", got)
+	}
+	if !strings.Contains(got, "agent_calls: 2") {
+		t.Fatalf("expected agent_calls, got %q", got)
+	}
+
+	out.Reset()
+	cmd = NewRootCommand()
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"workflow", "summary", "run-1", "--output", "json"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), `"agent_calls":2`) {
+		t.Fatalf("expected json output, got %q", out.String())
+	}
+}
+
+func TestWorkflowTimelineRendersTextAndJson(t *testing.T) {
+	oldClient := newDaemonClient
+	newDaemonClient = func(socketPath string) workflowDaemonClient {
+		return workflowDaemonClientFunc{
+			workflowTimeline: func(ctx context.Context, id string, cursor int, limit int) (daemon.WorkflowTimelineResponse, error) {
+				return daemon.WorkflowTimelineResponse{
+					RunID: id,
+					Entries: []corerun.TimelineEntry{
+						{Timestamp: time.Unix(100, 0).UTC(), Type: "run.started"},
+						{Timestamp: time.Unix(200, 0).UTC(), Type: "node.completed", NodeID: "plan", DurationMS: 1000},
+					},
+					NextCursor: 2,
+					HasMore:    false,
+				}, nil
+			},
+		}
+	}
+	t.Cleanup(func() { newDaemonClient = oldClient })
+
+	cmd := NewRootCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"workflow", "timeline", "run-1", "--no-color"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "run.started") {
+		t.Fatalf("expected run.started, got %q", got)
+	}
+	if !strings.Contains(got, "node.completed") {
+		t.Fatalf("expected node.completed, got %q", got)
+	}
+
+	out.Reset()
+	cmd = NewRootCommand()
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"workflow", "timeline", "run-1", "--output", "json"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), `"type":"run.started"`) {
+		t.Fatalf("expected json output, got %q", out.String())
+	}
+}
+
+func TestWorkflowTimelineHandlesEmptyEntries(t *testing.T) {
+	oldClient := newDaemonClient
+	newDaemonClient = func(socketPath string) workflowDaemonClient {
+		return workflowDaemonClientFunc{
+			workflowTimeline: func(ctx context.Context, id string, cursor int, limit int) (daemon.WorkflowTimelineResponse, error) {
+				return daemon.WorkflowTimelineResponse{RunID: id}, nil
+			},
+		}
+	}
+	t.Cleanup(func() { newDaemonClient = oldClient })
+
+	cmd := NewRootCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"workflow", "timeline", "run-1", "--no-color"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "No timeline entries") {
+		t.Fatalf("expected empty message, got %q", out.String())
+	}
+}
+
+func TestWorkflowInspectRendersTextAndJson(t *testing.T) {
+	oldClient := newDaemonClient
+	newDaemonClient = func(socketPath string) workflowDaemonClient {
+		return workflowDaemonClientFunc{
+			workflowInspect: func(ctx context.Context, id string) (daemon.WorkflowInspectResponse, error) {
+				return daemon.WorkflowInspectResponse{
+					RunID: id, Workflow: "build", Status: "failed",
+					TotalSteps: 3, FailedNodes: 1, Retries: 2,
+					AgentCalls: 1, BashCalls: 4, NodeCount: 3, ArtifactCount: 2,
+					FirstError: "node plan failed", Error: "node plan failed",
+				}, nil
+			},
+		}
+	}
+	t.Cleanup(func() { newDaemonClient = oldClient })
+
+	cmd := NewRootCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"workflow", "inspect", "run-1", "--no-color"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "node_count: 3") {
+		t.Fatalf("expected node_count, got %q", got)
+	}
+	if !strings.Contains(got, "first_error: node plan failed") {
+		t.Fatalf("expected first_error, got %q", got)
+	}
+
+	out.Reset()
+	cmd = NewRootCommand()
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"workflow", "inspect", "run-1", "--output", "json"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), `"failed_nodes":1`) {
+		t.Fatalf("expected json output, got %q", out.String())
 	}
 }

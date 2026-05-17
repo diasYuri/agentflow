@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -48,29 +49,46 @@ type ExecutionState struct {
 }
 
 type executionMetrics struct {
-	mu         sync.Mutex
-	agentCalls int
-	bashCalls  int
-	retries    int
+	mu            sync.Mutex
+	agentCalls    int
+	bashCalls     int
+	retries       int
+	nodeMetrics   map[string]corerun.NodeMetrics
+	agentUsage    []corerun.AgentUsage
+	timeline      []corerun.TimelineEntry
+	artifactCount int
+	firstError    string
 }
 
 func newExecutionState(runID string, plan coreworkflow.ExecutionPlan, inputs map[string]any, secrets map[string]any, masker corerun.SecretMasker, startedAt time.Time) *ExecutionState {
 	return &ExecutionState{
 		runID: runID, plan: plan, inputs: inputs, vars: plan.Workflow.Vars, secrets: secrets, masker: masker,
 		nodes: map[string]any{}, results: map[string]corerun.NodeResult{}, startedAt: startedAt,
-		metrics: &executionMetrics{},
+		metrics: &executionMetrics{nodeMetrics: map[string]corerun.NodeMetrics{}},
 	}
 }
 
-func (s *ExecutionState) incrementAgentCalls() {
+func (s *ExecutionState) incrementAgentCalls(nodeID string) {
 	s.metrics.mu.Lock()
 	s.metrics.agentCalls++
+	if nm, ok := s.metrics.nodeMetrics[nodeID]; ok {
+		nm.AgentCalls++
+		s.metrics.nodeMetrics[nodeID] = nm
+	} else {
+		s.metrics.nodeMetrics[nodeID] = corerun.NodeMetrics{NodeID: nodeID, AgentCalls: 1}
+	}
 	s.metrics.mu.Unlock()
 }
 
-func (s *ExecutionState) incrementBashCalls() {
+func (s *ExecutionState) incrementBashCalls(nodeID string) {
 	s.metrics.mu.Lock()
 	s.metrics.bashCalls++
+	if nm, ok := s.metrics.nodeMetrics[nodeID]; ok {
+		nm.BashCalls++
+		s.metrics.nodeMetrics[nodeID] = nm
+	} else {
+		s.metrics.nodeMetrics[nodeID] = corerun.NodeMetrics{NodeID: nodeID, BashCalls: 1}
+	}
 	s.metrics.mu.Unlock()
 }
 
@@ -98,12 +116,136 @@ func (s *ExecutionState) retries() int {
 	return s.metrics.retries
 }
 
+func (s *ExecutionState) recordNodeMetrics(result corerun.NodeResult) {
+	s.metrics.mu.Lock()
+	defer s.metrics.mu.Unlock()
+	key := result.NodeID
+	metrics := corerun.NodeMetrics{
+		NodeID:        result.NodeID,
+		InstanceID:    result.InstanceID,
+		DurationMS:    result.Duration.Milliseconds(),
+		Attempts:      result.Attempts,
+		Retries:       0,
+		StdoutBytes:   int64(len(result.Stdout)),
+		StderrBytes:   int64(len(result.Stderr)),
+		ArtifactCount: len(result.Artifacts),
+		FirstError:    result.Error,
+	}
+	if result.Attempts > 0 {
+		metrics.Retries = result.Attempts - 1
+	}
+	if existing, ok := s.metrics.nodeMetrics[key]; ok {
+		existing.DurationMS += metrics.DurationMS
+		existing.Attempts += metrics.Attempts
+		existing.Retries += metrics.Retries
+		existing.StdoutBytes += metrics.StdoutBytes
+		existing.StderrBytes += metrics.StderrBytes
+		existing.ArtifactCount += metrics.ArtifactCount
+		existing.BashCalls = max(existing.BashCalls, metrics.BashCalls)
+		existing.AgentCalls = max(existing.AgentCalls, metrics.AgentCalls)
+		if existing.FirstError == "" && metrics.FirstError != "" {
+			existing.FirstError = metrics.FirstError
+		}
+		s.metrics.nodeMetrics[key] = existing
+	} else {
+		s.metrics.nodeMetrics[key] = metrics
+	}
+}
+
+func (s *ExecutionState) recordFirstError(message string) {
+	if message == "" {
+		return
+	}
+	s.metrics.mu.Lock()
+	if s.metrics.firstError == "" {
+		s.metrics.firstError = message
+	}
+	s.metrics.mu.Unlock()
+}
+
+func (s *ExecutionState) recordAgentUsage(provider, model string, usage *coreports.Usage, costUSD float64) {
+	if usage == nil {
+		return
+	}
+	s.metrics.mu.Lock()
+	defer s.metrics.mu.Unlock()
+	s.metrics.agentUsage = append(s.metrics.agentUsage, corerun.AgentUsage{
+		Provider:     provider,
+		Model:        model,
+		InputTokens:  int64(usage.InputTokens),
+		OutputTokens: int64(usage.OutputTokens),
+		TotalTokens:  int64(usage.TotalTokens),
+		CostUSD:      costUSD,
+	})
+}
+
+func (s *ExecutionState) recordArtifact(count int) {
+	s.metrics.mu.Lock()
+	s.metrics.artifactCount += count
+	s.metrics.mu.Unlock()
+}
+
+func (s *ExecutionState) addTimeline(entry corerun.TimelineEntry) {
+	s.metrics.mu.Lock()
+	s.metrics.timeline = append(s.metrics.timeline, entry)
+	s.metrics.mu.Unlock()
+}
+
+func (s *ExecutionState) nodeMetricsMap() map[string]corerun.NodeMetrics {
+	s.metrics.mu.Lock()
+	defer s.metrics.mu.Unlock()
+	out := make(map[string]corerun.NodeMetrics, len(s.metrics.nodeMetrics))
+	for k, v := range s.metrics.nodeMetrics {
+		out[k] = v
+	}
+	return out
+}
+
+func (s *ExecutionState) agentUsage() []corerun.AgentUsage {
+	s.metrics.mu.Lock()
+	defer s.metrics.mu.Unlock()
+	out := make([]corerun.AgentUsage, len(s.metrics.agentUsage))
+	copy(out, s.metrics.agentUsage)
+	return out
+}
+
+func (s *ExecutionState) timeline() []corerun.TimelineEntry {
+	s.metrics.mu.Lock()
+	defer s.metrics.mu.Unlock()
+	out := make([]corerun.TimelineEntry, len(s.metrics.timeline))
+	copy(out, s.metrics.timeline)
+	return out
+}
+
+func (s *ExecutionState) artifactCount() int {
+	s.metrics.mu.Lock()
+	defer s.metrics.mu.Unlock()
+	return s.metrics.artifactCount
+}
+
+func (s *ExecutionState) firstError() string {
+	s.metrics.mu.Lock()
+	defer s.metrics.mu.Unlock()
+	return s.metrics.firstError
+}
+
 func (s *ExecutionState) restoreMetrics(metrics corerun.CheckpointMetrics) {
 	s.metrics.mu.Lock()
 	defer s.metrics.mu.Unlock()
 	s.metrics.agentCalls = metrics.AgentCalls
 	s.metrics.bashCalls = metrics.BashCalls
 	s.metrics.retries = metrics.Retries
+	if metrics.NodeMetrics != nil {
+		s.metrics.nodeMetrics = metrics.NodeMetrics
+	}
+	if metrics.AgentUsage != nil {
+		s.metrics.agentUsage = metrics.AgentUsage
+	}
+	if metrics.Timeline != nil {
+		s.metrics.timeline = metrics.Timeline
+	}
+	s.metrics.artifactCount = metrics.ArtifactCount
+	s.metrics.firstError = metrics.FirstError
 }
 
 func (s *ExecutionState) set(id string, result corerun.NodeResult) {
@@ -216,10 +358,16 @@ func (e *Executor) recordNode(ctx context.Context, state *ExecutionState, node c
 	}
 	result.Artifacts = e.saveNodeArtifacts(ctx, state, node, result)
 	state.set(result.NodeID, result)
+	if isFailure(result.Status) && result.Error != "" {
+		state.recordFirstError(result.Error)
+	}
+	state.recordNodeMetrics(result)
 	if isFailure(result.Status) {
 		state.failed = true
 	}
 	_ = e.svc.Runs.SaveNodeResult(ctx, state.runID, state.masker.MaskNodeResult(result))
+	metrics := state.nodeMetricsMap()[result.NodeID]
+	_ = e.emitState(ctx, state, corerun.Event{Type: "node.metrics", NodeID: result.NodeID, InstanceID: result.InstanceID, Data: map[string]any{"metrics": metrics}})
 	_ = e.saveCheckpoint(ctx, state, state.plan.Workflow.Execution.PauseWhenFail, state.cursor, "", corerun.PauseReason(""))
 }
 
@@ -244,9 +392,14 @@ func (e *Executor) saveCheckpoint(ctx context.Context, state *ExecutionState, en
 		Tag:          state.tag,
 		UpdatedAt:    e.now(),
 		Metrics: corerun.CheckpointMetrics{
-			AgentCalls: state.agentCalls(),
-			BashCalls:  state.bashCalls(),
-			Retries:    state.retries(),
+			AgentCalls:    state.agentCalls(),
+			BashCalls:     state.bashCalls(),
+			Retries:       state.retries(),
+			NodeMetrics:   state.nodeMetricsMap(),
+			AgentUsage:    state.agentUsage(),
+			Timeline:      state.timeline(),
+			ArtifactCount: state.artifactCount(),
+			FirstError:    state.firstError(),
 		},
 		Nodes: nodes,
 	}
@@ -309,6 +462,8 @@ func (e *Executor) evaluateAndPersistWorkflowOutputs(ctx context.Context, state 
 	if err := e.svc.Runs.SaveArtifact(ctx, state.runID, art, maskedData); err != nil {
 		return fmt.Errorf("failed to save workflow outputs artifact: %w", err)
 	}
+	state.recordArtifact(1)
+	_ = e.emitState(ctx, state, corerun.Event{Type: "artifact.created", Data: map[string]any{"id": art.ID, "name": art.Name, "kind": art.Kind, "size_bytes": art.SizeBytes}})
 	_ = e.emitState(ctx, state, corerun.Event{Type: "workflow.outputs", Data: outputs})
 	return nil
 }
@@ -395,11 +550,29 @@ func (e *Executor) finish(ctx context.Context, plan coreworkflow.ExecutionPlan, 
 	}
 
 	finished := e.now()
+	eventType := "run.completed"
+	switch status {
+	case corerun.RunPaused:
+		eventType = "run.paused"
+	case corerun.RunFailed, corerun.RunCancelled:
+		eventType = "run.failed"
+	}
+	eventData := map[string]any{"status": status}
+	if status == corerun.RunPaused && pauseReason != "" {
+		eventData["reason"] = pauseReason
+	}
+	_ = e.emitState(persistCtx, state, corerun.Event{Type: eventType, Data: eventData})
+	state.addTimeline(corerun.TimelineEntry{Timestamp: finished, Type: eventType})
 	summary := corerun.Summary{
 		RunID: state.runID, Workflow: plan.Workflow.Name, Status: status, StartedAt: state.startedAt,
 		FinishedAt: finished, DurationMS: finished.Sub(state.startedAt).Milliseconds(), AgentCalls: state.agentCalls(),
 		BashCalls: state.bashCalls(), FailedNodes: countFailedNodes(state.results), Retries: state.retries(), Nodes: state.results,
-		Tag: state.tag,
+		Tag:           state.tag,
+		SlowestNodes:  computeSlowestNodes(state.nodeMetricsMap()),
+		AgentUsage:    state.agentUsage(),
+		Timeline:      state.timeline(),
+		ArtifactCount: state.artifactCount(),
+		FirstError:    state.firstError(),
 	}
 	failureReason := ""
 	switch {
@@ -420,25 +593,17 @@ func (e *Executor) finish(ctx context.Context, plan coreworkflow.ExecutionPlan, 
 		failureReason = state.masker.MaskString(failureReason)
 	}
 	publicSummary := state.masker.MaskSummary(summary)
-	_ = e.svc.Runs.FinalizeRun(persistCtx, state.runID, publicSummary)
-	eventType := "run.completed"
+	persistedSummary := publicSummary
+	persistedSummary.Timeline = nil
+	persistedSummary.AgentUsage = nil
+	_ = e.svc.Runs.FinalizeRun(persistCtx, state.runID, persistedSummary)
 	switch status {
 	case corerun.RunSuccess:
 		_ = e.svc.Runs.ClearCheckpoint(persistCtx, state.runID)
-	case corerun.RunPaused:
-		eventType = "run.paused"
 	case corerun.RunFailed, corerun.RunCancelled:
-		eventType = "run.failed"
-		_ = e.svc.Runs.ClearCheckpoint(persistCtx, state.runID)
-	default:
-		eventType = "run.failed"
 		_ = e.svc.Runs.ClearCheckpoint(persistCtx, state.runID)
 	}
-	eventData := map[string]any{"status": status}
-	if status == corerun.RunPaused && pauseReason != "" {
-		eventData["reason"] = pauseReason
-	}
-	_ = e.emitState(persistCtx, state, corerun.Event{Type: eventType, Data: eventData})
+	_ = e.emitState(persistCtx, state, corerun.Event{Type: "run.summary.updated", Data: map[string]any{"summary": publicSummary}})
 	_ = e.svc.Events.Close(persistCtx)
 	dir, _ := e.svc.Runs.RunDir(state.runID)
 	if status == corerun.RunPaused {
@@ -448,6 +613,9 @@ func (e *Executor) finish(ctx context.Context, plan coreworkflow.ExecutionPlan, 
 }
 
 func (e *Executor) emit(ctx context.Context, runID string, event corerun.Event) error {
+	if e.svc.Events == nil {
+		return nil
+	}
 	event.Timestamp = e.now()
 	event.RunID = runID
 	return e.svc.Events.Emit(ctx, event)
@@ -468,6 +636,17 @@ func countFailedNodes(results map[string]corerun.NodeResult) int {
 		}
 	}
 	return count
+}
+
+func computeSlowestNodes(nodeMetrics map[string]corerun.NodeMetrics) []corerun.SlowestNode {
+	nodes := make([]corerun.SlowestNode, 0, len(nodeMetrics))
+	for _, m := range nodeMetrics {
+		nodes = append(nodes, corerun.SlowestNode{NodeID: m.NodeID, DurationMS: m.DurationMS})
+	}
+	sort.Slice(nodes, func(i, j int) bool {
+		return nodes[i].DurationMS > nodes[j].DurationMS
+	})
+	return nodes
 }
 
 func maskError(masker corerun.SecretMasker, err error) error {

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -2252,6 +2253,434 @@ func TestServerArtifactPathRouteSupportsArtifactNamedPath(t *testing.T) {
 	}
 	if !strings.HasSuffix(pathResp["path"], filepath.Join("artifacts", "path")) {
 		t.Fatalf("expected resolved path, got %q", pathResp["path"])
+	}
+}
+
+func TestManagerWorkflowSummaryReadsSummaryJSON(t *testing.T) {
+	dir := shortTempDir(t)
+	cfg := Config{RunRoot: filepath.Join(dir, "runs")}
+	manager := NewManager(cfg, nil, nil)
+
+	runID := "test-run-summary"
+	runDir := filepath.Join(cfg.RunRoot, runID)
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	summary := corerun.Summary{
+		RunID: runID, Workflow: "build", Status: corerun.RunSuccess,
+		AgentCalls: 3, BashCalls: 7, FailedNodes: 1, Retries: 2,
+		ArtifactCount: 4, DurationMS: 5000,
+		SlowestNodes: []corerun.SlowestNode{{NodeID: "plan", DurationMS: 2000}},
+	}
+	data, _ := json.Marshal(summary)
+	if err := os.WriteFile(filepath.Join(runDir, "summary.json"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	manager.mu.Lock()
+	manager.records[runID] = &runRecord{
+		run: WorkflowRun{
+			ID:     runID,
+			RunDir: runDir,
+			Status: corerun.RunSuccess,
+		},
+	}
+	manager.mu.Unlock()
+
+	resp, err := manager.WorkflowSummary(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.RunID != runID {
+		t.Fatalf("expected run_id %s, got %s", runID, resp.RunID)
+	}
+	if resp.Summary.Workflow != "build" {
+		t.Fatalf("expected workflow build, got %s", resp.Summary.Workflow)
+	}
+	if resp.Summary.AgentCalls != 3 {
+		t.Fatalf("expected agent_calls 3, got %d", resp.Summary.AgentCalls)
+	}
+	if len(resp.Summary.SlowestNodes) != 1 || resp.Summary.SlowestNodes[0].NodeID != "plan" {
+		t.Fatalf("expected slowest nodes, got %#v", resp.Summary.SlowestNodes)
+	}
+}
+
+func TestManagerWorkflowSummaryReturnsNotExistForMissingRun(t *testing.T) {
+	dir := shortTempDir(t)
+	cfg := Config{RunRoot: filepath.Join(dir, "runs")}
+	manager := NewManager(cfg, nil, nil)
+
+	_, err := manager.WorkflowSummary("missing")
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected ErrNotExist, got %v", err)
+	}
+}
+
+func TestManagerWorkflowSummaryEnrichesFromEvents(t *testing.T) {
+	dir := shortTempDir(t)
+	cfg := Config{RunRoot: filepath.Join(dir, "runs")}
+	manager := NewManager(cfg, nil, nil)
+
+	runID := "test-run-summary-events"
+	runDir := filepath.Join(cfg.RunRoot, runID)
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	summary := corerun.Summary{
+		RunID:       runID,
+		Workflow:    "build",
+		Status:      corerun.RunSuccess,
+		AgentCalls:  1,
+		BashCalls:   2,
+		DurationMS:  4000,
+		FirstError:  "",
+		FailedNodes: 0,
+	}
+	data, _ := json.Marshal(summary)
+	if err := os.WriteFile(filepath.Join(runDir, "summary.json"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Create(filepath.Join(runDir, "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := []corerun.Event{
+		{Timestamp: time.Unix(1, 0).UTC(), RunID: runID, Type: "run.started"},
+		{Timestamp: time.Unix(2, 0).UTC(), RunID: runID, Type: "agent.usage", NodeID: "agent", Data: map[string]any{
+			"provider": "openai", "model": "gpt-4o", "input_tokens": 11, "output_tokens": 22, "total_tokens": 33, "cost_usd": 0.01,
+		}},
+		{Timestamp: time.Unix(3, 0).UTC(), RunID: runID, Type: "run.completed"},
+	}
+	for _, ev := range events {
+		if err := json.NewEncoder(f).Encode(ev); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	manager.mu.Lock()
+	manager.records[runID] = &runRecord{
+		run: WorkflowRun{
+			ID:     runID,
+			RunDir: runDir,
+			Status: corerun.RunSuccess,
+		},
+	}
+	manager.mu.Unlock()
+
+	resp, err := manager.WorkflowSummary(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Summary.Timeline) != 3 {
+		t.Fatalf("expected timeline to be enriched from events, got %#v", resp.Summary.Timeline)
+	}
+	if len(resp.Summary.AgentUsage) != 1 {
+		t.Fatalf("expected agent usage to be enriched from events, got %#v", resp.Summary.AgentUsage)
+	}
+	if resp.Summary.AgentUsage[0].TotalTokens != 33 {
+		t.Fatalf("expected total tokens 33, got %+v", resp.Summary.AgentUsage[0])
+	}
+}
+
+func TestManagerWorkflowTimelineReadsFromSummary(t *testing.T) {
+	dir := shortTempDir(t)
+	cfg := Config{RunRoot: filepath.Join(dir, "runs")}
+	manager := NewManager(cfg, nil, nil)
+
+	runID := "test-run-timeline"
+	runDir := filepath.Join(cfg.RunRoot, runID)
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	summary := corerun.Summary{
+		RunID: runID, Status: corerun.RunSuccess,
+		Timeline: []corerun.TimelineEntry{
+			{Timestamp: time.Unix(100, 0).UTC(), Type: "run.started"},
+			{Timestamp: time.Unix(200, 0).UTC(), Type: "node.completed", NodeID: "plan"},
+			{Timestamp: time.Unix(300, 0).UTC(), Type: "run.completed"},
+		},
+	}
+	data, _ := json.Marshal(summary)
+	if err := os.WriteFile(filepath.Join(runDir, "summary.json"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	manager.mu.Lock()
+	manager.records[runID] = &runRecord{
+		run: WorkflowRun{
+			ID:     runID,
+			RunDir: runDir,
+			Status: corerun.RunSuccess,
+		},
+	}
+	manager.mu.Unlock()
+
+	resp, err := manager.WorkflowTimeline(runID, 0, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(resp.Entries))
+	}
+	if resp.Entries[0].Type != "run.started" {
+		t.Fatalf("expected run.started, got %s", resp.Entries[0].Type)
+	}
+	if !resp.HasMore {
+		t.Fatal("expected has_more true")
+	}
+	if resp.NextCursor != 2 {
+		t.Fatalf("expected next_cursor 2, got %d", resp.NextCursor)
+	}
+
+	resp2, err := manager.WorkflowTimeline(runID, resp.NextCursor, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp2.Entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(resp2.Entries))
+	}
+	if resp2.HasMore {
+		t.Fatal("expected has_more false")
+	}
+}
+
+func TestManagerWorkflowTimelineFallbackToEventsJSONL(t *testing.T) {
+	dir := shortTempDir(t)
+	cfg := Config{RunRoot: filepath.Join(dir, "runs")}
+	manager := NewManager(cfg, nil, nil)
+
+	runID := "test-run-timeline-fallback"
+	runDir := filepath.Join(cfg.RunRoot, runID)
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Create(filepath.Join(runDir, "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		ev := corerun.Event{Timestamp: time.Now(), RunID: runID, Type: "test", NodeID: fmt.Sprintf("node%d", i)}
+		if err := json.NewEncoder(f).Encode(ev); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.Close()
+
+	manager.mu.Lock()
+	manager.records[runID] = &runRecord{
+		run: WorkflowRun{
+			ID:     runID,
+			RunDir: runDir,
+			Status: corerun.RunSuccess,
+		},
+	}
+	manager.mu.Unlock()
+
+	resp, err := manager.WorkflowTimeline(runID, 0, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(resp.Entries))
+	}
+	if !resp.HasMore {
+		t.Fatal("expected has_more true")
+	}
+	if resp.NextCursor != 2 {
+		t.Fatalf("expected next_cursor 2, got %d", resp.NextCursor)
+	}
+
+	resp2, err := manager.WorkflowTimeline(runID, resp.NextCursor, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp2.Entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(resp2.Entries))
+	}
+	if resp2.HasMore {
+		t.Fatal("expected has_more false")
+	}
+}
+
+func TestManagerWorkflowTimelineHandlesNoEvents(t *testing.T) {
+	dir := shortTempDir(t)
+	cfg := Config{RunRoot: filepath.Join(dir, "runs")}
+	manager := NewManager(cfg, nil, nil)
+
+	runID := "test-run-timeline-empty"
+	runDir := filepath.Join(cfg.RunRoot, runID)
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	manager.mu.Lock()
+	manager.records[runID] = &runRecord{
+		run: WorkflowRun{
+			ID:     runID,
+			RunDir: runDir,
+			Status: corerun.RunSuccess,
+		},
+	}
+	manager.mu.Unlock()
+
+	resp, err := manager.WorkflowTimeline(runID, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Entries) != 0 {
+		t.Fatalf("expected 0 entries, got %d", len(resp.Entries))
+	}
+	if resp.HasMore {
+		t.Fatal("expected has_more false")
+	}
+}
+
+func TestManagerWorkflowInspectAggregatesData(t *testing.T) {
+	dir := shortTempDir(t)
+	cfg := Config{RunRoot: filepath.Join(dir, "runs")}
+	manager := NewManager(cfg, nil, nil)
+
+	runID := "test-run-inspect"
+	runDir := filepath.Join(cfg.RunRoot, runID)
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	summary := corerun.Summary{
+		RunID: runID, Workflow: "build", Status: corerun.RunFailed,
+		AgentCalls: 1, BashCalls: 3, FailedNodes: 1, Retries: 0,
+		ArtifactCount: 2, DurationMS: 3000, FirstError: "node plan failed",
+	}
+	data, _ := json.Marshal(summary)
+	if err := os.WriteFile(filepath.Join(runDir, "summary.json"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	nodeDir := filepath.Join(runDir, "nodes", "n1")
+	if err := os.MkdirAll(nodeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	result := corerun.NodeResult{NodeID: "n1", Status: corerun.NodeFailed, Error: "node plan failed"}
+	resultData, _ := json.Marshal(result)
+	if err := os.WriteFile(filepath.Join(nodeDir, "result.json"), resultData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	manager.mu.Lock()
+	manager.records[runID] = &runRecord{
+		run: WorkflowRun{
+			ID:     runID,
+			RunDir: runDir,
+			Status: corerun.RunFailed,
+		},
+	}
+	manager.mu.Unlock()
+
+	resp, err := manager.WorkflowInspect(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.RunID != runID {
+		t.Fatalf("expected run_id %s, got %s", runID, resp.RunID)
+	}
+	if resp.Workflow != "build" {
+		t.Fatalf("expected workflow build, got %s", resp.Workflow)
+	}
+	if resp.FailedNodes != 1 {
+		t.Fatalf("expected failed_nodes 1, got %d", resp.FailedNodes)
+	}
+	if resp.NodeCount != 1 {
+		t.Fatalf("expected node_count 1, got %d", resp.NodeCount)
+	}
+	if resp.ArtifactCount != 2 {
+		t.Fatalf("expected artifact_count 2, got %d", resp.ArtifactCount)
+	}
+	if resp.FirstError != "node plan failed" {
+		t.Fatalf("expected first_error, got %q", resp.FirstError)
+	}
+}
+
+func TestServerSummaryTimelineInspectEndpoints(t *testing.T) {
+	dir := shortTempDir(t)
+	cfg := Config{
+		SocketPath: filepath.Join(dir, "agentflowd.sock"),
+		PIDPath:    filepath.Join(dir, "agentflowd.pid"),
+		LogPath:    filepath.Join(dir, "agentflowd.log"),
+		RunRoot:    filepath.Join(dir, "runs"),
+	}
+	manager := NewManager(cfg, nil, nil)
+
+	runID := "test-run-diag"
+	runDir := filepath.Join(cfg.RunRoot, runID)
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	summary := corerun.Summary{
+		RunID: runID, Workflow: "build", Status: corerun.RunSuccess,
+		AgentCalls: 1, BashCalls: 2, FailedNodes: 0, Retries: 0,
+		ArtifactCount: 1, DurationMS: 1000,
+		Timeline: []corerun.TimelineEntry{
+			{Timestamp: time.Now(), Type: "run.started"},
+		},
+	}
+	data, _ := json.Marshal(summary)
+	if err := os.WriteFile(filepath.Join(runDir, "summary.json"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	manager.mu.Lock()
+	manager.records[runID] = &runRecord{
+		run: WorkflowRun{
+			ID:     runID,
+			RunDir: runDir,
+			Status: corerun.RunSuccess,
+		},
+	}
+	manager.mu.Unlock()
+
+	server := NewServer(cfg, manager, time.Now(), func() {}, nil)
+
+	summaryReq := httptest.NewRequest(http.MethodGet, "/v1/workflows/"+runID+"/summary", nil)
+	summaryRR := httptest.NewRecorder()
+	server.handleWorkflow(summaryRR, summaryReq)
+	if summaryRR.Code != http.StatusOK {
+		t.Fatalf("expected summary route to succeed, got %d: %s", summaryRR.Code, summaryRR.Body.String())
+	}
+	var summaryResp WorkflowSummaryResponse
+	if err := json.Unmarshal(summaryRR.Body.Bytes(), &summaryResp); err != nil {
+		t.Fatalf("unmarshal summary response: %v", err)
+	}
+	if summaryResp.Summary.Workflow != "build" {
+		t.Fatalf("expected workflow build, got %s", summaryResp.Summary.Workflow)
+	}
+
+	timelineReq := httptest.NewRequest(http.MethodGet, "/v1/workflows/"+runID+"/timeline", nil)
+	timelineRR := httptest.NewRecorder()
+	server.handleWorkflow(timelineRR, timelineReq)
+	if timelineRR.Code != http.StatusOK {
+		t.Fatalf("expected timeline route to succeed, got %d: %s", timelineRR.Code, timelineRR.Body.String())
+	}
+	var timelineResp WorkflowTimelineResponse
+	if err := json.Unmarshal(timelineRR.Body.Bytes(), &timelineResp); err != nil {
+		t.Fatalf("unmarshal timeline response: %v", err)
+	}
+	if len(timelineResp.Entries) != 1 {
+		t.Fatalf("expected 1 timeline entry, got %d", len(timelineResp.Entries))
+	}
+
+	inspectReq := httptest.NewRequest(http.MethodGet, "/v1/workflows/"+runID+"/inspect", nil)
+	inspectRR := httptest.NewRecorder()
+	server.handleWorkflow(inspectRR, inspectReq)
+	if inspectRR.Code != http.StatusOK {
+		t.Fatalf("expected inspect route to succeed, got %d: %s", inspectRR.Code, inspectRR.Body.String())
+	}
+	var inspectResp WorkflowInspectResponse
+	if err := json.Unmarshal(inspectRR.Body.Bytes(), &inspectResp); err != nil {
+		t.Fatalf("unmarshal inspect response: %v", err)
+	}
+	if inspectResp.RunID != runID {
+		t.Fatalf("expected run_id %s, got %s", runID, inspectResp.RunID)
 	}
 }
 

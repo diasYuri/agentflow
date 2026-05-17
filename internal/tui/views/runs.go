@@ -27,6 +27,7 @@ type Runs struct {
 	zoneManager   *zone.Manager
 	confirming    string
 	progressAnim  animation.ProgressModel
+	diagnostics   *client.RunDiagnosticSummary
 }
 
 // NewRuns creates a new Runs view.
@@ -108,6 +109,7 @@ func (r *Runs) View(t *theme.Theme) string {
 // SetRun updates the displayed run.
 func (r *Runs) SetRun(run client.RunSummary) {
 	r.run = run
+	r.diagnostics = run.DiagnosticSummary
 }
 
 // SetNodes updates the displayed nodes.
@@ -257,9 +259,10 @@ func (r *Runs) renderDetail(t *theme.Theme, width, height int) string {
 			b.WriteString(t.Danger.Render("Stderr:") + "\n" + trunc(n.Stderr, width-2) + "\n")
 		}
 	} else {
+		b.WriteString(r.renderDiagnostics(t, width) + "\n")
 		b.WriteString(t.Subtitle.Render("Timeline") + "\n")
-		b.WriteString(components.Timeline(t, width, r.events, height-2) + "\n")
-		if len(r.nodes) > 0 && width > 30 && height > 10 {
+		b.WriteString(components.Timeline(t, width, r.events, height-8) + "\n")
+		if len(r.nodes) > 0 && width > 30 && height > 14 {
 			labels := make([]string, 0, len(r.nodes))
 			values := make([]float64, 0, len(r.nodes))
 			for _, n := range r.nodes {
@@ -270,6 +273,36 @@ func (r *Runs) renderDetail(t *theme.Theme, width, height int) string {
 		}
 	}
 	return style.Render(b.String())
+}
+
+func (r *Runs) renderDiagnostics(t *theme.Theme, width int) string {
+	if r.diagnostics == nil {
+		return ""
+	}
+	d := r.diagnostics
+	var parts []string
+	if d.DurationMS > 0 {
+		parts = append(parts, fmt.Sprintf("Duration: %s", time.Duration(d.DurationMS)*time.Millisecond))
+	}
+	if d.FailedNodes > 0 {
+		parts = append(parts, t.Danger.Render(fmt.Sprintf("Failed: %d", d.FailedNodes)))
+	}
+	if d.Retries > 0 {
+		parts = append(parts, t.Warning.Render(fmt.Sprintf("Retries: %d", d.Retries)))
+	}
+	if d.AgentCalls > 0 {
+		parts = append(parts, fmt.Sprintf("Agents: %d", d.AgentCalls))
+	}
+	if d.BashCalls > 0 {
+		parts = append(parts, fmt.Sprintf("Bash: %d", d.BashCalls))
+	}
+	if d.ArtifactCount > 0 {
+		parts = append(parts, fmt.Sprintf("Artifacts: %d", d.ArtifactCount))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return t.Subtitle.Render("Diagnostics") + "\n" + strings.Join(parts, "  ") + "\n"
 }
 
 func (r *Runs) renderHints(t *theme.Theme) string {

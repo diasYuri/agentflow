@@ -57,6 +57,9 @@ type workflowDaemonClient interface {
 	WorkflowArtifacts(context.Context, string) (daemon.WorkflowArtifactsResponse, error)
 	WorkflowArtifact(context.Context, string, string) (daemon.WorkflowArtifactResponse, error)
 	WorkflowArtifactPath(context.Context, string, string) (string, error)
+	WorkflowSummary(context.Context, string) (daemon.WorkflowSummaryResponse, error)
+	WorkflowTimeline(context.Context, string, int, int) (daemon.WorkflowTimelineResponse, error)
+	WorkflowInspect(context.Context, string) (daemon.WorkflowInspectResponse, error)
 	Status(context.Context) (daemon.DaemonStatus, error)
 	Stop(context.Context) (daemon.StopResponse, error)
 }
@@ -246,6 +249,9 @@ func newWorkflowCommand(opts *options) *cobra.Command {
 		newWorkflowCancelCommand(),
 		newWorkflowPauseCommand(),
 		newWorkflowResumeCommand(),
+		newWorkflowSummaryCommand(),
+		newWorkflowTimelineCommand(),
+		newWorkflowInspectCommand(),
 	)
 	return cmd
 }
@@ -659,6 +665,70 @@ func newWorkflowResumeCommand() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+func newWorkflowSummaryCommand() *cobra.Command {
+	var outputFormat string
+	var noColor bool
+	cmd := &cobra.Command{
+		Use:   "summary <run_id>",
+		Short: "Show workflow run summary",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			resp, err := newDaemonClient("").WorkflowSummary(cmd.Context(), args[0])
+			if err != nil {
+				return err
+			}
+			return renderWorkflowSummary(cmd.OutOrStdout(), resp, outputFormat, noColor)
+		},
+	}
+	cmd.Flags().StringVar(&outputFormat, "output", "text", "output format (text or json)")
+	cmd.Flags().BoolVar(&noColor, "no-color", false, "disable color output")
+	return cmd
+}
+
+func newWorkflowTimelineCommand() *cobra.Command {
+	var outputFormat string
+	var noColor bool
+	var cursor int
+	var limit int
+	cmd := &cobra.Command{
+		Use:   "timeline <run_id>",
+		Short: "Show workflow run timeline",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			resp, err := newDaemonClient("").WorkflowTimeline(cmd.Context(), args[0], cursor, limit)
+			if err != nil {
+				return err
+			}
+			return renderWorkflowTimeline(cmd.OutOrStdout(), resp, outputFormat, noColor)
+		},
+	}
+	cmd.Flags().StringVar(&outputFormat, "output", "text", "output format (text or json)")
+	cmd.Flags().BoolVar(&noColor, "no-color", false, "disable color output")
+	cmd.Flags().IntVar(&cursor, "cursor", 0, "pagination cursor")
+	cmd.Flags().IntVar(&limit, "limit", 0, "page limit (default 100, max 1000)")
+	return cmd
+}
+
+func newWorkflowInspectCommand() *cobra.Command {
+	var outputFormat string
+	var noColor bool
+	cmd := &cobra.Command{
+		Use:   "inspect <run_id>",
+		Short: "Inspect workflow run diagnostics",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			resp, err := newDaemonClient("").WorkflowInspect(cmd.Context(), args[0])
+			if err != nil {
+				return err
+			}
+			return renderWorkflowInspect(cmd.OutOrStdout(), resp, outputFormat, noColor)
+		},
+	}
+	cmd.Flags().StringVar(&outputFormat, "output", "text", "output format (text or json)")
+	cmd.Flags().BoolVar(&noColor, "no-color", false, "disable color output")
+	return cmd
 }
 
 func newDaemonCommand(opts *options) *cobra.Command {
@@ -1077,6 +1147,153 @@ func renderWorkflowStatus(w io.Writer, run daemon.WorkflowRun, format string, no
 		_, _ = fmt.Fprintln(w, f.note("hint: run `agentflow workflow resume "+run.ID+"` to continue"))
 	}
 	return nil
+}
+
+func renderWorkflowSummary(w io.Writer, resp daemon.WorkflowSummaryResponse, format string, noColor bool) error {
+	if workflowOutputFormat(format) == workflowOutputJSON {
+		data, err := json.Marshal(resp)
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintln(w, string(data))
+		return err
+	}
+	f := newCLIFormat(!(noColor || !isInteractiveWriter(w)))
+	s := resp.Summary
+	lines := []string{
+		f.labelValue("run_id", resp.RunID),
+		f.labelValue("workflow", s.Workflow),
+		f.labelValue("status", f.status(normalizeStatus(s.Status))),
+		f.labelValue("started_at", s.StartedAt.Format(time.RFC3339)),
+	}
+	if !s.FinishedAt.IsZero() {
+		lines = append(lines, f.labelValue("finished_at", s.FinishedAt.Format(time.RFC3339)))
+	}
+	if s.DurationMS > 0 {
+		lines = append(lines, f.labelValue("duration", (time.Duration(s.DurationMS)*time.Millisecond).String()))
+	}
+	lines = append(lines,
+		f.labelValue("agent_calls", fmt.Sprint(s.AgentCalls)),
+		f.labelValue("bash_calls", fmt.Sprint(s.BashCalls)),
+		f.labelValue("failed_nodes", fmt.Sprint(s.FailedNodes)),
+		f.labelValue("retries", fmt.Sprint(s.Retries)),
+		f.labelValue("artifact_count", fmt.Sprint(s.ArtifactCount)),
+	)
+	if s.Tag != "" {
+		lines = append(lines, f.labelValue("tag", s.Tag))
+	}
+	if s.FirstError != "" {
+		lines = append(lines, f.labelValue("first_error", s.FirstError))
+	}
+	if len(s.SlowestNodes) > 0 {
+		lines = append(lines, f.section("Slowest nodes"))
+		for _, n := range s.SlowestNodes {
+			lines = append(lines, f.labelValue(n.NodeID, (time.Duration(n.DurationMS)*time.Millisecond).String()))
+		}
+	}
+	if len(s.AgentUsage) > 0 {
+		lines = append(lines, f.section("Agent usage"))
+		for _, u := range s.AgentUsage {
+			lines = append(lines, f.labelValue(u.Provider, fmt.Sprintf("tokens=%d/%d cost=%.4f", u.InputTokens, u.OutputTokens, u.CostUSD)))
+		}
+	}
+	_, err := fmt.Fprintln(w, f.block(f.title("Workflow summary"), lines))
+	return err
+}
+
+func renderWorkflowTimeline(w io.Writer, resp daemon.WorkflowTimelineResponse, format string, noColor bool) error {
+	if workflowOutputFormat(format) == workflowOutputJSON {
+		data, err := json.Marshal(resp)
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintln(w, string(data))
+		return err
+	}
+	if len(resp.Entries) == 0 {
+		_, err := fmt.Fprintln(w, newCLIFormat(!(noColor || !isInteractiveWriter(w))).note("No timeline entries"))
+		return err
+	}
+	f := newCLIFormat(!(noColor || !isInteractiveWriter(w)))
+	lines := []string{f.labelValue("run_id", resp.RunID)}
+	for _, entry := range resp.Entries {
+		nodeInfo := ""
+		if entry.NodeID != "" {
+			nodeInfo = fmt.Sprintf(" [%s", entry.NodeID)
+			if entry.InstanceID != "" {
+				nodeInfo += "/" + entry.InstanceID
+			}
+			if entry.Attempt > 0 {
+				nodeInfo += fmt.Sprintf(" attempt=%d", entry.Attempt)
+			}
+			nodeInfo += "]"
+		}
+		duration := ""
+		if entry.DurationMS > 0 {
+			duration = fmt.Sprintf(" (%s)", (time.Duration(entry.DurationMS) * time.Millisecond).String())
+		}
+		lines = append(lines, fmt.Sprintf("%s  %s%s%s", entry.Timestamp.Format(time.RFC3339), entry.Type, nodeInfo, duration))
+	}
+	if resp.HasMore {
+		lines = append(lines, f.note(fmt.Sprintf("--more (cursor=%d)", resp.NextCursor)))
+	}
+	_, err := fmt.Fprintln(w, f.block(f.title("Workflow timeline"), lines))
+	return err
+}
+
+func renderWorkflowInspect(w io.Writer, resp daemon.WorkflowInspectResponse, format string, noColor bool) error {
+	if workflowOutputFormat(format) == workflowOutputJSON {
+		data, err := json.Marshal(resp)
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintln(w, string(data))
+		return err
+	}
+	f := newCLIFormat(!(noColor || !isInteractiveWriter(w)))
+	lines := []string{
+		f.labelValue("run_id", resp.RunID),
+		f.labelValue("workflow", resp.Workflow),
+		f.labelValue("status", f.status(normalizeStatus(resp.Status))),
+		f.labelValue("started_at", resp.StartedAt.Format(time.RFC3339)),
+	}
+	if !resp.FinishedAt.IsZero() {
+		lines = append(lines, f.labelValue("finished_at", resp.FinishedAt.Format(time.RFC3339)))
+	}
+	if resp.DurationMS > 0 {
+		lines = append(lines, f.labelValue("duration", (time.Duration(resp.DurationMS)*time.Millisecond).String()))
+	}
+	lines = append(lines,
+		f.labelValue("step", firstNonEmpty(resp.CurrentStep, "-")),
+		f.labelValue("completed", fmt.Sprintf("%d/%d", len(resp.CompletedSteps), resp.TotalSteps)),
+		f.labelValue("pending", fmt.Sprintf("%d", len(resp.PendingSteps))),
+		f.labelValue("failed_nodes", fmt.Sprint(resp.FailedNodes)),
+		f.labelValue("retries", fmt.Sprint(resp.Retries)),
+		f.labelValue("agent_calls", fmt.Sprint(resp.AgentCalls)),
+		f.labelValue("bash_calls", fmt.Sprint(resp.BashCalls)),
+		f.labelValue("node_count", fmt.Sprint(resp.NodeCount)),
+		f.labelValue("artifact_count", fmt.Sprint(resp.ArtifactCount)),
+	)
+	if resp.Tag != "" {
+		lines = append(lines, f.labelValue("tag", resp.Tag))
+	}
+	if resp.FirstError != "" {
+		lines = append(lines, f.labelValue("first_error", resp.FirstError))
+	}
+	if resp.Error != "" {
+		lines = append(lines, f.labelValue("error", resp.Error))
+	}
+	if resp.FailureReason != "" {
+		lines = append(lines, f.labelValue("failure_reason", resp.FailureReason))
+	}
+	if len(resp.SlowestNodes) > 0 {
+		lines = append(lines, f.section("Slowest nodes"))
+		for _, n := range resp.SlowestNodes {
+			lines = append(lines, f.labelValue(n.NodeID, (time.Duration(n.DurationMS)*time.Millisecond).String()))
+		}
+	}
+	_, err := fmt.Fprintln(w, f.block(f.title("Workflow inspect"), lines))
+	return err
 }
 
 func watchWorkflow(cmd *cobra.Command, runID string, format string, noColor bool) error {

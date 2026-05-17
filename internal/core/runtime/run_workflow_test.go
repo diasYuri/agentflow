@@ -1079,6 +1079,288 @@ nodes:
 	}
 }
 
+func TestRunWorkflowSummaryIncludesDiagnostics(t *testing.T) {
+	dir := t.TempDir()
+	workflowPath := writeWorkflow(t, dir, `
+version: "1"
+name: diagnostics
+execution:
+  output_dir: "`+filepath.ToSlash(filepath.Join(dir, "runs"))+`"
+nodes:
+  - id: slow
+    kind: bash
+    command: "echo slow"
+  - id: agent
+    kind: agent
+    depends_on: [slow]
+    prompt: "hello"
+`)
+	events := eventmemory.New()
+	agent := &recordingAgentProvider{usage: &ports.Usage{InputTokens: 10, OutputTokens: 20, TotalTokens: 30}, costUSD: 0.005}
+	uc := &RunWorkflowUseCase{
+		Workflows: newTestWorkflowRepository(dir),
+		Runs:      runrepo.New(filepath.Join(dir, "runs")),
+		Events:    events,
+		Agents:    ports.NewStaticAgentProviderRegistry(map[string]ports.AgentProvider{"codex": agent}),
+		Shell:     shell.NewRunner(),
+		Now:       func() time.Time { return time.Unix(1, 0).UTC() },
+	}
+	result, err := uc.Run(context.Background(), RunOptions{WorkflowRef: workflowPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != run.RunSuccess {
+		t.Fatalf("expected success, got %s", result.Status)
+	}
+
+	// Slowest nodes
+	if len(result.Summary.SlowestNodes) == 0 {
+		t.Fatal("expected slowest nodes")
+	}
+	if result.Summary.SlowestNodes[0].NodeID != "slow" && result.Summary.SlowestNodes[0].NodeID != "agent" {
+		t.Fatalf("unexpected slowest node: %s", result.Summary.SlowestNodes[0].NodeID)
+	}
+
+	// Agent usage
+	if len(result.Summary.AgentUsage) != 1 {
+		t.Fatalf("expected 1 agent usage entry, got %d", len(result.Summary.AgentUsage))
+	}
+	au := result.Summary.AgentUsage[0]
+	if au.InputTokens != 10 || au.OutputTokens != 20 || au.TotalTokens != 30 || au.CostUSD != 0.005 {
+		t.Fatalf("unexpected agent usage: %+v", au)
+	}
+
+	// Timeline
+	if len(result.Summary.Timeline) == 0 {
+		t.Fatal("expected timeline entries")
+	}
+	if result.Summary.Timeline[0].Type != "run.started" {
+		t.Fatalf("expected timeline to start with run.started, got %s", result.Summary.Timeline[0].Type)
+	}
+	if got := result.Summary.Timeline[len(result.Summary.Timeline)-1].Type; got != "run.completed" {
+		t.Fatalf("expected timeline to end with run.completed, got %s", got)
+	}
+
+	// Artifact count
+	if result.Summary.ArtifactCount == 0 {
+		t.Fatal("expected artifact count > 0")
+	}
+
+	// First error should be empty on success
+	if result.Summary.FirstError != "" {
+		t.Fatalf("expected no first error on success, got %q", result.Summary.FirstError)
+	}
+
+	// Events
+	if findEvent(events.Events, "node.metrics", "slow") == nil {
+		t.Fatal("expected node.metrics event for slow")
+	}
+	if findEvent(events.Events, "node.metrics", "agent") == nil {
+		t.Fatal("expected node.metrics event for agent")
+	}
+	if findEvent(events.Events, "agent.usage", "agent") == nil {
+		t.Fatal("expected agent.usage event")
+	}
+	artifactCreatedFound := false
+	for _, ev := range events.Events {
+		if ev.Type == "artifact.created" {
+			artifactCreatedFound = true
+			break
+		}
+	}
+	if !artifactCreatedFound {
+		t.Fatal("expected artifact.created events")
+	}
+	if findEvent(events.Events, "run.summary.updated", "") == nil {
+		t.Fatal("expected run.summary.updated event")
+	}
+}
+
+func TestRunWorkflowFirstErrorCapturedOnFailure(t *testing.T) {
+	dir := t.TempDir()
+	workflowPath := writeWorkflow(t, dir, `
+version: "1"
+name: first-error
+execution:
+  output_dir: "`+filepath.ToSlash(filepath.Join(dir, "runs"))+`"
+nodes:
+  - id: fail
+    kind: bash
+    command: "echo failure-stdout && echo failure-stderr >&2 && exit 1"
+  - id: after
+    kind: noop
+    depends_on: [fail]
+`)
+	shell := &scriptedShell{
+		run: func(ctx context.Context, req ports.ShellRequest, call int) (ports.ShellResult, error) {
+			return ports.ShellResult{Stdout: "failure-stdout\n", Stderr: "failure-stderr\n", ExitCode: 1}, errors.New("exit status 1")
+		},
+	}
+	events := eventmemory.New()
+	uc := newTestRunWorkflowUseCase(dir, shell, events)
+
+	result, err := uc.Run(context.Background(), RunOptions{WorkflowRef: workflowPath})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if result.Status != run.RunFailed {
+		t.Fatalf("expected failed, got %q", result.Status)
+	}
+	if result.Summary.FirstError == "" {
+		t.Fatal("expected first error to be captured")
+	}
+	if !strings.Contains(result.Summary.FirstError, "exit status 1") {
+		t.Fatalf("expected first error to contain 'exit status 1', got %q", result.Summary.FirstError)
+	}
+	if result.Summary.FailedNodes != 1 {
+		t.Fatalf("expected 1 failed node, got %d", result.Summary.FailedNodes)
+	}
+}
+
+func TestRunWorkflowFirstErrorUsesActualFailureOrderForFanOut(t *testing.T) {
+	dir := t.TempDir()
+	workflowPath := writeWorkflow(t, dir, `
+version: "1"
+name: first-error-fanout
+inputs:
+  items:
+    type: array
+    required: true
+execution:
+  output_dir: "`+filepath.ToSlash(filepath.Join(dir, "runs"))+`"
+nodes:
+  - id: each
+    kind: bash
+    for_each: "${inputs.items}"
+    concurrency: 2
+    continue_on_error: true
+    command: "${item}"
+`)
+	shell := &scriptedShell{
+		run: func(ctx context.Context, req ports.ShellRequest, call int) (ports.ShellResult, error) {
+			switch req.Command {
+			case "slow":
+				time.Sleep(80 * time.Millisecond)
+				return ports.ShellResult{Stderr: "slow fail\n", ExitCode: 1}, errors.New("slow fail")
+			case "fast":
+				return ports.ShellResult{Stderr: "fast fail\n", ExitCode: 1}, errors.New("fast fail")
+			default:
+				return ports.ShellResult{Stdout: "ok\n", ExitCode: 0}, nil
+			}
+		},
+	}
+	uc := newTestRunWorkflowUseCase(dir, shell, eventmemory.New())
+
+	result, err := uc.Run(context.Background(), RunOptions{
+		WorkflowRef: workflowPath,
+		Inputs:      map[string]any{"items": []any{"slow", "fast"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Summary.FirstError == "" {
+		t.Fatal("expected first error to be captured")
+	}
+	if !strings.Contains(result.Summary.FirstError, "fast fail") {
+		t.Fatalf("expected first error to reflect the first completed failure, got %q", result.Summary.FirstError)
+	}
+}
+
+func TestRunWorkflowSkippedNodeInTimeline(t *testing.T) {
+	dir := t.TempDir()
+	workflowPath := writeWorkflow(t, dir, `
+version: "1"
+name: skip-timeline
+execution:
+  output_dir: "`+filepath.ToSlash(filepath.Join(dir, "runs"))+`"
+nodes:
+  - id: fail
+    kind: bash
+    command: "exit 1"
+    continue_on_error: true
+  - id: skip
+    kind: bash
+    depends_on: [fail]
+    command: "echo ok"
+`)
+	shell := &scriptedShell{
+		run: func(ctx context.Context, req ports.ShellRequest, call int) (ports.ShellResult, error) {
+			return ports.ShellResult{Stderr: "boom", ExitCode: 1}, errors.New("boom")
+		},
+	}
+	events := eventmemory.New()
+	uc := newTestRunWorkflowUseCase(dir, shell, events)
+
+	result, err := uc.Run(context.Background(), RunOptions{WorkflowRef: workflowPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != run.RunSuccess {
+		t.Fatalf("expected success, got %s", result.Status)
+	}
+	if result.Summary.Nodes["skip"].Status != run.NodeSkipped {
+		t.Fatalf("expected skip node skipped, got %s", result.Summary.Nodes["skip"].Status)
+	}
+	var skippedFound bool
+	for _, entry := range result.Summary.Timeline {
+		if entry.Type == "node.skipped" && entry.NodeID == "skip" {
+			skippedFound = true
+			break
+		}
+	}
+	if !skippedFound {
+		t.Fatal("expected node.skipped timeline entry for skip")
+	}
+}
+
+func TestRunWorkflowRetryUpdatesMetricsAndTimeline(t *testing.T) {
+	dir := t.TempDir()
+	workflowPath := writeWorkflow(t, dir, `
+version: "1"
+name: retry-metrics
+execution:
+  output_dir: "`+filepath.ToSlash(filepath.Join(dir, "runs"))+`"
+nodes:
+  - id: flaky
+    kind: bash
+    retries: 1
+    command: "flaky"
+`)
+	events := eventmemory.New()
+	shell := &scriptedShell{
+		run: func(ctx context.Context, req ports.ShellRequest, call int) (ports.ShellResult, error) {
+			if call == 1 {
+				return ports.ShellResult{Stderr: "try again", ExitCode: 1}, errors.New("try again")
+			}
+			return ports.ShellResult{Stdout: "ok\n", ExitCode: 0}, nil
+		},
+	}
+	uc := newTestRunWorkflowUseCase(dir, shell, events)
+
+	result, err := uc.Run(context.Background(), RunOptions{WorkflowRef: workflowPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Summary.Retries != 1 {
+		t.Fatalf("expected 1 retry, got %d", result.Summary.Retries)
+	}
+	var retryFound bool
+	for _, entry := range result.Summary.Timeline {
+		if entry.Type == "node.retrying" && entry.NodeID == "flaky" {
+			retryFound = true
+			if entry.Attempt != 2 {
+				t.Fatalf("expected retry attempt 2, got %d", entry.Attempt)
+			}
+		}
+	}
+	if !retryFound {
+		t.Fatal("expected node.retrying timeline entry")
+	}
+	if result.Summary.SlowestNodes[0].NodeID != "flaky" {
+		t.Fatalf("expected flaky in slowest nodes, got %+v", result.Summary.SlowestNodes)
+	}
+}
+
 type scriptedShell struct {
 	mu       sync.Mutex
 	calls    int
@@ -1112,6 +1394,8 @@ type recordingAgentProvider struct {
 	mu       sync.Mutex
 	requests []ports.AgentRequest
 	onRun    func(ports.AgentRequest) error
+	usage    *ports.Usage
+	costUSD  float64
 }
 
 func (p *recordingAgentProvider) Run(ctx context.Context, req ports.AgentRequest) (ports.AgentResult, error) {
@@ -1124,7 +1408,12 @@ func (p *recordingAgentProvider) Run(ctx context.Context, req ports.AgentRequest
 			return ports.AgentResult{}, err
 		}
 	}
-	return ports.AgentResult{Text: req.WorkingDir}, nil
+	result := ports.AgentResult{Text: req.WorkingDir}
+	if p.usage != nil {
+		result.Usage = p.usage
+		result.Metadata = map[string]any{"cost_usd": p.costUSD}
+	}
+	return result, nil
 }
 
 func (p *recordingAgentProvider) workingDirs() []string {

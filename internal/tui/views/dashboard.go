@@ -162,14 +162,37 @@ func (d *Dashboard) renderRecentRuns(t *theme.Theme) string {
 		if i == d.cursor {
 			prefix = t.Primary.Render("► ")
 		}
-		line := prefix + components.StatusBadge(t, r.Status) + " " + trunc(r.Workflow+" "+r.ID, d.width-24)
-		if !r.StartedAt.IsZero() {
+		line := prefix + components.StatusBadge(t, r.Status) + " " + trunc(r.Workflow+" "+r.ID, d.width-30)
+		if diag := r.DiagnosticSummary; diag != nil && diag.DurationMS > 0 {
+			line += " " + t.Muted.Render((time.Duration(diag.DurationMS) * time.Millisecond).String())
+		} else if !r.StartedAt.IsZero() {
 			line += " " + t.Muted.Render(r.StartedAt.Format("15:04:05"))
 		}
 		if d.zoneManager != nil {
 			line = d.zoneManager.Mark(fmt.Sprintf("%s%d", zoneDashRunPrefix, i), line)
 		}
 		b.WriteString(line + "\n")
+		if diag := r.DiagnosticSummary; diag != nil {
+			var hints []string
+			if diag.FailedNodes > 0 {
+				hints = append(hints, t.Danger.Render(fmt.Sprintf("failed:%d", diag.FailedNodes)))
+			}
+			if diag.Retries > 0 {
+				hints = append(hints, t.Warning.Render(fmt.Sprintf("retries:%d", diag.Retries)))
+			}
+			if diag.AgentCalls > 0 {
+				hints = append(hints, fmt.Sprintf("agents:%d", diag.AgentCalls))
+			}
+			if diag.BashCalls > 0 {
+				hints = append(hints, fmt.Sprintf("bash:%d", diag.BashCalls))
+			}
+			if diag.ArtifactCount > 0 {
+				hints = append(hints, fmt.Sprintf("artifacts:%d", diag.ArtifactCount))
+			}
+			if len(hints) > 0 {
+				b.WriteString("      " + t.Muted.Render(strings.Join(hints, "  ")) + "\n")
+			}
+		}
 	}
 	if len(d.runs) == 0 {
 		b.WriteString(t.Muted.Render("No recent runs") + "\n")

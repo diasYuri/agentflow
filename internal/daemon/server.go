@@ -258,6 +258,35 @@ func (s *Server) handleWorkflow(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, resp)
 		return
 	}
+	if len(parts) == 2 && parts[1] == "summary" && r.Method == http.MethodGet {
+		resp, err := s.manager.WorkflowSummary(runID)
+		if err != nil {
+			writeError(w, statusForError(err), err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+	if len(parts) == 2 && parts[1] == "timeline" && r.Method == http.MethodGet {
+		cursor, _ := strconv.Atoi(r.URL.Query().Get("cursor"))
+		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		resp, err := s.manager.WorkflowTimeline(runID, cursor, limit)
+		if err != nil {
+			writeError(w, statusForError(err), err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+	if len(parts) == 2 && parts[1] == "inspect" && r.Method == http.MethodGet {
+		resp, err := s.manager.WorkflowInspect(runID)
+		if err != nil {
+			writeError(w, statusForError(err), err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
 	writeError(w, http.StatusNotFound, "endpoint not found")
 }
 

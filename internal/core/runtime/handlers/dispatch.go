@@ -80,7 +80,7 @@ func dispatchBashNode(ctx context.Context, e *Executor, state *ExecutionState, n
 			"command":     command,
 		},
 	})
-	state.incrementBashCalls()
+	state.incrementBashCalls(node.ID)
 	result, err := e.svc.Shell.Run(ctx, coreports.ShellRequest{
 		Command: command, Shell: shell, WorkingDir: workingDir,
 		Env: node.Env, MaxOutputBytes: maxOutputBytes(state.plan.Workflow),
@@ -110,7 +110,7 @@ func dispatchAgentNode(ctx context.Context, e *Executor, state *ExecutionState, 
 	if !ok {
 		return dispatchOutput{}, corerun.NodeFailed, fmt.Errorf("unknown agent provider %q", providerName)
 	}
-	state.incrementAgentCalls()
+	state.incrementAgentCalls(node.ID)
 	sandbox := effectiveAgentSandbox(node)
 	result, err := provider.Run(ctx, coreports.AgentRequest{
 		RunID: state.runID, NodeID: node.ID, InstanceID: instanceID, Attempt: attempt, Provider: providerName,
@@ -119,6 +119,25 @@ func dispatchAgentNode(ctx context.Context, e *Executor, state *ExecutionState, 
 	})
 	if err != nil {
 		return dispatchOutput{}, corerun.NodeFailed, err
+	}
+	var costUSD float64
+	if result.Metadata != nil {
+		if c, ok := result.Metadata["claude_cost_usd"].(float64); ok {
+			costUSD = c
+		} else if c, ok := result.Metadata["cost_usd"].(float64); ok {
+			costUSD = c
+		}
+	}
+	state.recordAgentUsage(providerName, node.Model, result.Usage, costUSD)
+	if result.Usage != nil {
+		_ = e.emitState(ctx, state, corerun.Event{Type: "agent.usage", NodeID: node.ID, InstanceID: instanceID, Data: map[string]any{
+			"provider":      providerName,
+			"model":         node.Model,
+			"input_tokens":  result.Usage.InputTokens,
+			"output_tokens": result.Usage.OutputTokens,
+			"total_tokens":  result.Usage.TotalTokens,
+			"cost_usd":      costUSD,
+		}})
 	}
 	if result.JSON != nil {
 		return dispatchOutput{Output: result.JSON}, corerun.NodeSuccess, nil

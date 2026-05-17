@@ -169,6 +169,53 @@ func TestRunsViewRendersTimelineWhenNoNodeSelected(t *testing.T) {
 	}
 }
 
+func TestRunsViewRendersDiagnostics(t *testing.T) {
+	r := NewRuns(nil, animation.NewConfig(true))
+	r.SetSize(120, 30)
+	r.SetRun(client.RunSummary{
+		ID:     "r1",
+		Status: "failed",
+		DiagnosticSummary: &client.RunDiagnosticSummary{
+			DurationMS:    5000,
+			FailedNodes:   2,
+			Retries:       3,
+			AgentCalls:    4,
+			BashCalls:     5,
+			ArtifactCount: 6,
+			FirstError:    "boom",
+			SlowestNodes:  []client.SlowestNode{{NodeID: "slow", DurationMS: 4000}},
+			AgentUsage:    []client.AgentUsage{{Provider: "openai", TotalTokens: 100}},
+		},
+	})
+	r.SetNodes([]client.NodeSummary{{NodeID: "n1", Status: "success"}})
+	r.selectedNode = -1
+	v := r.View(theme.Default(theme.ModeDark))
+	if !strings.Contains(v, "Diagnostics") {
+		t.Fatal("expected diagnostics header in view")
+	}
+	if !strings.Contains(v, "Duration:") {
+		t.Fatal("expected duration in diagnostics")
+	}
+	if !strings.Contains(v, "Failed:") {
+		t.Fatal("expected failed nodes in diagnostics")
+	}
+	if !strings.Contains(v, "Retries:") {
+		t.Fatal("expected retries in diagnostics")
+	}
+}
+
+func TestRunsViewRendersDiagnosticsEmpty(t *testing.T) {
+	r := NewRuns(nil, animation.NewConfig(true))
+	r.SetSize(120, 30)
+	r.SetRun(client.RunSummary{ID: "r1", Status: "running"})
+	r.SetNodes([]client.NodeSummary{{NodeID: "n1", Status: "success"}})
+	r.selectedNode = -1
+	v := r.View(theme.Default(theme.ModeDark))
+	if strings.Contains(v, "Diagnostics") {
+		t.Fatal("expected no diagnostics header when empty")
+	}
+}
+
 func TestRunsConfirming(t *testing.T) {
 	r := NewRuns(nil, animation.NewConfig(true))
 	r.SetConfirming("cancel")

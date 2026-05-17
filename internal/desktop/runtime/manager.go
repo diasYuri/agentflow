@@ -66,6 +66,16 @@ type RunSummary struct {
 	PendingSteps   []string
 	TotalSteps     int
 	Tag            string
+	DurationMS     int64
+	FailedNodes    int
+	Retries        int
+	AgentCalls     int
+	BashCalls      int
+	ArtifactCount  int
+	NodeCount      int
+	FirstError     string
+	SlowestNodes   []corerun.SlowestNode
+	AgentUsage     []corerun.AgentUsage
 }
 
 // NewManager cria um gerenciador de runs desktop.
@@ -375,6 +385,7 @@ func (m *Manager) getRunSummary(runID string) (RunSummary, error) {
 		summary.Error = progress.TerminalError
 	}
 
+	m.applyDiagnosticsFromSummary(&summary)
 	return summary, nil
 }
 
@@ -416,5 +427,46 @@ func (m *Manager) loadPersistedRun(runID string) (RunSummary, error) {
 		summary.Error = progress.TerminalError
 	}
 
+	m.applyDiagnosticsFromSummary(&summary)
 	return summary, nil
+}
+
+func (m *Manager) applyDiagnosticsFromSummary(summary *RunSummary) {
+	if summary.RunDir == "" {
+		return
+	}
+	data, err := os.ReadFile(filepath.Join(summary.RunDir, "summary.json"))
+	if err != nil {
+		return
+	}
+	var s corerun.Summary
+	if err := json.Unmarshal(data, &s); err != nil {
+		return
+	}
+	summary.DurationMS = s.DurationMS
+	summary.FailedNodes = s.FailedNodes
+	summary.Retries = s.Retries
+	summary.AgentCalls = s.AgentCalls
+	summary.BashCalls = s.BashCalls
+	summary.ArtifactCount = s.ArtifactCount
+	summary.FirstError = s.FirstError
+	if len(s.SlowestNodes) > 0 {
+		summary.SlowestNodes = append([]corerun.SlowestNode(nil), s.SlowestNodes...)
+	}
+	if len(s.AgentUsage) > 0 {
+		summary.AgentUsage = append([]corerun.AgentUsage(nil), s.AgentUsage...)
+	}
+
+	nodesDir := filepath.Join(summary.RunDir, "nodes")
+	nodeCount := 0
+	_ = filepath.WalkDir(nodesDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if !d.IsDir() && d.Name() == "result.json" {
+			nodeCount++
+		}
+		return nil
+	})
+	summary.NodeCount = nodeCount
 }

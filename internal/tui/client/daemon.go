@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/diasYuri/agentflow/internal/core/run"
 	"github.com/diasYuri/agentflow/internal/daemon"
 )
 
@@ -179,6 +180,97 @@ func (c *HTTPDaemonClient) GetArtifact(ctx context.Context, runID, artifactID st
 	}, nil
 }
 
+// GetRunDiagnostics fetches aggregated diagnostic metrics for a run.
+func (c *HTTPDaemonClient) GetRunDiagnostics(ctx context.Context, runID string) (RunDiagnosticSummary, error) {
+	resp, err := c.inner.WorkflowInspect(ctx, runID)
+	if err != nil {
+		return RunDiagnosticSummary{}, mapDaemonError(err)
+	}
+	return RunDiagnosticSummary{
+		DurationMS:    resp.DurationMS,
+		FailedNodes:   resp.FailedNodes,
+		Retries:       resp.Retries,
+		AgentCalls:    resp.AgentCalls,
+		BashCalls:     resp.BashCalls,
+		ArtifactCount: resp.ArtifactCount,
+		NodeCount:     resp.NodeCount,
+		FirstError:    firstNonEmpty(resp.FirstError, resp.Error, resp.TerminalError),
+		SlowestNodes:  slowestNodesFromDaemon(resp.SlowestNodes),
+		AgentUsage:    agentUsageFromDaemon(resp.AgentUsage),
+	}, nil
+}
+
+// GetRunTimeline fetches timeline entries for a run.
+func (c *HTTPDaemonClient) GetRunTimeline(ctx context.Context, runID string, cursor int, limit int) (RunTimeline, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	resp, err := c.inner.WorkflowTimeline(ctx, runID, cursor, limit)
+	if err != nil {
+		return RunTimeline{}, mapDaemonError(err)
+	}
+	entries := make([]TimelineEntry, len(resp.Entries))
+	for i, e := range resp.Entries {
+		entries[i] = TimelineEntry{
+			Timestamp:  e.Timestamp,
+			Type:       e.Type,
+			NodeID:     e.NodeID,
+			InstanceID: e.InstanceID,
+			Attempt:    e.Attempt,
+			DurationMS: e.DurationMS,
+		}
+	}
+	return RunTimeline{
+		Entries:    entries,
+		NextCursor: resp.NextCursor,
+		HasMore:    resp.HasMore,
+	}, nil
+}
+
+// GetRunChartSeries builds chart-ready series from node results.
+func (c *HTTPDaemonClient) GetRunChartSeries(ctx context.Context, runID string) ([]ChartSeries, error) {
+	nodes, err := c.GetRunNodes(ctx, runID)
+	if err != nil {
+		return nil, err
+	}
+	if len(nodes) == 0 {
+		return nil, nil
+	}
+
+	var durLabels []string
+	var durValues []float64
+	var retryLabels []string
+	var retryValues []float64
+	for _, n := range nodes {
+		durLabels = append(durLabels, n.NodeID)
+		durValues = append(durValues, float64(n.Duration))
+		retryLabels = append(retryLabels, n.NodeID)
+		retryValues = append(retryValues, float64(n.Attempts))
+	}
+
+	series := []ChartSeries{
+		{Name: "Duration (ms)", Labels: durLabels, Values: durValues},
+		{Name: "Retries", Labels: retryLabels, Values: retryValues},
+	}
+
+	diagnostics, err := c.GetRunDiagnostics(ctx, runID)
+	if err == nil && len(diagnostics.AgentUsage) > 0 {
+		var tokenLabels []string
+		var tokenValues []float64
+		for _, u := range diagnostics.AgentUsage {
+			label := u.Provider
+			if u.Model != "" {
+				label += " " + u.Model
+			}
+			tokenLabels = append(tokenLabels, label)
+			tokenValues = append(tokenValues, float64(u.TotalTokens))
+		}
+		series = append(series, ChartSeries{Name: "Tokens", Labels: tokenLabels, Values: tokenValues})
+	}
+
+	return series, nil
+}
+
 // CancelRun cancels a run.
 func (c *HTTPDaemonClient) CancelRun(ctx context.Context, runID string) error {
 	_, err := c.inner.CancelWorkflow(ctx, runID)
@@ -237,6 +329,44 @@ func runSummaryFromDaemon(r daemon.WorkflowRun) RunSummary {
 		FailureReason:  r.FailureReason,
 		Tag:            r.Tag,
 	}
+}
+
+func slowestNodesFromDaemon(in []run.SlowestNode) []SlowestNode {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]SlowestNode, len(in))
+	for i, n := range in {
+		out[i] = SlowestNode{NodeID: n.NodeID, DurationMS: n.DurationMS}
+	}
+	return out
+}
+
+func agentUsageFromDaemon(in []run.AgentUsage) []AgentUsage {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]AgentUsage, len(in))
+	for i, u := range in {
+		out[i] = AgentUsage{
+			Provider:     u.Provider,
+			Model:        u.Model,
+			InputTokens:  u.InputTokens,
+			OutputTokens: u.OutputTokens,
+			TotalTokens:  u.TotalTokens,
+			CostUSD:      u.CostUSD,
+		}
+	}
+	return out
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func mapDaemonError(err error) error {

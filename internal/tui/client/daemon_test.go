@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/diasYuri/agentflow/internal/core/run"
 	"github.com/diasYuri/agentflow/internal/daemon"
 )
 
@@ -81,5 +82,53 @@ func TestPlanOrderNil(t *testing.T) {
 	}
 	if planOrder(map[string]any{}) != nil {
 		t.Fatal("expected nil for missing order")
+	}
+}
+
+func TestSlowestNodesFromDaemon(t *testing.T) {
+	in := []run.SlowestNode{{NodeID: "a", DurationMS: 100}, {NodeID: "b", DurationMS: 200}}
+	out := slowestNodesFromDaemon(in)
+	if len(out) != 2 {
+		t.Fatalf("expected 2 nodes, got %d", len(out))
+	}
+	if out[0].NodeID != "a" || out[0].DurationMS != 100 {
+		t.Fatalf("unexpected first node: %+v", out[0])
+	}
+}
+
+func TestSlowestNodesFromDaemonEmpty(t *testing.T) {
+	out := slowestNodesFromDaemon(nil)
+	if out != nil {
+		t.Fatal("expected nil")
+	}
+}
+
+func TestAgentUsageFromDaemon(t *testing.T) {
+	in := []run.AgentUsage{{Provider: "openai", Model: "gpt-4", TotalTokens: 42}}
+	out := agentUsageFromDaemon(in)
+	if len(out) != 1 {
+		t.Fatalf("expected 1 usage, got %d", len(out))
+	}
+	if out[0].Provider != "openai" || out[0].TotalTokens != 42 {
+		t.Fatalf("unexpected usage: %+v", out[0])
+	}
+}
+
+func TestAgentUsageFromDaemonEmpty(t *testing.T) {
+	out := agentUsageFromDaemon(nil)
+	if out != nil {
+		t.Fatal("expected nil")
+	}
+}
+
+func TestFirstNonEmpty(t *testing.T) {
+	if got := firstNonEmpty("", "b", "c"); got != "b" {
+		t.Fatalf("expected b, got %s", got)
+	}
+	if got := firstNonEmpty("a", "b"); got != "a" {
+		t.Fatalf("expected a, got %s", got)
+	}
+	if got := firstNonEmpty("", ""); got != "" {
+		t.Fatalf("expected empty, got %s", got)
 	}
 }
