@@ -11,69 +11,90 @@
       YAML workflows for local coding agents
 ```
 
-**AgentFlow transforma automações de desenvolvimento em workflows YAML auditáveis, versionáveis e executáveis localmente.**  
-Valide, visualize, simule e rode pipelines com agentes Codex, comandos shell, transformações, fan-out, paralelismo e runs persistidos, tudo pela linha de comando.
+AgentFlow executa automações de desenvolvimento como workflows YAML auditáveis, versionáveis e reproduzíveis. Ele combina etapas de agente, shell, transformações, fan-out, paralelismo, aprovação humana e runs persistidos, tudo pela linha de comando.
 
-## Por que usar
+## O que ele faz
 
-AgentFlow foi feito para tirar fluxos repetitivos da cabeça do time e colocá-los em arquivos claros. Em vez de copiar prompts, rodar comandos soltos e perder o histórico do que aconteceu, você descreve o fluxo uma vez e executa com rastreabilidade.
+- Define fluxos em YAML com `inputs`, `vars`, dependências e políticas de execução.
+- Executa `kind: agent`, `bash`, `transform`, `map` e `noop` no mesmo grafo.
+- Valida a estrutura, gera grafo Mermaid e faz `dry-run` antes de rodar.
+- Roda localmente em foreground com `-it` ou em background via `agentflowd`.
+- Persiste runs, logs, eventos, artefatos e agendamentos no diretório local do usuário.
+- Suporta providers `codex`, `claude` e `pi` para workflows com agente.
 
-- **Workflows como código:** defina etapas, dependências, inputs, variáveis e políticas em YAML.
-- **Agentes + shell no mesmo plano:** combine `kind: agent`, `bash`, `transform`, `map` e `noop`.
-- **Inspeção antes da execução:** rode `validate`, gere grafo Mermaid e faça `dry-run`.
-- **Execução local controlada:** use foreground com `-it` ou rode em background pelo `agentflowd`.
-- **Paralelismo e fan-out:** distribua trabalho com `map`, `for_each`, `concurrency` e `max_concurrency`.
-- **Artefatos persistidos:** acompanhe runs, logs e eventos em `.agentflow/runs` ou `~/.agentflow/runs`.
+## Requisitos
 
-## Instalação
+- Go 1.26.1+
+- `codex`, `claude` ou `pi` no `PATH` quando o workflow usar `kind: agent`
 
-Requisitos:
-
-- Go 1.24+
-- Codex CLI ou Claude Code CLI no `PATH` para workflows com `kind: agent`
-
-Build dos binários:
+## Build
 
 ```bash
 go build ./cmd/agentflow
 go build ./cmd/agentflowd
+go build ./cmd/agentflow-desktop
 ```
 
-Ou execute direto durante o desenvolvimento:
+## CLI
 
-```bash
-go run ./cmd/agentflow validate samples/workflows/local-health-check.yaml
-```
+### Comandos principais
 
-## Comece em 60 segundos
+- `agentflow validate <workflow>`: valida o workflow.
+- `agentflow graph <workflow>`: imprime o grafo Mermaid.
+- `agentflow dry-run <workflow>`: resolve inputs e mostra o plano.
+- `agentflow run <workflow>`: executa via `agentflowd` por padrão.
+- `agentflow run <workflow> -it`: executa localmente no foreground.
+- `agentflow migrate <workflow>`: migra workflow v1 para v2.
+- `agentflow project add <name> <path>`: registra um projeto.
+- `agentflow project list`: lista projetos registrados.
+- `agentflow project remove <name>`: remove um projeto.
+- `agentflow daemon start|stop|status`: controla o daemon.
+- `agentflow tui`: abre a interface terminal interativa.
 
-Valide um workflow:
+### Namespace `workflow`
 
-```bash
-go run ./cmd/agentflow validate samples/workflows/local-health-check.yaml
-```
+- `agentflow workflow run <workflow>`: inicia um run no daemon.
+- `agentflow workflow list`: lista runs conhecidos.
+- `agentflow workflow status <id>`: mostra status do run.
+- `agentflow workflow watch <id>`: acompanha o run até terminar.
+- `agentflow workflow logs <id>`: imprime eventos do run.
+- `agentflow workflow artifacts <run_id>`: lista artefatos.
+- `agentflow workflow artifact show <run_id> <artifact_id>`: mostra artefato.
+- `agentflow workflow artifact path <run_id> <artifact_id>`: imprime o caminho local do artefato.
+- `agentflow workflow cancel <id>`: cancela um run.
+- `agentflow workflow pause <id>`: pede pausa graciosa.
+- `agentflow workflow resume <id>`: retoma um run pausado.
+- `agentflow workflow approve <id>`: aprova um run aguardando decisão humana.
+- `agentflow workflow reject <id>`: rejeita um run aguardando decisão humana.
+- `agentflow workflow summary <run_id>`: mostra resumo do run.
+- `agentflow workflow timeline <run_id>`: mostra a linha do tempo do run.
+- `agentflow workflow inspect <run_id>`: inspeciona diagnósticos do run.
+- `agentflow workflow schedule add <workflow>`: cria um agendamento.
+- `agentflow workflow schedule list`: lista agendamentos.
+- `agentflow workflow schedule remove <id>`: remove um agendamento.
 
-Veja o grafo de execução:
+### Flags mais usadas
 
-```bash
-go run ./cmd/agentflow graph samples/workflows/local-health-check.yaml --format mermaid
-```
+- `--input key=value`: adiciona ou sobrescreve um input.
+- `--input-json <file>`: carrega inputs de um JSON.
+- `--var key=value`: sobrescreve variáveis do workflow.
+- `--max-concurrency <n>`: sobrescreve `execution.max_concurrency`.
+- `--working-dir <path>`: define o diretório base da execução.
+- `--project <name>`: resolve o workflow dentro de um projeto registrado.
+- `--codex-path <path>`, `--claude-path <path>`, `--pi-path <path>`: apontam para o binário do provider.
+- `--log-format text|json`: controla o formato de logs emitidos.
+- `--events-jsonl <path>`: grava eventos em JSONL.
+- `--dry-run`: valida e planeja sem executar.
+- `--tag <name>`: nome amigável para o run ou agendamento.
+- `--output text|json`: controla a saída dos comandos de consulta.
+- `--no-color`: desativa cores.
+- `--watch`: acompanha o run até a conclusão.
 
-Simule o plano sem executar:
+## Workflows com agente
 
-```bash
-go run ./cmd/agentflow dry-run samples/workflows/local-health-check.yaml
-```
+Workflows com `kind: agent` podem usar `provider: codex`, `provider: claude` ou `provider: pi`. Quando `provider` é omitido, o padrão é `codex`.
 
-Execute localmente em foreground:
-
-```bash
-go run ./cmd/agentflow run samples/workflows/local-health-check.yaml -it
-```
-
-## Workflows com agentes
-
-Workflows que usam `kind: agent` podem chamar os providers `codex`, `claude` ou `pi`. Quando `provider` é omitido, o padrão continua sendo `codex`. Informe o caminho do binário quando necessário:
+Exemplo com Codex:
 
 ```bash
 go run ./cmd/agentflow run samples/workflows/fix-github-issue.yaml \
@@ -82,17 +103,7 @@ go run ./cmd/agentflow run samples/workflows/fix-github-issue.yaml \
   -it
 ```
 
-Exemplo mínimo usando Claude Code:
-
-```yaml
-nodes:
-  - id: summarize
-    kind: agent
-    provider: claude
-    permission:
-      write: false
-    prompt: "Resuma o estado do projeto sem alterar arquivos."
-```
+Exemplo com Claude Code:
 
 ```bash
 go run ./cmd/agentflow run samples/workflows/claude-code-review.yaml \
@@ -100,7 +111,7 @@ go run ./cmd/agentflow run samples/workflows/claude-code-review.yaml \
   -it
 ```
 
-Exemplo mínimo usando Pi RPC:
+Exemplo com Pi RPC:
 
 ```bash
 go run ./cmd/agentflow run samples/workflows/pi-code-review.yaml \
@@ -108,100 +119,32 @@ go run ./cmd/agentflow run samples/workflows/pi-code-review.yaml \
   -it
 ```
 
-Para resolver workflows por nome, copie-os para `.agentflow/workflows`:
+Para resolver workflows por nome dentro de um projeto registrado:
 
 ```bash
 mkdir -p .agentflow/workflows
 cp samples/workflows/fix-github-issue.yaml .agentflow/workflows/fix-github-issue.yaml
 
+go run ./cmd/agentflow project add demo .
 go run ./cmd/agentflow run fix-github-issue \
+  --project demo \
   --input-json samples/inputs/fix-issue.json \
   --codex-path "$(which codex)"
 ```
 
-## Exemplo de workflow
-
-```yaml
-version: "1"
-name: local-health-check
-description: "Executa checagens locais rápidas sem depender de Codex."
-
-vars:
-  test_command: "go test ./..."
-
-execution:
-  max_concurrency: 2
-  fail_fast: true
-
-nodes:
-  - id: list_module
-    kind: bash
-    command: go list ./...
-    capture:
-      stdout: true
-      stderr: true
-      exit_code: true
-
-  - id: run_tests
-    kind: bash
-    depends_on: [list_module]
-    command: ${vars.test_command}
-    capture:
-      stdout: true
-      stderr: true
-      exit_code: true
-    continue_on_error: true
-
-  - id: done
-    kind: noop
-    depends_on: [run_tests]
-```
-
-## Comandos principais
-
-```bash
-agentflow validate <workflow>              # valida estrutura, referências e grafo
-agentflow graph <workflow>                 # imprime grafo Mermaid
-agentflow dry-run <workflow>               # resolve inputs e mostra o plano
-agentflow run <workflow>                   # inicia no daemon
-agentflow run <workflow> -it               # executa localmente no foreground
-agentflow tui                              # lança a interface terminal interativa
-agentflow workflow list                    # lista runs conhecidos
-agentflow workflow status <run_id>         # mostra status de um run
-agentflow workflow logs <run_id>           # imprime eventos do run
-agentflow workflow schedule add <workflow> # agenda um workflow localmente
-agentflow workflow cancel <run_id>         # cancela um run em execução
-agentflow daemon start|stop|status         # controla o agentflowd
-```
-
-Flags úteis:
-
-```bash
---input-json <file>       # carrega inputs de um JSON
---input key=value         # sobrescreve ou adiciona um input
---var key=value           # injeta variáveis do workflow
---max-concurrency <n>     # sobrescreve execution.max_concurrency
---working-dir <path>      # diretório base da execução
---codex-path <path>       # caminho para o binário codex
---claude-path <path>      # caminho para o binário claude
---pi-path <path>          # caminho para o binário pi
---events-jsonl <path>     # grava eventos em JSONL
---tag <name>              # nome amigável opcional para o run
-```
-
-## DSL em poucas palavras
+## DSL
 
 Um workflow declara `version`, `name`, `inputs`, `vars`, `defaults`, `execution` e uma lista de `nodes`.
 
 Tipos de node suportados:
 
-- `agent`: delega trabalho para um agente Codex ou Claude Code.
+- `agent`: delega trabalho para um agente.
 - `bash`: executa comandos locais e captura saída.
 - `transform`: transforma dados entre etapas.
-- `map`: expande uma lista em execuções paralelizáveis.
+- `map`: expande uma lista em execuções paralelas.
 - `noop`: cria marcos, junções e etapas condicionais sem ação externa.
 
-Recursos do DSL:
+Recursos comuns do DSL:
 
 - `depends_on` para dependências explícitas.
 - `when` para execução condicional.
@@ -210,9 +153,19 @@ Recursos do DSL:
 - `output_schema` para respostas estruturadas de agentes.
 - `secrets` para ler valores sensíveis do ambiente.
 
-## Daemon e runs
+## Daemon e estado local
 
-Por padrão, `agentflow run <workflow>` usa o daemon local `agentflowd`, retorna imediatamente e deixa o run em background.
+Por padrão, `agentflow run <workflow>` usa o daemon local `agentflowd`. O daemon mantém runs e metadados em:
+
+- Socket: `~/.agentflow/agentflowd.sock`
+- PID: `~/.agentflow/agentflowd.pid`
+- Log: `~/.agentflow/agentflowd.log`
+- Banco: `~/.agentflow/agentflowd.sqlite`
+- Runs: `~/.agentflow/runs`
+- Projetos: `~/.agentflow/projects.json`
+- Agendamentos: `~/.agentflow/schedules.json`
+
+Exemplo:
 
 ```bash
 agentflow daemon start
@@ -221,92 +174,12 @@ agentflow workflow list
 agentflow workflow logs <run_id>
 ```
 
-Arquivos padrão:
+## Samples
 
-- Socket: `~/.agentflow/agentflowd.sock`
-- PID: `~/.agentflow/agentflowd.pid`
-- Log do daemon: `~/.agentflow/agentflowd.log`
-- Índice do daemon: `~/.agentflow/agentflowd.sqlite`
-- Runs: `~/.agentflow/runs`
+Os exemplos em `samples/workflows/` e `samples/inputs/` cobrem casos como review de arquivos alterados, correção de falhas, notas de release, auditoria de segurança, migração de workflow e agendamentos.
 
-## Exemplos incluídos
-
-- `fix-github-issue.yaml`: analisa issue, implementa correção, roda testes e aciona agente para falhas.
-- `review-changed-files.yaml`: divide arquivos alterados, revisa em paralelo e consolida findings.
-- `test-failure-debugging.yaml`: reproduz falha de teste, diagnostica e tenta correção.
-- `security-review.yaml`: faz auditoria defensiva por áreas do repositório.
-- `release-notes.yaml`: gera release notes a partir de commits e PRs.
-- `product-spec-to-implementation.yaml`: transforma uma spec de produto em plano e implementação.
-- `local-health-check.yaml`: roda checagens locais sem depender de agente.
-- `claude-code-review.yaml`: sample mínimo com `provider: claude`, permissão somente leitura e saída estruturada.
-- `pi-code-review.yaml`: sample mínimo com `provider: pi`, permissão somente leitura e saída estruturada via RPC.
+Veja também [samples/README.md](samples/README.md) para comandos prontos e descrições dos exemplos.
 
 ## Segurança
 
-Workflows podem executar comandos locais. Antes de rodar arquivos novos ou alterados, use:
-
-```bash
-agentflow validate <workflow>
-agentflow graph <workflow>
-agentflow dry-run <workflow>
-```
-
-Revise especialmente nodes `bash`, permissões de agents, `--working-dir`, `--codex-path`, `--claude-path`, `--pi-path` e qualquer workflow vindo de fora do seu repositório.
-
-## Interface Terminal (TUI)
-
-Alem da CLI tradicional, o Agentflow oferece uma interface terminal interativa (`agentflow tui`) para navegar por workflows, acompanhar runs em tempo real, inspecionar logs e artefatos, e ajustar preferencias — tudo via teclado (com suporte opcional a mouse).
-
-```bash
-# Lançar a TUI
-agentflow tui
-
-# Abrir direto em um run ou workflow
-agentflow tui --run <run_id>
-agentflow tui --workflow <ref>
-
-# Tema claro e sem mouse
-agentflow tui --theme light --no-mouse
-```
-
-A TUI funciona mesmo sem o daemon para operacoes locais (validacao, grafo, dry-run). Para detalhes completos de atalhos e comportamentos, consulte [`docs/tui.md`](docs/tui.md).
-
-## Aplicação Desktop
-
-O Agentflow possui uma aplicação desktop construída com [Wails v3](https://v3.wails.io/), oferecendo uma interface gráfica para carregar, editar, validar, visualizar e executar workflows.
-
-Build do app desktop:
-
-```bash
-cd frontend/desktop && npm run build
-go build ./cmd/agentflow-desktop
-./agentflow-desktop
-```
-
-Funcionalidades da UI:
-
-- Editor de workflow YAML e input JSON.
-- Validação, grafo Mermaid e dry-run interativos.
-- Execução de runs com timeline de eventos, logs e artefatos.
-- Lista de runs com detalhes, cancelamento e acompanhamento de progresso.
-- Configurações locais (tema, caminhos de agentes, workspace).
-
-Para mais detalhes, consulte [`docs/desktop.md`](docs/desktop.md).
-
-## Documentação
-
-A pasta [`docs/`](docs/) detalha CLI, runtime, DSL, validação, transformações, fan-out, daemon, eventos e persistência.
-
-Para começar pelos fundamentos:
-
-- [`docs/cli.md`](docs/cli.md)
-- [`docs/tui.md`](docs/tui.md)
-- [`docs/workflow-dsl.md`](docs/workflow-dsl.md)
-- [`docs/runtime-execution.md`](docs/runtime-execution.md)
-- [`docs/claude-agent.md`](docs/claude-agent.md)
-- [`docs/pi-agent.md`](docs/pi-agent.md)
-- [`samples/README.md`](samples/README.md)
-
-Para diagnosticar performance e memória do daemon:
-
-- [`docs/debug-profiling.md`](docs/debug-profiling.md)
+Workflows podem executar comandos locais. Revise cada `command` antes de rodar. Use `graph` e `dry-run` para auditar o plano, e prefira `-it` quando quiser manter a execução no foreground.
