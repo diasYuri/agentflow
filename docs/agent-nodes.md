@@ -65,7 +65,7 @@ O adapter do Pi fica em [`internal/adapters/agent/pi/provider.go`](/Users/yuri/g
 - usa `get_last_assistant_text` e `get_session_stats` para preencher resposta final e usage;
 - quando `output_schema` existe, instrui o agente a responder somente JSON e parseia o texto final.
 
-Quando `output_schema` está definido, o provider preenche `result.JSON` quando recebe saída estruturada. O Codex usa a resposta final parseada como JSON; o Claude Code usa `structured_output` e só cai para parse do texto quando esse campo não está presente; o Pi parseia o último texto do assistant como JSON. Se não houver JSON estruturado, o texto bruto continua disponível em `result.Text`, exceto no Pi quando `output_schema` foi solicitado e o texto não é JSON válido.
+Quando `output_schema` está definido, o provider preenche `result.JSON` quando recebe saída estruturada. O Codex usa a resposta final parseada como JSON; o Claude Code usa `structured_output` e só cai para parse do texto quando esse campo não está presente; o Pi parseia o último texto do assistant como JSON, valida o resultado contra o schema e faz uma segunda tentativa na mesma sessão se a primeira saída vier inválida. Se não houver JSON estruturado, o texto bruto continua disponível em `result.Text`.
 
 ## Arquivos envolvidos
 

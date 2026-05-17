@@ -171,11 +171,14 @@ func TestProviderReturnsMalformedJSONError(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	_, err := provider.Run(ctx, ports.AgentRequest{Prompt: "malformed"})
+	_, err := provider.Run(ctx, ports.AgentRequest{
+		Prompt:       "malformed",
+		OutputSchema: map[string]any{"type": "object"},
+	})
 	if err == nil {
 		t.Fatal("expected malformed JSON error")
 	}
-	if !strings.Contains(err.Error(), "parse pi rpc line") {
+	if !strings.Contains(err.Error(), "final text=") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -186,8 +189,11 @@ func TestProviderReturnsStructuredParseError(t *testing.T) {
 	defer cancel()
 
 	_, err := provider.Run(ctx, ports.AgentRequest{
-		Prompt:       "invalid structured",
-		OutputSchema: map[string]any{"type": "object"},
+		Prompt: "invalid structured",
+		OutputSchema: map[string]any{
+			"type":     "object",
+			"required": []any{"summary"},
+		},
 	})
 	if err == nil {
 		t.Fatal("expected structured parse error")
@@ -217,6 +223,66 @@ func TestProviderFallsBackToAssistantTextFromEvents(t *testing.T) {
 	}
 }
 
+func TestProviderRetriesStructuredOutputInSameSession(t *testing.T) {
+	dir := t.TempDir()
+	promptPath := filepath.Join(dir, "prompt.txt")
+	provider := New(writeFakePi(t, dir, fakePiStructuredRetry))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	result, err := provider.Run(ctx, ports.AgentRequest{
+		Prompt: "implement the plan",
+		Env: map[string]string{
+			"FAKE_PI_PROMPT_FILE": promptPath,
+		},
+		OutputSchema: map[string]any{
+			"type": "object",
+			"required": []any{
+				"plan_path",
+				"status",
+				"summary",
+				"files_changed",
+				"validation",
+				"follow_ups",
+			},
+			"properties": map[string]any{
+				"plan_path":     map[string]any{"type": "string"},
+				"status":        map[string]any{"type": "string"},
+				"summary":       map[string]any{"type": "string"},
+				"files_changed": map[string]any{"type": "array"},
+				"validation":    map[string]any{"type": "array"},
+				"follow_ups":    map[string]any{"type": "array"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if result.Text != `{"plan_path":"001-provider-core.md","status":"success","summary":"Provider refatorado com fallback de schema","files_changed":["internal/adapters/agent/pi/provider.go","internal/adapters/agent/pi/provider_test.go"],"validation":["go test ./internal/adapters/agent/pi/..."],"follow_ups":[]}` {
+		t.Fatalf("text mismatch: %q", result.Text)
+	}
+	if !reflect.DeepEqual(result.JSON, map[string]any{
+		"plan_path":     "001-provider-core.md",
+		"status":        "success",
+		"summary":       "Provider refatorado com fallback de schema",
+		"files_changed": []any{"internal/adapters/agent/pi/provider.go", "internal/adapters/agent/pi/provider_test.go"},
+		"validation":    []any{"go test ./internal/adapters/agent/pi/..."},
+		"follow_ups":    []any{},
+	}) {
+		t.Fatalf("json mismatch: %#v", result.JSON)
+	}
+
+	promptLog := readFile(t, promptPath)
+	if strings.Count(promptLog, "---PROMPT---") != 2 {
+		t.Fatalf("expected 2 prompt turns, got log %q", promptLog)
+	}
+	if !strings.Contains(promptLog, "missing required property \\\"summary\\\"") {
+		t.Fatalf("expected schema validation error in retry prompt, got %q", promptLog)
+	}
+}
+
 func TestProviderReturnsAgentEndErrorWhenTextIsEmpty(t *testing.T) {
 	provider := New(writeFakePi(t, t.TempDir(), fakePiAgentEndError))
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -241,6 +307,7 @@ const (
 	fakePiRejectPrompt          fakePiMode = "reject"
 	fakePiMalformedJSON         fakePiMode = "malformed"
 	fakePiInvalidStructuredText fakePiMode = "invalid-structured"
+	fakePiStructuredRetry       fakePiMode = "structured-retry"
 	fakePiTextInEvents          fakePiMode = "text-in-events"
 	fakePiAgentEndError         fakePiMode = "agent-end-error"
 )
@@ -248,12 +315,11 @@ const (
 func writeFakePi(t *testing.T, dir string, mode fakePiMode) string {
 	t.Helper()
 	path := filepath.Join(dir, "pi-fake")
-	assistantText := `{\"status\":\"ok\",\"source\":\"fake-pi\"}`
-	if mode == fakePiInvalidStructuredText || mode == fakePiTextInEvents || mode == fakePiAgentEndError {
-		assistantText = `not json`
-	}
 	script := `#!/bin/sh
 set -eu
+
+turn=0
+assistant_text='{"status":"ok","source":"fake-pi"}'
 
 if [ -n "${FAKE_PI_ARGS_FILE:-}" ]; then
   : > "$FAKE_PI_ARGS_FILE"
@@ -271,19 +337,35 @@ fi
 while IFS= read -r line; do
   case "$line" in
     *'"type":"prompt"'*)
+      turn=$((turn + 1))
       if [ -n "${FAKE_PI_PROMPT_FILE:-}" ]; then
-        printf '%s\n' "$line" > "$FAKE_PI_PROMPT_FILE"
+        printf '%s\n---PROMPT---\n' "$line" >> "$FAKE_PI_PROMPT_FILE"
       fi
+      assistant_text='{"status":"ok","source":"fake-pi"}'
+      assistant_text_json=$(printf '%s' "$assistant_text" | sed 's/\\/\\\\/g; s/"/\\"/g')
       case "` + string(mode) + `" in
         reject)
           printf '%s\n' '{"id":"agentflow-prompt","type":"response","command":"prompt","success":false,"error":"rejected by fake pi"}'
           exit 0
           ;;
         malformed)
-          printf '%s\n' 'not-json'
-          exit 0
+          assistant_text='not json'
+          ;;
+        invalid-structured)
+          assistant_text='{"plan_path":"001-provider-core.md","status":"success","files_changed":["internal/adapters/agent/pi/provider.go"],"validation":["go test ./internal/adapters/agent/pi/..."],"follow_ups":[]}'
+          ;;
+        structured-retry)
+          if [ "$turn" -eq 1 ]; then
+            assistant_text='{"plan_path":"001-provider-core.md","status":"success","files_changed":["internal/adapters/agent/pi/provider.go"],"validation":["go test ./internal/adapters/agent/pi/..."],"follow_ups":[]}'
+          else
+            assistant_text='{"plan_path":"001-provider-core.md","status":"success","summary":"Provider refatorado com fallback de schema","files_changed":["internal/adapters/agent/pi/provider.go","internal/adapters/agent/pi/provider_test.go"],"validation":["go test ./internal/adapters/agent/pi/..."],"follow_ups":[]}'
+          fi
+          ;;
+        text-in-events|agent-end-error)
+          assistant_text='not json'
           ;;
       esac
+      assistant_text_json=$(printf '%s' "$assistant_text" | sed 's/\\/\\\\/g; s/"/\\"/g')
       printf '%s\n' '{"id":"agentflow-prompt","type":"response","command":"prompt","success":true}'
       printf '%s\n' '{"type":"agent_start","session_id":"contract-session"}'
       printf '%s\n' '{"type":"message_update","delta":"working"}'
@@ -305,7 +387,7 @@ while IFS= read -r line; do
           printf '%s\n' '{"id":"agentflow-text","type":"response","command":"get_last_assistant_text","success":true,"data":{}}'
           ;;
         *)
-          printf '%s\n' '{"id":"agentflow-text","type":"response","command":"get_last_assistant_text","success":true,"data":{"text":"` + assistantText + `"}}'
+          printf '%s\n' '{"id":"agentflow-text","type":"response","command":"get_last_assistant_text","success":true,"data":{"text":"'"$assistant_text_json"'"}}'
           ;;
       esac
       ;;

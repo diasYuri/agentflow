@@ -101,6 +101,7 @@ nodes:
           - Preserve padrões, estilo e arquitetura existentes.
           - Adicione ou ajuste testes quando o plano exigir.
           - Execute validações relevantes quando forem rápidas e locais.
+          - O campo `summary` é obrigatório, deve descrever o resultado em uma frase curta e não pode ser substituído por `details`.
           - Retorne JSON válido seguindo o schema.
         output_schema:
           type: object

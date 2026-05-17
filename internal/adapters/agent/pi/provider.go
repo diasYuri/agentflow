@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/diasYuri/agentflow/internal/core/ports"
+	coreworkflow "github.com/diasYuri/agentflow/internal/core/workflow"
 )
 
 const (
@@ -69,39 +70,37 @@ func (p *Provider) Run(ctx context.Context, req ports.AgentRequest) (ports.Agent
 	if req.OutputSchema != nil {
 		prompt = appendJSONOnlyInstruction(prompt)
 	}
-	if err := session.writeCommand(map[string]any{
-		"id":      "agentflow-prompt",
-		"type":    "prompt",
-		"message": prompt,
-	}); err != nil {
-		return ports.AgentResult{}, finishWithError(ctx, cmd, &waited, stderr.String(), "write pi prompt", err)
-	}
-	if err := session.waitForPromptAccepted(ctx, "agentflow-prompt"); err != nil {
+	text, assistantTextResp, err := session.runTurn(ctx, "agentflow-prompt", prompt)
+	if err != nil {
 		return ports.AgentResult{}, finishWithError(ctx, cmd, &waited, stderr.String(), "run pi prompt", err)
-	}
-	if err := session.waitForAgentEnd(ctx); err != nil {
-		return ports.AgentResult{}, finishWithError(ctx, cmd, &waited, stderr.String(), "read pi events", err)
-	}
-
-	textResp, err := session.requestResponse(ctx, "agentflow-text", "get_last_assistant_text")
-	if err != nil {
-		return ports.AgentResult{}, finishWithError(ctx, cmd, &waited, stderr.String(), "get pi assistant text", err)
-	}
-	text := ""
-	if data, ok := textResp["data"].(map[string]any); ok {
-		if value, ok := data["text"].(string); ok {
-			text = value
-		}
-	}
-	if strings.TrimSpace(text) == "" {
-		text = session.lastAssistantText
-	}
-	statsResp, err := session.requestResponse(ctx, "agentflow-stats", "get_session_stats")
-	if err != nil {
-		return ports.AgentResult{}, finishWithError(ctx, cmd, &waited, stderr.String(), "get pi session stats", err)
 	}
 	if strings.TrimSpace(text) == "" && session.lastAgentError != "" {
 		return ports.AgentResult{}, finishWithError(ctx, cmd, &waited, stderr.String(), "run pi agent", errors.New(session.lastAgentError))
+	}
+
+	var parsed any
+	var statsResp map[string]any
+	if req.OutputSchema != nil {
+		parsed, err = validateStructuredOutput(text, req.OutputSchema)
+		if err != nil {
+			firstValidationErr := err
+			retryPrompt := buildStructuredOutputRetryPrompt(err)
+			text, assistantTextResp, err = session.runTurn(ctx, "agentflow-prompt", retryPrompt)
+			if err != nil {
+				return ports.AgentResult{}, finishWithError(ctx, cmd, &waited, stderr.String(), "run pi structured output retry", err)
+			}
+			if strings.TrimSpace(text) == "" && session.lastAgentError != "" {
+				return ports.AgentResult{}, finishWithError(ctx, cmd, &waited, stderr.String(), "run pi agent", errors.New(session.lastAgentError))
+			}
+			parsed, err = validateStructuredOutput(text, req.OutputSchema)
+			if err != nil {
+				return ports.AgentResult{}, finishWithError(ctx, cmd, &waited, stderr.String(), "validate pi structured output", fmt.Errorf("initial response invalid: %v; retry response invalid: %v; final text=%q", firstValidationErr, err, truncateOutput(text)))
+			}
+		}
+	}
+	statsResp, err = session.requestResponse(ctx, "agentflow-stats", "get_session_stats")
+	if err != nil {
+		return ports.AgentResult{}, finishWithError(ctx, cmd, &waited, stderr.String(), "get pi session stats", err)
 	}
 
 	result := ports.AgentResult{
@@ -109,20 +108,16 @@ func (p *Provider) Run(ctx context.Context, req ports.AgentRequest) (ports.Agent
 		RawEvents: session.rawEvents,
 		Metadata: map[string]any{
 			"pi": map[string]any{
-				"assistant_text": textResp,
+				"assistant_text": assistantTextResp,
 				"session_stats":  statsResp,
 			},
 		},
 	}
+	if req.OutputSchema != nil {
+		result.JSON = parsed
+	}
 	if usage := extractUsage(statsResp); usage != nil {
 		result.Usage = usage
-	}
-	if req.OutputSchema != nil {
-		var parsed any
-		if err := json.Unmarshal([]byte(text), &parsed); err != nil {
-			return ports.AgentResult{}, finishWithError(ctx, cmd, &waited, stderr.String(), "parse pi structured output", fmt.Errorf("%w: final text=%q", err, truncateOutput(text)))
-		}
-		result.JSON = parsed
 	}
 
 	_ = stdin.Close()
@@ -143,6 +138,38 @@ type rpcSession struct {
 	rawEvents         []ports.AgentEvent
 	lastAssistantText string
 	lastAgentError    string
+}
+
+func (s *rpcSession) runTurn(ctx context.Context, promptID string, prompt string) (string, map[string]any, error) {
+	s.lastAssistantText = ""
+	s.lastAgentError = ""
+	if err := s.writeCommand(map[string]any{
+		"id":      promptID,
+		"type":    "prompt",
+		"message": prompt,
+	}); err != nil {
+		return "", nil, err
+	}
+	if err := s.waitForPromptAccepted(ctx, promptID); err != nil {
+		return "", nil, err
+	}
+	if err := s.waitForAgentEnd(ctx); err != nil {
+		return "", nil, err
+	}
+	textResp, err := s.requestResponse(ctx, "agentflow-text", "get_last_assistant_text")
+	if err != nil {
+		return "", nil, err
+	}
+	text := ""
+	if data, ok := textResp["data"].(map[string]any); ok {
+		if value, ok := data["text"].(string); ok {
+			text = value
+		}
+	}
+	if strings.TrimSpace(text) == "" {
+		text = s.lastAssistantText
+	}
+	return text, textResp, nil
 }
 
 func buildArgs(req ports.AgentRequest) []string {
@@ -319,6 +346,17 @@ func (s *rpcSession) captureEvent(msg map[string]any) {
 	}
 }
 
+func validateStructuredOutput(text string, schema map[string]any) (any, error) {
+	var parsed any
+	if err := json.Unmarshal([]byte(text), &parsed); err != nil {
+		return nil, fmt.Errorf("%w: final text=%q", err, truncateOutput(text))
+	}
+	if err := coreworkflow.ValidateSchema(parsed, schema, "output_schema"); err != nil {
+		return nil, err
+	}
+	return parsed, nil
+}
+
 func extractAssistantText(event map[string]any) string {
 	if message, ok := event["message"].(map[string]any); ok && messageRole(message) == "assistant" {
 		return messageText(message)
@@ -448,6 +486,10 @@ func stringField(payload map[string]any, keys ...string) string {
 
 func appendJSONOnlyInstruction(prompt string) string {
 	return prompt + "\n\nReturn only the final assistant message as JSON matching the requested output schema. Do not include Markdown fences, commentary, or surrounding text."
+}
+
+func buildStructuredOutputRetryPrompt(validationErr error) string {
+	return "The previous response did not match the requested JSON schema.\n\nValidation error: " + validationErr.Error() + "\n\nReturn a corrected final assistant message as JSON only. Do not include Markdown fences, commentary, or surrounding text."
 }
 
 func finishWithError(ctx context.Context, cmd *exec.Cmd, waited *bool, stderr string, label string, err error) error {

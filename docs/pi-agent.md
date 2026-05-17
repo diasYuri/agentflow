@@ -45,4 +45,4 @@ Campos encaminhados:
 - `env`: é mesclado sobre o ambiente do processo.
 - `permission.write: false` ou `sandbox.mode: read-only`: restringe ferramentas com `--tools read,grep,find,ls`.
 
-O RPC do Pi não expõe JSON schema nativo nos docs usados. Quando `output_schema` existe, AgentFlow adiciona uma instrução curta para que a resposta final seja somente JSON e parseia o último texto do assistant em `result.JSON`; se o parse falhar, o provider retorna erro com um trecho truncado do texto final.
+O RPC do Pi não expõe JSON schema nativo nos docs usados. Quando `output_schema` existe, AgentFlow adiciona uma instrução curta para que a resposta final seja somente JSON, valida o payload contra o schema no próprio provider e, se a resposta vier inválida, reutiliza a mesma sessão para pedir correção antes de retornar erro. O `result.JSON` continua vindo do último texto válido do assistant.

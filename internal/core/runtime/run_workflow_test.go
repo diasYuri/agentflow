@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -1024,6 +1025,60 @@ nodes:
 	}
 }
 
+func TestRunWorkflowForwardsAgentOutputSchema(t *testing.T) {
+	dir := t.TempDir()
+	workflowPath := writeWorkflow(t, dir, `
+version: "1"
+name: agent-output-schema
+nodes:
+  - id: review
+    kind: agent
+    provider: codex
+    prompt: "return JSON"
+    output_schema:
+      type: object
+      required: [summary]
+      properties:
+        summary:
+          type: string
+`)
+	agent := &recordingAgentProvider{}
+	uc := &RunWorkflowUseCase{
+		Workflows: newTestWorkflowRepository(dir),
+		Runs:      runrepo.New(filepath.Join(dir, "runs")),
+		Events:    eventmemory.New(),
+		Agents: ports.NewStaticAgentProviderRegistry(map[string]ports.AgentProvider{
+			"codex": agent,
+		}),
+		Shell: &scriptedShell{},
+		Now:   func() time.Time { return time.Unix(1, 0).UTC() },
+	}
+
+	result, err := uc.Run(context.Background(), RunOptions{WorkflowRef: workflowPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != run.RunSuccess {
+		t.Fatalf("expected success, got %s", result.Status)
+	}
+	schemas := agent.outputSchemas()
+	if len(schemas) != 1 {
+		t.Fatalf("expected 1 agent request, got %d", len(schemas))
+	}
+	want := map[string]any{
+		"type": "object",
+		"required": []any{
+			"summary",
+		},
+		"properties": map[string]any{
+			"summary": map[string]any{"type": "string"},
+		},
+	}
+	if !reflect.DeepEqual(schemas[0], want) {
+		t.Fatalf("output schema mismatch: got %#v want %#v", schemas[0], want)
+	}
+}
+
 type scriptedShell struct {
 	mu       sync.Mutex
 	calls    int
@@ -1090,6 +1145,16 @@ func (p *recordingAgentProvider) sandboxModes() []string {
 		modes[i] = req.Sandbox.Mode
 	}
 	return modes
+}
+
+func (p *recordingAgentProvider) outputSchemas() []map[string]any {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	schemas := make([]map[string]any, len(p.requests))
+	for i, req := range p.requests {
+		schemas[i] = req.OutputSchema
+	}
+	return schemas
 }
 
 func newTestRunWorkflowUseCase(dir string, shellRunner ports.ShellRunner, events ports.EventSink) *RunWorkflowUseCase {
