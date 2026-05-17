@@ -19,7 +19,8 @@ execução previsível:
 - `output_schema`
 
 O provider também expõe telemetria útil para o runtime, como uso de tokens, eventos brutos
-emitidos pelo Codex e, quando a resposta é estruturada, o conteúdo já interpretado como JSON.
+(opcionais, dependendo do modo de debug) emitidos pelo Codex e, quando a resposta é
+estruturada, o conteúdo já interpretado como JSON.
 
 ## Como funciona
 
@@ -73,7 +74,8 @@ Quando o turn retorna, o provider monta o resultado do agente:
 
 - `Text` recebe a resposta final;
 - `Usage` é preenchido a partir do consumo reportado pelo Codex;
-- `RawEvents` guarda os itens emitidos pelo turn, preservando `type` e `data`;
+- `RawEvents` guarda os itens emitidos pelo turn, preservando `type` e `data`, quando a
+  captura bruta estiver habilitada;
 - se `output_schema` estiver presente e a resposta final for JSON válido, `JSON` recebe o
   valor já decodificado.
 
@@ -100,5 +102,5 @@ Quando o turn retorna, o provider monta o resultado do agente:
 - `OPENAI_API_KEY` precisa estar disponível no ambiente do processo para o SDK inicializar.
 - A resposta só é convertida em JSON quando o `output_schema` foi enviado e o texto final é
   JSON válido; caso contrário, o texto bruto continua disponível em `Text`.
-- Os eventos brutos preservam o histórico emitido pelo turn, o que facilita auditoria e debug
-  sem depender apenas do texto final.
+- Os eventos brutos são um detalhe opcional de debug; o runtime não depende deles para
+  compor a saída funcional do nó.

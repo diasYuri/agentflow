@@ -21,14 +21,21 @@ const (
 	maxErrorOutputBytes        = 4096
 	maxStructuredOutputRetries = 5
 	readOnlyTools              = "read,grep,find,ls"
+	maxRPCRecordBytes          = 1 << 20  // 1 MiB
+	maxTextBytes               = 10 << 20 // 10 MiB
+	rawEventsEnvVar            = "AGENTFLOW_PI_CAPTURE_RAW_EVENTS"
 )
 
 type Provider struct {
-	piPath string
+	piPath           string
+	captureRawEvents bool
 }
 
 func New(piPath string) *Provider {
-	return &Provider{piPath: piPath}
+	return &Provider{
+		piPath:           piPath,
+		captureRawEvents: envBool(rawEventsEnvVar),
+	}
 }
 
 func (p *Provider) Run(ctx context.Context, req ports.AgentRequest) (ports.AgentResult, error) {
@@ -62,9 +69,9 @@ func (p *Provider) Run(ctx context.Context, req ports.AgentRequest) (ports.Agent
 	}()
 
 	session := &rpcSession{
-		stdin:     stdin,
-		reader:    bufio.NewReader(stdout),
-		rawEvents: []ports.AgentEvent{},
+		stdin:            stdin,
+		reader:           bufio.NewReader(stdout),
+		captureRawEvents: p.captureRawEvents,
 	}
 
 	prompt := req.Prompt
@@ -80,7 +87,7 @@ func (p *Provider) Run(ctx context.Context, req ports.AgentRequest) (ports.Agent
 	}
 
 	var parsed any
-	var statsResp map[string]any
+	var statsResp *rpcMessage
 	if req.OutputSchema != nil {
 		var firstValidationErr error
 		var lastValidationErr error
@@ -118,8 +125,8 @@ func (p *Provider) Run(ctx context.Context, req ports.AgentRequest) (ports.Agent
 		RawEvents: session.rawEvents,
 		Metadata: map[string]any{
 			"pi": map[string]any{
-				"assistant_text": assistantTextResp,
-				"session_stats":  statsResp,
+				"assistant_text": msgToMap(assistantTextResp),
+				"session_stats":  msgToMap(statsResp),
 			},
 		},
 	}
@@ -146,11 +153,57 @@ type rpcSession struct {
 	stdin             io.WriteCloser
 	reader            *bufio.Reader
 	rawEvents         []ports.AgentEvent
+	captureRawEvents  bool
 	lastAssistantText string
 	lastAgentError    string
 }
 
-func (s *rpcSession) runTurn(ctx context.Context, promptID string, prompt string) (string, map[string]any, error) {
+type rpcMessage struct {
+	Type     string          `json:"type"`
+	ID       string          `json:"id"`
+	Command  string          `json:"command"`
+	Success  bool            `json:"success"`
+	Error    string          `json:"error"`
+	Data     json.RawMessage `json:"data"`
+	Message  json.RawMessage `json:"message"`
+	Messages json.RawMessage `json:"messages"`
+}
+
+type rpcData struct {
+	Text    string          `json:"text"`
+	Error   string          `json:"error"`
+	Message string          `json:"message"`
+	Tokens  json.RawMessage `json:"tokens"`
+}
+
+type rpcPayloadEnvelope struct {
+	Text     string          `json:"text"`
+	Error    string          `json:"error"`
+	Message  json.RawMessage `json:"message"`
+	Messages json.RawMessage `json:"messages"`
+}
+
+type rpcMessageObj struct {
+	Role          string          `json:"role"`
+	Content       json.RawMessage `json:"content"`
+	StopReason    string          `json:"stopReason"`
+	StopReasonAlt string          `json:"stop_reason"`
+	ErrorMessage  string          `json:"errorMessage"`
+	ErrorAlt      string          `json:"error"`
+}
+
+type rpcContentItem struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+type rpcTokens struct {
+	Input  int `json:"input"`
+	Output int `json:"output"`
+	Total  int `json:"total"`
+}
+
+func (s *rpcSession) runTurn(ctx context.Context, promptID string, prompt string) (string, *rpcMessage, error) {
 	s.lastAssistantText = ""
 	s.lastAgentError = ""
 	if err := s.writeCommand(map[string]any{
@@ -171,10 +224,14 @@ func (s *rpcSession) runTurn(ctx context.Context, promptID string, prompt string
 		return "", nil, err
 	}
 	text := ""
-	if data, ok := textResp["data"].(map[string]any); ok {
-		if value, ok := data["text"].(string); ok {
-			text = value
+	if len(textResp.Data) > 0 {
+		var data rpcData
+		if err := json.Unmarshal(textResp.Data, &data); err == nil {
+			text = data.Text
 		}
+	}
+	if len(text) > maxTextBytes {
+		return "", nil, fmt.Errorf("assistant text exceeds %d bytes", maxTextBytes)
 	}
 	if strings.TrimSpace(text) == "" {
 		text = s.lastAssistantText
@@ -247,18 +304,20 @@ func (s *rpcSession) writeCommand(command map[string]any) error {
 
 func (s *rpcSession) waitForPromptAccepted(ctx context.Context, id string) error {
 	for {
-		msg, err := s.readMessage(ctx)
+		msg, raw, err := s.readMessage(ctx)
 		if err != nil {
 			return err
 		}
-		if stringField(msg, "type") != "response" {
-			s.captureEvent(msg)
+		if msg.Type != "response" {
+			if err := s.processEvent(msg, raw); err != nil {
+				return err
+			}
 			continue
 		}
-		if stringField(msg, "id") != id || stringField(msg, "command") != "prompt" {
+		if msg.ID != id || msg.Command != "prompt" {
 			continue
 		}
-		if success, ok := msg["success"].(bool); ok && success {
+		if msg.Success {
 			return nil
 		}
 		return responseError(msg)
@@ -267,65 +326,72 @@ func (s *rpcSession) waitForPromptAccepted(ctx context.Context, id string) error
 
 func (s *rpcSession) waitForAgentEnd(ctx context.Context) error {
 	for {
-		msg, err := s.readMessage(ctx)
+		msg, raw, err := s.readMessage(ctx)
 		if err != nil {
 			return err
 		}
-		if stringField(msg, "type") == "response" {
+		if msg.Type == "response" {
 			continue
 		}
-		s.captureEvent(msg)
-		if stringField(msg, "type") == "agent_end" {
+		if err := s.processEvent(msg, raw); err != nil {
+			return err
+		}
+		if msg.Type == "agent_end" {
 			return nil
 		}
 	}
 }
 
-func (s *rpcSession) requestResponse(ctx context.Context, id string, command string) (map[string]any, error) {
+func (s *rpcSession) requestResponse(ctx context.Context, id string, command string) (*rpcMessage, error) {
 	if err := s.writeCommand(map[string]any{"id": id, "type": command}); err != nil {
 		return nil, err
 	}
 	for {
-		msg, err := s.readMessage(ctx)
+		msg, raw, err := s.readMessage(ctx)
 		if err != nil {
 			return nil, err
 		}
-		if stringField(msg, "type") != "response" {
-			s.captureEvent(msg)
+		if msg.Type != "response" {
+			if err := s.processEvent(msg, raw); err != nil {
+				return nil, err
+			}
 			continue
 		}
-		if stringField(msg, "id") != id || stringField(msg, "command") != command {
+		if msg.ID != id || msg.Command != command {
 			continue
 		}
-		if success, ok := msg["success"].(bool); ok && success {
+		if msg.Success {
 			return msg, nil
 		}
 		return nil, responseError(msg)
 	}
 }
 
-func (s *rpcSession) readMessage(ctx context.Context) (map[string]any, error) {
+func (s *rpcSession) readMessage(ctx context.Context) (*rpcMessage, []byte, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	line, err := readJSONLRecord(s.reader)
+	line, err := readJSONLRecord(s.reader, maxRPCRecordBytes)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return nil, ctxErr
+			return nil, nil, ctxErr
 		}
-		return nil, err
+		return nil, nil, err
 	}
-	var msg map[string]any
+	var msg rpcMessage
 	if err := json.Unmarshal(line, &msg); err != nil {
-		return nil, fmt.Errorf("parse pi rpc line: %w: line=%q", err, truncateOutput(string(line)))
+		return nil, nil, fmt.Errorf("parse pi rpc line: %w: line=%q", err, truncateOutput(string(line)))
 	}
-	return msg, nil
+	return &msg, line, nil
 }
 
-func readJSONLRecord(reader *bufio.Reader) ([]byte, error) {
+func readJSONLRecord(reader *bufio.Reader, limit int) ([]byte, error) {
 	var out []byte
 	for {
 		part, err := reader.ReadSlice('\n')
+		if len(out)+len(part) > limit {
+			return nil, fmt.Errorf("rpc record exceeds %d bytes", limit)
+		}
 		out = append(out, part...)
 		if err == nil {
 			out = bytes.TrimSuffix(out, []byte{'\n'})
@@ -342,18 +408,27 @@ func readJSONLRecord(reader *bufio.Reader) ([]byte, error) {
 	}
 }
 
-func (s *rpcSession) captureEvent(msg map[string]any) {
-	s.rawEvents = append(s.rawEvents, ports.AgentEvent{
-		Type: stringField(msg, "type"),
-		Data: msg,
-	})
+func (s *rpcSession) processEvent(msg *rpcMessage, raw []byte) error {
+	if s.captureRawEvents {
+		var data map[string]any
+		if err := json.Unmarshal(raw, &data); err == nil {
+			s.rawEvents = append(s.rawEvents, ports.AgentEvent{
+				Type: msg.Type,
+				Data: data,
+			})
+		}
+	}
 	if text := extractAssistantText(msg); strings.TrimSpace(text) != "" {
+		if len(text) > maxTextBytes {
+			return fmt.Errorf("assistant text exceeds %d bytes", maxTextBytes)
+		}
 		s.lastAssistantText = text
 		s.lastAgentError = ""
 	}
 	if errMsg := extractAgentError(msg); errMsg != "" {
 		s.lastAgentError = errMsg
 	}
+	return nil
 }
 
 func validateStructuredOutput(text string, schema map[string]any) (any, error) {
@@ -367,99 +442,234 @@ func validateStructuredOutput(text string, schema map[string]any) (any, error) {
 	return parsed, nil
 }
 
-func extractAssistantText(event map[string]any) string {
-	if message, ok := event["message"].(map[string]any); ok && messageRole(message) == "assistant" {
-		return messageText(message)
+func extractAssistantText(msg *rpcMessage) string {
+	if text := extractAssistantTextFromRaw(msg.Data); text != "" {
+		return text
 	}
-	if messages, ok := event["messages"].([]any); ok {
-		for i := len(messages) - 1; i >= 0; i-- {
-			message, ok := messages[i].(map[string]any)
-			if ok && messageRole(message) == "assistant" {
-				return messageText(message)
-			}
+	if len(msg.Message) > 0 {
+		if text := extractAssistantTextFromRaw(msg.Message); text != "" {
+			return text
 		}
+	}
+	if len(msg.Messages) > 0 {
+		return extractAssistantTextFromMessages(msg.Messages)
 	}
 	return ""
 }
 
-func extractAgentError(event map[string]any) string {
-	if message, ok := event["message"].(map[string]any); ok && messageRole(message) == "assistant" {
-		if errMsg := assistantError(message); errMsg != "" {
+func extractAgentError(msg *rpcMessage) string {
+	if errMsg := extractAgentErrorFromRaw(msg.Data); errMsg != "" {
+		return errMsg
+	}
+	if len(msg.Message) > 0 {
+		if errMsg := extractAgentErrorFromRaw(msg.Message); errMsg != "" {
 			return errMsg
 		}
 	}
-	if messages, ok := event["messages"].([]any); ok {
-		for i := len(messages) - 1; i >= 0; i-- {
-			message, ok := messages[i].(map[string]any)
-			if ok && messageRole(message) == "assistant" {
-				return assistantError(message)
-			}
-		}
+	if len(msg.Messages) > 0 {
+		return extractAgentErrorFromMessages(msg.Messages)
 	}
 	return ""
 }
 
-func messageRole(message map[string]any) string {
-	return stringField(message, "role")
-}
-
-func assistantError(message map[string]any) string {
-	errMsg := stringField(message, "errorMessage", "error")
+func assistantError(m *rpcMessageObj) string {
+	errMsg := m.ErrorMessage
+	if errMsg == "" {
+		errMsg = m.ErrorAlt
+	}
 	if errMsg == "" {
 		return ""
 	}
-	if stopReason := stringField(message, "stopReason", "stop_reason"); stopReason != "" && stopReason != "error" {
+	stopReason := m.StopReason
+	if stopReason == "" {
+		stopReason = m.StopReasonAlt
+	}
+	if stopReason != "" && stopReason != "error" {
 		return ""
 	}
 	return errMsg
 }
 
-func messageText(message map[string]any) string {
-	switch content := message["content"].(type) {
-	case string:
-		return content
-	case []any:
-		var parts []string
-		for _, item := range content {
-			switch value := item.(type) {
-			case string:
-				parts = append(parts, value)
-			case map[string]any:
-				if text, ok := value["text"].(string); ok {
-					parts = append(parts, text)
-				}
-			}
+func messageText(m *rpcMessageObj) string {
+	if len(m.Content) == 0 {
+		return ""
+	}
+	return contentText(m.Content)
+}
+
+func extractAssistantTextFromRaw(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		return text
+	}
+	var envelope rpcPayloadEnvelope
+	if err := json.Unmarshal(raw, &envelope); err == nil {
+		if envelope.Text != "" {
+			return envelope.Text
 		}
-		return strings.Join(parts, "")
+		if text := extractAssistantTextFromRaw(envelope.Message); text != "" {
+			return text
+		}
+		if text := extractAssistantTextFromMessages(envelope.Messages); text != "" {
+			return text
+		}
+	}
+	var msg rpcMessageObj
+	if err := json.Unmarshal(raw, &msg); err == nil {
+		if msg.Role == "assistant" {
+			return messageText(&msg)
+		}
+		return ""
+	}
+	return extractAssistantTextFromMessages(raw)
+}
+
+func extractAssistantTextFromMessages(raw json.RawMessage) string {
+	msgs, ok := decodeRawMessages(raw)
+	if !ok {
+		return ""
+	}
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if text := extractAssistantTextFromRaw(msgs[i]); text != "" {
+			return text
+		}
 	}
 	return ""
 }
 
-func responseError(msg map[string]any) error {
-	if errMsg := stringField(msg, "error", "message"); errMsg != "" {
-		return fmt.Errorf("pi rpc %s failed: %s", stringField(msg, "command"), errMsg)
+func extractAgentErrorFromRaw(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
 	}
-	if data, ok := msg["data"].(map[string]any); ok {
-		if errMsg := stringField(data, "error", "message"); errMsg != "" {
-			return fmt.Errorf("pi rpc %s failed: %s", stringField(msg, "command"), errMsg)
+	var errText string
+	if err := json.Unmarshal(raw, &errText); err == nil {
+		return errText
+	}
+	var envelope rpcPayloadEnvelope
+	if err := json.Unmarshal(raw, &envelope); err == nil {
+		if envelope.Error != "" {
+			return envelope.Error
+		}
+		if errMsg := extractAgentErrorFromRaw(envelope.Message); errMsg != "" {
+			return errMsg
+		}
+		if errMsg := extractAgentErrorFromMessages(envelope.Messages); errMsg != "" {
+			return errMsg
 		}
 	}
-	return fmt.Errorf("pi rpc %s failed", stringField(msg, "command"))
+	var msg rpcMessageObj
+	if err := json.Unmarshal(raw, &msg); err == nil {
+		if msg.Role == "assistant" {
+			return assistantError(&msg)
+		}
+		return ""
+	}
+	return extractAgentErrorFromMessages(raw)
 }
 
-func extractUsage(payload map[string]any) *ports.Usage {
-	data, ok := payload["data"].(map[string]any)
+func extractAgentErrorFromMessages(raw json.RawMessage) string {
+	msgs, ok := decodeRawMessages(raw)
 	if !ok {
+		return ""
+	}
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if errMsg := extractAgentErrorFromRaw(msgs[i]); errMsg != "" {
+			return errMsg
+		}
+	}
+	return ""
+}
+
+func decodeRawMessages(raw json.RawMessage) ([]json.RawMessage, bool) {
+	if len(raw) == 0 {
+		return nil, false
+	}
+	var msgs []json.RawMessage
+	if err := json.Unmarshal(raw, &msgs); err != nil {
+		return nil, false
+	}
+	return msgs, true
+}
+
+func contentText(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s
+	}
+	msgs, ok := decodeRawMessages(raw)
+	if ok {
+		var parts []string
+		for _, item := range msgs {
+			parts = append(parts, contentText(item))
+		}
+		return strings.Join(parts, "")
+	}
+	var item rpcContentItem
+	if err := json.Unmarshal(raw, &item); err == nil {
+		if item.Type == "" || item.Type == "text" {
+			return item.Text
+		}
+	}
+	var textOnly struct {
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(raw, &textOnly); err == nil {
+		return textOnly.Text
+	}
+	return ""
+}
+
+func responseError(msg *rpcMessage) error {
+	cmd := msg.Command
+	errMsg := msg.Error
+	if errMsg == "" && len(msg.Message) > 0 {
+		var s string
+		if err := json.Unmarshal(msg.Message, &s); err == nil {
+			errMsg = s
+		}
+	}
+	if errMsg != "" {
+		return fmt.Errorf("pi rpc %s failed: %s", cmd, errMsg)
+	}
+	if len(msg.Data) > 0 {
+		var data rpcData
+		if err := json.Unmarshal(msg.Data, &data); err == nil {
+			if data.Error != "" {
+				return fmt.Errorf("pi rpc %s failed: %s", cmd, data.Error)
+			}
+			if data.Message != "" {
+				return fmt.Errorf("pi rpc %s failed: %s", cmd, data.Message)
+			}
+		}
+	}
+	return fmt.Errorf("pi rpc %s failed", cmd)
+}
+
+func extractUsage(msg *rpcMessage) *ports.Usage {
+	if len(msg.Data) == 0 {
 		return nil
 	}
-	tokens, ok := data["tokens"].(map[string]any)
-	if !ok {
+	var data rpcData
+	if err := json.Unmarshal(msg.Data, &data); err != nil {
+		return nil
+	}
+	if len(data.Tokens) == 0 {
+		return nil
+	}
+	var tokens rpcTokens
+	if err := json.Unmarshal(data.Tokens, &tokens); err != nil {
 		return nil
 	}
 	usage := &ports.Usage{
-		InputTokens:  intField(tokens, "input"),
-		OutputTokens: intField(tokens, "output"),
-		TotalTokens:  intField(tokens, "total"),
+		InputTokens:  tokens.Input,
+		OutputTokens: tokens.Output,
+		TotalTokens:  tokens.Total,
 	}
 	if usage.TotalTokens == 0 {
 		usage.TotalTokens = usage.InputTokens + usage.OutputTokens
@@ -470,28 +680,41 @@ func extractUsage(payload map[string]any) *ports.Usage {
 	return usage
 }
 
-func intField(payload map[string]any, keys ...string) int {
-	for _, key := range keys {
-		switch value := payload[key].(type) {
-		case float64:
-			return int(value)
-		case int:
-			return value
-		case json.Number:
-			number, _ := value.Int64()
-			return int(number)
-		}
+func msgToMap(msg *rpcMessage) map[string]any {
+	if msg == nil {
+		return nil
 	}
-	return 0
-}
-
-func stringField(payload map[string]any, keys ...string) string {
-	for _, key := range keys {
-		if value, ok := payload[key].(string); ok {
-			return value
-		}
+	m := map[string]any{
+		"type": msg.Type,
 	}
-	return ""
+	if msg.ID != "" {
+		m["id"] = msg.ID
+	}
+	if msg.Command != "" {
+		m["command"] = msg.Command
+	}
+	if msg.Success {
+		m["success"] = true
+	}
+	if msg.Error != "" {
+		m["error"] = msg.Error
+	}
+	if len(msg.Data) > 0 {
+		var data any
+		_ = json.Unmarshal(msg.Data, &data)
+		m["data"] = data
+	}
+	if len(msg.Message) > 0 {
+		var msgAny any
+		_ = json.Unmarshal(msg.Message, &msgAny)
+		m["message"] = msgAny
+	}
+	if len(msg.Messages) > 0 {
+		var msgsAny any
+		_ = json.Unmarshal(msg.Messages, &msgsAny)
+		m["messages"] = msgsAny
+	}
+	return m
 }
 
 func appendJSONOnlyInstruction(prompt string) string {
@@ -545,4 +768,14 @@ func truncateOutput(value string) string {
 		return value
 	}
 	return value[:maxErrorOutputBytes] + "...(truncated)"
+}
+
+func envBool(name string) bool {
+	value := strings.TrimSpace(os.Getenv(name))
+	switch strings.ToLower(value) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }

@@ -46,3 +46,12 @@ Campos encaminhados:
 - `permission.write: false` ou `sandbox.mode: read-only`: restringe ferramentas com `--tools read,grep,find,ls`.
 
 O RPC do Pi não expõe JSON schema nativo nos docs usados. Quando `output_schema` existe, AgentFlow adiciona uma instrução curta para que a resposta final seja somente JSON, valida o payload contra o schema no próprio provider e, se a resposta vier inválida, reutiliza a mesma sessão para pedir correção antes de retornar erro. O `result.JSON` continua vindo do último texto válido do assistant.
+
+## Limites e retenção de eventos
+
+A saída funcional do provider continua sendo `Text`, `JSON` e `Usage`. Eventos brutos do RPC **não são retidos por padrão**:
+
+- `RawEvents` permanece vazio a menos que a captura bruta esteja explicitamente habilitada (modo de debug).
+- Cada linha JSONL do RPC é limitada a **1 MiB** (`maxRPCRecordBytes`).
+- O texto do assistant é limitado a **10 MiB** (`maxTextBytes`); se o limite for excedido, o provider retorna erro.
+- A captura bruta destina-se apenas a diagnóstico e não faz parte do contrato funcional do runtime.

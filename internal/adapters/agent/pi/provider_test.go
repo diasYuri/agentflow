@@ -1,6 +1,8 @@
 package pi
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
@@ -147,8 +149,8 @@ func TestProviderContractForwardsPiExecutionOptions(t *testing.T) {
 	if result.Usage == nil || result.Usage.InputTokens != 7 || result.Usage.OutputTokens != 11 || result.Usage.TotalTokens != 18 {
 		t.Fatalf("usage mismatch: %#v", result.Usage)
 	}
-	if len(result.RawEvents) != 3 || result.RawEvents[0].Type != "agent_start" || result.RawEvents[2].Type != "agent_end" {
-		t.Fatalf("raw events mismatch: %#v", result.RawEvents)
+	if len(result.RawEvents) != 0 {
+		t.Fatalf("expected no raw events by default, got %#v", result.RawEvents)
 	}
 }
 
@@ -166,7 +168,21 @@ func TestProviderReturnsPromptRejection(t *testing.T) {
 	}
 }
 
-func TestProviderReturnsMalformedJSONError(t *testing.T) {
+func TestProviderReturnsMalformedRPCLineError(t *testing.T) {
+	provider := New(writeFakePi(t, t.TempDir(), fakePiMalformedRPC))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	_, err := provider.Run(ctx, ports.AgentRequest{Prompt: "malformed"})
+	if err == nil {
+		t.Fatal("expected malformed RPC line error")
+	}
+	if !strings.Contains(err.Error(), "parse pi rpc line") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestProviderReturnsMalformedStructuredOutputError(t *testing.T) {
 	provider := New(writeFakePi(t, t.TempDir(), fakePiMalformedJSON))
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -176,7 +192,7 @@ func TestProviderReturnsMalformedJSONError(t *testing.T) {
 		OutputSchema: map[string]any{"type": "object"},
 	})
 	if err == nil {
-		t.Fatal("expected malformed JSON error")
+		t.Fatal("expected malformed structured output error")
 	}
 	if !strings.Contains(err.Error(), "final text=") {
 		t.Fatalf("unexpected error: %v", err)
@@ -348,12 +364,241 @@ func TestProviderReturnsAgentEndErrorWhenTextIsEmpty(t *testing.T) {
 	}
 }
 
+func TestProviderRawEventsCapturedWhenEnabled(t *testing.T) {
+	provider := New(writeFakePi(t, t.TempDir(), fakePiSuccess))
+	provider.captureRawEvents = true
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	result, err := provider.Run(ctx, ports.AgentRequest{Prompt: "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.RawEvents) != 3 {
+		t.Fatalf("expected 3 raw events, got %d", len(result.RawEvents))
+	}
+	if result.RawEvents[0].Type != "agent_start" {
+		t.Fatalf("unexpected first event type: %s", result.RawEvents[0].Type)
+	}
+	if result.RawEvents[2].Type != "agent_end" {
+		t.Fatalf("unexpected last event type: %s", result.RawEvents[2].Type)
+	}
+}
+
+func TestProviderRawEventsCanBeEnabledFromEnv(t *testing.T) {
+	t.Setenv(rawEventsEnvVar, "true")
+
+	provider := New("pi")
+	if !provider.captureRawEvents {
+		t.Fatal("expected raw event capture to be enabled from env")
+	}
+}
+
+func TestReadJSONLRecordLimit(t *testing.T) {
+	t.Run("under limit", func(t *testing.T) {
+		data := []byte("hello world\n")
+		reader := bufio.NewReader(bytes.NewReader(data))
+		got, err := readJSONLRecord(reader, maxRPCRecordBytes)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != "hello world" {
+			t.Fatalf("got %q", string(got))
+		}
+	})
+	t.Run("over limit", func(t *testing.T) {
+		large := make([]byte, maxRPCRecordBytes+1)
+		for i := range large {
+			large[i] = 'x'
+		}
+		large[len(large)-1] = '\n'
+		reader := bufio.NewReader(bytes.NewReader(large))
+		_, err := readJSONLRecord(reader, maxRPCRecordBytes)
+		if err == nil || !strings.Contains(err.Error(), "exceeds") {
+			t.Fatalf("expected limit error, got %v", err)
+		}
+	})
+}
+
+func TestProcessEventTextLimit(t *testing.T) {
+	s := &rpcSession{}
+	hugeText := strings.Repeat("x", maxTextBytes+1)
+	raw := []byte(`{"type":"message_update","message":{"role":"assistant","content":"` + hugeText + `"}}`)
+	var msg rpcMessage
+	if err := json.Unmarshal(raw, &msg); err != nil {
+		t.Fatal(err)
+	}
+	err := s.processEvent(&msg, raw)
+	if err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("expected text limit error, got %v", err)
+	}
+}
+
+func TestExtractAssistantText(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{
+			name: "string content",
+			raw:  `{"message":{"role":"assistant","content":"hello"}}`,
+			want: "hello",
+		},
+		{
+			name: "array of strings",
+			raw:  `{"message":{"role":"assistant","content":["hello"," world"]}}`,
+			want: "hello world",
+		},
+		{
+			name: "array of objects",
+			raw:  `{"message":{"role":"assistant","content":[{"type":"text","text":"hello"}]}}`,
+			want: "hello",
+		},
+		{
+			name: "mixed content array",
+			raw:  `{"message":{"role":"assistant","content":["hello",{"type":"text","text":" world"}]}}`,
+			want: "hello world",
+		},
+		{
+			name: "messages array",
+			raw:  `{"messages":[{"role":"user","content":"hi"},{"role":"assistant","content":"bye"}]}`,
+			want: "bye",
+		},
+		{
+			name: "data text",
+			raw:  `{"data":{"text":"hello"}}`,
+			want: "hello",
+		},
+		{
+			name: "data message",
+			raw:  `{"data":{"message":{"role":"assistant","content":"hello"}}}`,
+			want: "hello",
+		},
+		{
+			name: "non-assistant ignored",
+			raw:  `{"message":{"role":"user","content":"hi"}}`,
+			want: "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var msg rpcMessage
+			if err := json.Unmarshal([]byte(tt.raw), &msg); err != nil {
+				t.Fatal(err)
+			}
+			got := extractAssistantText(&msg)
+			if got != tt.want {
+				t.Fatalf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestExtractAgentError(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{
+			name: "error in message",
+			raw:  `{"message":{"role":"assistant","errorMessage":"fail","stopReason":"error"}}`,
+			want: "fail",
+		},
+		{
+			name: "no error when stop reason is not error",
+			raw:  `{"message":{"role":"assistant","errorMessage":"fail","stopReason":"end_turn"}}`,
+			want: "",
+		},
+		{
+			name: "error in messages array",
+			raw:  `{"messages":[{"role":"assistant","errorMessage":"fail","stopReason":"error"}]}`,
+			want: "fail",
+		},
+		{
+			name: "no error when role is not assistant",
+			raw:  `{"message":{"role":"user","errorMessage":"fail"}}`,
+			want: "",
+		},
+		{
+			name: "stop_reason fallback",
+			raw:  `{"message":{"role":"assistant","errorMessage":"fail","stop_reason":"error"}}`,
+			want: "fail",
+		},
+		{
+			name: "error fallback field",
+			raw:  `{"message":{"role":"assistant","error":"fail","stopReason":"error"}}`,
+			want: "fail",
+		},
+		{
+			name: "data message error",
+			raw:  `{"data":{"message":{"role":"assistant","errorMessage":"fail","stopReason":"error"}}}`,
+			want: "fail",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var msg rpcMessage
+			if err := json.Unmarshal([]byte(tt.raw), &msg); err != nil {
+				t.Fatal(err)
+			}
+			got := extractAgentError(&msg)
+			if got != tt.want {
+				t.Fatalf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestResponseError(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{
+			name: "top-level error",
+			raw:  `{"command":"prompt","error":"rejected"}`,
+			want: "pi rpc prompt failed: rejected",
+		},
+		{
+			name: "data error",
+			raw:  `{"command":"stats","data":{"error":"internal"}}`,
+			want: "pi rpc stats failed: internal",
+		},
+		{
+			name: "data message",
+			raw:  `{"command":"stats","data":{"message":"internal"}}`,
+			want: "pi rpc stats failed: internal",
+		},
+		{
+			name: "generic fail",
+			raw:  `{"command":"prompt"}`,
+			want: "pi rpc prompt failed",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var msg rpcMessage
+			if err := json.Unmarshal([]byte(tt.raw), &msg); err != nil {
+				t.Fatal(err)
+			}
+			err := responseError(&msg)
+			if err == nil || err.Error() != tt.want {
+				t.Fatalf("got %v, want %v", err, tt.want)
+			}
+		})
+	}
+}
+
 type fakePiMode string
 
 const (
 	fakePiSuccess               fakePiMode = "success"
 	fakePiRejectPrompt          fakePiMode = "reject"
 	fakePiMalformedJSON         fakePiMode = "malformed"
+	fakePiMalformedRPC          fakePiMode = "malformed-rpc"
 	fakePiInvalidStructuredText fakePiMode = "invalid-structured"
 	fakePiStructuredRetry       fakePiMode = "structured-retry"
 	fakePiTextInEvents          fakePiMode = "text-in-events"
@@ -398,6 +643,10 @@ while IFS= read -r line; do
           ;;
         malformed)
           assistant_text='not json'
+          ;;
+        malformed-rpc)
+          printf '%s\n' 'not-json'
+          exit 0
           ;;
         invalid-structured)
           assistant_text='{"plan_path":"001-provider-core.md","status":"success","files_changed":["internal/adapters/agent/pi/provider.go"],"validation":["go test ./internal/adapters/agent/pi/..."],"follow_ups":[]}'
@@ -510,24 +759,12 @@ func indexOf(args []string, value string) int {
 }
 
 func TestExtractUsage(t *testing.T) {
-	payload := map[string]any{
-		"data": map[string]any{
-			"tokens": map[string]any{
-				"input":  float64(3),
-				"output": float64(4),
-				"total":  float64(7),
-			},
-		},
-	}
-	data, err := json.Marshal(payload)
-	if err != nil {
+	payload := []byte(`{"data":{"tokens":{"input":3,"output":4,"total":7}}}`)
+	var msg rpcMessage
+	if err := json.Unmarshal(payload, &msg); err != nil {
 		t.Fatal(err)
 	}
-	var decoded map[string]any
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		t.Fatal(err)
-	}
-	usage := extractUsage(decoded)
+	usage := extractUsage(&msg)
 	if usage == nil || usage.InputTokens != 3 || usage.OutputTokens != 4 || usage.TotalTokens != 7 {
 		t.Fatalf("usage mismatch: %#v", usage)
 	}

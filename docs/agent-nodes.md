@@ -28,8 +28,9 @@ O contrato entre runtime e provider é definido em [`internal/core/ports/agent.g
 
 - `Text`, com a resposta final em texto;
 - `JSON`, quando a resposta final pode ser parseada como JSON;
-- `RawEvents`, com os eventos emitidos pelo provider;
 - `Usage`, com contadores de tokens;
+- `RawEvents`, com os eventos emitidos pelo provider (quando habilitado no provider;
+  não faz parte do contrato funcional do runtime);
 - `Metadata`, para extensões futuras.
 
 O registry está em [`internal/core/ports/registry.go`](/Users/yuri/git/diasYuri/agentflow/internal/core/ports/registry.go). Ele mantém um mapa de providers por nome e é a base para a resolução de `provider: codex`, `provider: claude` e `provider: pi`.
@@ -65,7 +66,7 @@ O adapter do Pi fica em [`internal/adapters/agent/pi/provider.go`](/Users/yuri/g
 - usa `get_last_assistant_text` e `get_session_stats` para preencher resposta final e usage;
 - quando `output_schema` existe, instrui o agente a responder somente JSON e parseia o texto final.
 
-Quando `output_schema` está definido, o provider preenche `result.JSON` quando recebe saída estruturada. O Codex usa a resposta final parseada como JSON; o Claude Code usa `structured_output` e só cai para parse do texto quando esse campo não está presente; o Pi parseia o último texto do assistant como JSON, valida o resultado contra o schema e faz uma segunda tentativa na mesma sessão se a primeira saída vier inválida. Se não houver JSON estruturado, o texto bruto continua disponível em `result.Text`.
+Quando `output_schema` está definido, o provider preenche `result.JSON` quando recebe saída estruturada. O Codex usa a resposta final parseada como JSON; o Claude Code usa `structured_output` e só cai para parse do texto quando esse campo não está presente; o Pi parseia o último texto do assistant como JSON, valida o resultado contra o schema e faz uma segunda tentativa na mesma sessão se a primeira saída vier inválida. Se não houver JSON estruturado, o texto bruto continua disponível em `result.Text`, exceto no Pi quando `output_schema` foi solicitado e o texto não é JSON válido após as tentativas de correção.
 
 ## Arquivos envolvidos
 
@@ -87,7 +88,8 @@ Quando `output_schema` está definido, o provider preenche `result.JSON` quando 
 ## Observações relevantes
 
 - O provider padrão é `codex`; se o workflow não informar `provider`, o runtime usa esse nome.
-- A implementação atual preserva os eventos emitidos pelo provider em `RawEvents`, o que ajuda na auditoria e em integrações futuras.
+- `RawEvents` é preenchido apenas quando o provider oferece captura bruta habilitada; o
+  runtime não depende dele para compor a saída funcional do nó.
 - O usage do provider é propagado para o resultado final quando o CLI retorna informações de tokens.
 - O adapter aceita `seatbelt` como alias de `workspace-write` para compatibilidade com ambientes que expõem esse nome.
 - `permission.write` só é validado quando o bloco `permission` existe; se o workflow usar essa seção, `write` precisa estar presente.
