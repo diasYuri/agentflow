@@ -59,9 +59,11 @@ sucesso, falha definitiva ou cancelamento, o checkpoint é removido.
 
 A retomada é um contrato do runtime via `RunOptions.ResumeRunID`/`ExecutionRequest.ResumeRunID`.
 Ela recarrega `checkpoint.json`, reconstrói o plano a partir do workflow normalizado persistido,
-restaura métricas e resultados, emite `run.resumed` e continua a partir do cursor salvo. A
-retomada granular dentro de instâncias paralelas de `for_each` ou `map` ainda não é suportada; o
-ponto seguro desta versão é o node expandido como unidade.
+restaura métricas e resultados, emite `run.resumed` e continua a partir do cursor salvo. Em
+worktrees, o resume não bloqueia se o `HEAD` do destino avançou entre a pausa e a retomada; esse
+drift é observado e a reconcilição continua na etapa de merge/finalização. A retomada granular
+dentro de instâncias paralelas de `for_each` ou `map` ainda não é suportada; o ponto seguro desta
+versão é o node expandido como unidade.
 
 O checkpoint persistido usa os mesmos resultados mascarados do restante da persistência local.
 Assim, secrets não são gravados em claro; se um node posterior dependia exatamente do valor secreto

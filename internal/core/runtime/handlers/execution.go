@@ -231,7 +231,14 @@ func (e *Executor) restoreWorktree(ctx context.Context, state *ExecutionState, c
 		return fmt.Errorf("unable to resolve destination HEAD for %q", wtCheckpoint.DestinationWorkingDir)
 	}
 	if currentHead != wtCheckpoint.BaseCommit {
-		return fmt.Errorf("destination HEAD changed since checkpoint: expected %s, got %s", wtCheckpoint.BaseCommit, currentHead)
+		_ = e.emitState(ctx, state, corerun.Event{
+			Type: "worktree.resume_drift_detected",
+			Data: map[string]any{
+				"base_commit":      wtCheckpoint.BaseCommit,
+				"destination_head": currentHead,
+				"destination":      wtCheckpoint.DestinationWorkingDir,
+			},
+		})
 	}
 
 	wt := coreports.Worktree{

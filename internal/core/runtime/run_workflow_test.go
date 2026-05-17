@@ -2176,7 +2176,7 @@ nodes:
 	}
 }
 
-func TestRunWorkflowWorktreeResumeFailsWhenDestinationHeadChanged(t *testing.T) {
+func TestRunWorkflowWorktreeResumeContinuesWhenDestinationHeadChanged(t *testing.T) {
 	dir := t.TempDir()
 	initGitRepo(t, dir)
 	worktreeBase := t.TempDir()
@@ -2195,10 +2195,11 @@ nodes:
     kind: bash
     command: "false"
 `)
+	events := eventmemory.New()
 	worktrees := ports.NewStaticWorktreeProviderRegistry(map[string]ports.WorktreeProvider{
 		"git": worktreefake.New(worktreeBase),
 	})
-	uc := newTestRunWorkflowUseCaseWithWorktree(dir, shell.NewRunner(), eventmemory.New(), worktrees)
+	uc := newTestRunWorkflowUseCaseWithWorktree(dir, shell.NewRunner(), events, worktrees)
 
 	first, err := uc.Run(context.Background(), RunOptions{WorkflowRef: workflowPath, WorkingDir: dir})
 	if err != nil {
@@ -2206,11 +2207,17 @@ nodes:
 	}
 	commitFile(t, dir, "changed.txt", "changed")
 
-	_, err = uc.Run(context.Background(), RunOptions{ResumeRunID: first.RunID})
-	if err == nil {
-		t.Fatal("expected destination HEAD changed error")
+	resumed, err := uc.Run(context.Background(), RunOptions{ResumeRunID: first.RunID})
+	if err != nil {
+		t.Fatalf("expected resume to continue despite destination HEAD drift, got %v", err)
 	}
-	if !strings.Contains(err.Error(), "destination HEAD changed") {
-		t.Fatalf("expected destination HEAD changed error, got %v", err)
+	if resumed.Status != run.RunPaused {
+		t.Fatalf("expected resumed run to pause again, got %s", resumed.Status)
+	}
+	if findEvent(events.Events, "run.resumed", "") == nil {
+		t.Fatalf("expected run.resumed event, got %#v", events.Events)
+	}
+	if findEvent(events.Events, "worktree.resume_drift_detected", "") == nil {
+		t.Fatalf("expected worktree.resume_drift_detected event, got %#v", events.Events)
 	}
 }

@@ -48,6 +48,7 @@ cria o run, persiste o workflow e, se o sink suportar `Open(string) error`, inic
 - `run.pausing`
 - `run.paused`
 - `run.resumed`
+- `worktree.resume_drift_detected`
 - `run.completed`
 - `run.failed`
 
