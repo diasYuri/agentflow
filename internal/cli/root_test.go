@@ -638,6 +638,85 @@ func TestWorkflowResumeCommandRendersResumedRun(t *testing.T) {
 	}
 }
 
+func TestWorkflowApproveCommandRendersRun(t *testing.T) {
+	var got string
+	oldClient := newDaemonClient
+	newDaemonClient = func(socketPath string) workflowDaemonClient {
+		return workflowDaemonClientFunc{
+			approveWorkflow: func(context.Context, string) (daemon.ApproveWorkflowResponse, error) {
+				got = "approve"
+				return daemon.ApproveWorkflowResponse{Run: daemon.WorkflowRun{
+					ID:              "run-1",
+					RunDir:          "/tmp/run-1",
+					Status:          "running",
+					ApprovalMessage: "Approve release?",
+				}}, nil
+			},
+		}
+	}
+	t.Cleanup(func() { newDaemonClient = oldClient })
+
+	cmd := NewRootCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"workflow", "approve", "run-1"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if got != "approve" {
+		t.Fatalf("expected approve call, got %q", got)
+	}
+	if !strings.Contains(out.String(), "status: running") {
+		t.Fatalf("expected running status, got %q", out.String())
+	}
+}
+
+func TestWorkflowStatusRendersApprovalHint(t *testing.T) {
+	oldClient := newDaemonClient
+	oldInterval := workflowWatchInterval
+	workflowWatchInterval = time.Millisecond
+	defer func() {
+		newDaemonClient = oldClient
+		workflowWatchInterval = oldInterval
+	}()
+	newDaemonClient = func(socketPath string) workflowDaemonClient {
+		return workflowDaemonClientFunc{
+			workflowStatus: func(context.Context, string) (daemon.RunWorkflowResponse, error) {
+				return daemon.RunWorkflowResponse{Run: daemon.WorkflowRun{
+					ID:              "run-1",
+					Workflow:        "demo",
+					Status:          "wait_approval",
+					CurrentStep:     "gate",
+					RunDir:          "/tmp/run-1",
+					ApprovalNodeID:  "gate",
+					ApprovalMessage: "Approve release?",
+					ApprovalAt:      time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC),
+					TotalSteps:      3,
+				}}, nil
+			},
+		}
+	}
+
+	cmd := NewRootCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"workflow", "status", "run-1", "--no-color"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "status: wait_approval") {
+		t.Fatalf("expected wait_approval status, got %q", out.String())
+	}
+	if !strings.Contains(out.String(), "approval_message: Approve release?") {
+		t.Fatalf("expected approval message, got %q", out.String())
+	}
+	if !strings.Contains(out.String(), "agentflow workflow approve run-1") {
+		t.Fatalf("expected approval hint, got %q", out.String())
+	}
+}
+
 func TestWorkflowStatusRendersPausedHintAndStopsWatch(t *testing.T) {
 	oldClient := newDaemonClient
 	oldInterval := workflowWatchInterval
@@ -932,6 +1011,8 @@ type workflowDaemonClientFunc struct {
 	cancelWorkflow    func(context.Context, string) (daemon.CancelWorkflowResponse, error)
 	pauseWorkflow     func(context.Context, string) (daemon.PauseWorkflowResponse, error)
 	resumeWorkflow    func(context.Context, string) (daemon.ResumeWorkflowResponse, error)
+	approveWorkflow   func(context.Context, string) (daemon.ApproveWorkflowResponse, error)
+	rejectWorkflow    func(context.Context, string) (daemon.RejectWorkflowResponse, error)
 	workflowSummary   func(context.Context, string) (daemon.WorkflowSummaryResponse, error)
 	workflowTimeline  func(context.Context, string, int, int) (daemon.WorkflowTimelineResponse, error)
 	workflowInspect   func(context.Context, string) (daemon.WorkflowInspectResponse, error)
@@ -980,6 +1061,18 @@ func (f workflowDaemonClientFunc) ResumeWorkflow(ctx context.Context, id string)
 		return daemon.ResumeWorkflowResponse{}, nil
 	}
 	return f.resumeWorkflow(ctx, id)
+}
+func (f workflowDaemonClientFunc) ApproveWorkflow(ctx context.Context, id string) (daemon.ApproveWorkflowResponse, error) {
+	if f.approveWorkflow == nil {
+		return daemon.ApproveWorkflowResponse{}, nil
+	}
+	return f.approveWorkflow(ctx, id)
+}
+func (f workflowDaemonClientFunc) RejectWorkflow(ctx context.Context, id string) (daemon.RejectWorkflowResponse, error) {
+	if f.rejectWorkflow == nil {
+		return daemon.RejectWorkflowResponse{}, nil
+	}
+	return f.rejectWorkflow(ctx, id)
 }
 func (f workflowDaemonClientFunc) WorkflowSummary(ctx context.Context, id string) (daemon.WorkflowSummaryResponse, error) {
 	if f.workflowSummary == nil {

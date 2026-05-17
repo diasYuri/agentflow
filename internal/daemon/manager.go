@@ -177,8 +177,26 @@ func (m *Manager) CancelWorkflow(runID string) (WorkflowRun, error) {
 			run.PausedAt = time.Time{}
 			run.PauseReason = ""
 			run.FailureReason = ""
+		case corerun.RunWaitingApproval:
+			run.Status = corerun.RunCancelled
+			run.FinishedAt = time.Now()
+			run.ApprovalAt = time.Time{}
+			run.ApprovalNodeID = ""
+			run.ApprovalMessage = ""
+			run.FailureReason = ""
 		}
 	})
+	if run, ok := m.WorkflowStatus(runID); ok && run.RunDir != "" {
+		if data, err := os.ReadFile(filepath.Join(run.RunDir, "summary.json")); err == nil {
+			var summary corerun.Summary
+			if json.Unmarshal(data, &summary) == nil {
+				summary.Status = corerun.RunCancelled
+				summary.FinishedAt = time.Now()
+				summary.DurationMS = summary.FinishedAt.Sub(summary.StartedAt).Milliseconds()
+				_ = writeJSONFile(filepath.Join(run.RunDir, "summary.json"), summary)
+			}
+		}
+	}
 	m.clearCheckpointForRun(runID)
 	run, _ := m.WorkflowStatus(runID)
 	return run, nil
@@ -255,6 +273,129 @@ func (m *Manager) ResumeWorkflow(runID string) (WorkflowRun, error) {
 	m.mu.Unlock()
 	m.runSupervisor.Add(service)
 	return updated, nil
+}
+
+func (m *Manager) ApproveWorkflow(runID string) (WorkflowRun, error) {
+	m.mu.Lock()
+	record, ok := m.records[runID]
+	m.mu.Unlock()
+	if !ok {
+		return WorkflowRun{}, os.ErrNotExist
+	}
+	current := record.run
+	if current.Status != corerun.RunWaitingApproval {
+		return WorkflowRun{}, fmt.Errorf("workflow run %q is %s; only wait_approval runs can be approved", runID, current.Status)
+	}
+	if current.Request == nil {
+		return WorkflowRun{}, fmt.Errorf("workflow run %q has no persisted request; cannot approve", runID)
+	}
+	if current.RunDir == "" {
+		return WorkflowRun{}, fmt.Errorf("workflow run %q has no run directory", runID)
+	}
+	checkpointPath := filepath.Join(current.RunDir, "checkpoint.json")
+	data, err := os.ReadFile(checkpointPath)
+	if err != nil {
+		return WorkflowRun{}, err
+	}
+	var checkpoint corerun.Checkpoint
+	if err := json.Unmarshal(data, &checkpoint); err != nil {
+		return WorkflowRun{}, err
+	}
+	if checkpoint.Approval == nil || checkpoint.Approval.NodeID == "" {
+		return WorkflowRun{}, fmt.Errorf("workflow run %q checkpoint is missing approval state", runID)
+	}
+	approval := *checkpoint.Approval
+	runRoot := firstNonEmpty(current.Request.RunRoot, current.Request.OutputDir, m.cfg.RunRoot)
+	uc, err := app.NewRunWorkflowUseCase(app.RuntimeOptions{
+		CodexPath:   firstNonEmpty(current.Request.CodexPath, m.cfg.CodexPath, os.Getenv("AGENTFLOW_CODEX_PATH")),
+		ClaudePath:  firstNonEmpty(current.Request.ClaudePath, m.cfg.ClaudePath, os.Getenv("AGENTFLOW_CLAUDE_PATH")),
+		PiPath:      firstNonEmpty(current.Request.PiPath, m.cfg.PiPath, os.Getenv("AGENTFLOW_PI_PATH")),
+		LogFormat:   current.Request.LogFormat,
+		EventsJSONL: current.Request.EventsJSONL,
+		RunRoot:     runRoot,
+	})
+	if err != nil {
+		return WorkflowRun{}, err
+	}
+	if checkpoint.Nodes == nil {
+		checkpoint.Nodes = map[string]corerun.NodeResult{}
+	}
+	if _, exists := checkpoint.Nodes[approval.NodeID]; !exists {
+		checkpoint.Nodes[approval.NodeID] = corerun.NodeResult{
+			RunID:    runID,
+			NodeID:   approval.NodeID,
+			Status:   corerun.NodeSuccess,
+			Output:   map[string]any{"decision": "approved", "message": approval.Message},
+			Stdout:   "",
+			Stderr:   "",
+			Duration: 0,
+			Attempts: 1,
+		}
+	}
+	checkpoint.Status = corerun.RunRunning
+	checkpoint.Approval = nil
+	checkpoint.UpdatedAt = time.Now()
+	if err := writeJSONFile(checkpointPath, checkpoint); err != nil {
+		return WorkflowRun{}, err
+	}
+	service := NewWorkflowRunService(m, uc, *current.Request, runID, true)
+	m.mu.Lock()
+	record.service = service
+	record.run.Status = corerun.RunRunning
+	record.run.ResumeCount++
+	record.run.ApprovalAt = time.Time{}
+	record.run.ApprovalNodeID = ""
+	record.run.ApprovalMessage = ""
+	record.run.Error = ""
+	record.run.TerminalError = ""
+	record.run.FailureReason = ""
+	record.run.FinishedAt = time.Time{}
+	updated := record.run
+	m.persistLocked(updated)
+	m.mu.Unlock()
+	m.runSupervisor.Add(service)
+	return updated, nil
+}
+
+func (m *Manager) RejectWorkflow(runID, reason string) (WorkflowRun, error) {
+	m.mu.Lock()
+	record, ok := m.records[runID]
+	m.mu.Unlock()
+	if !ok {
+		return WorkflowRun{}, os.ErrNotExist
+	}
+	current := record.run
+	if current.Status != corerun.RunWaitingApproval {
+		return WorkflowRun{}, fmt.Errorf("workflow run %q is %s; only wait_approval runs can be rejected", runID, current.Status)
+	}
+	if reason == "" {
+		if current.ApprovalMessage != "" {
+			reason = "approval rejected: " + current.ApprovalMessage
+		} else {
+			reason = "approval rejected"
+		}
+	}
+	m.mark(runID, func(run *WorkflowRun) {
+		run.Status = corerun.RunFailed
+		run.FinishedAt = time.Now()
+		run.Error = reason
+		run.TerminalError = reason
+		run.FailureReason = reason
+	})
+	if current.RunDir != "" {
+		if data, err := os.ReadFile(filepath.Join(current.RunDir, "summary.json")); err == nil {
+			var summary corerun.Summary
+			if json.Unmarshal(data, &summary) == nil {
+				summary.Status = corerun.RunFailed
+				summary.FinishedAt = time.Now()
+				summary.DurationMS = summary.FinishedAt.Sub(summary.StartedAt).Milliseconds()
+				_ = writeJSONFile(filepath.Join(current.RunDir, "summary.json"), summary)
+			}
+		}
+	}
+	m.clearCheckpointForRun(runID)
+	run, _ := m.WorkflowStatus(runID)
+	return run, nil
 }
 
 func (m *Manager) clearCheckpointForRun(runID string) {
@@ -422,6 +563,15 @@ func (m *Manager) refreshRun(run WorkflowRun) WorkflowRun {
 	if run.Status == corerun.RunPaused && run.PauseReason == "" && progress.PauseReason != "" {
 		run.PauseReason = progress.PauseReason
 	}
+	if progress.ApprovalPending && run.Status != corerun.RunCancelled && run.Status != corerun.RunSuccess && run.Status != corerun.RunFailed {
+		run.Status = corerun.RunWaitingApproval
+	}
+	if run.ApprovalNodeID == "" && progress.ApprovalNodeID != "" {
+		run.ApprovalNodeID = progress.ApprovalNodeID
+	}
+	if run.ApprovalMessage == "" && progress.ApprovalMessage != "" {
+		run.ApprovalMessage = progress.ApprovalMessage
+	}
 	if run.FailureReason == "" && (run.Status == corerun.RunFailed || run.Status == corerun.RunPaused) {
 		if run.Error != "" {
 			run.FailureReason = run.Error
@@ -483,6 +633,18 @@ func (m *Manager) finish(runID string, result runworkflow.RunResult, err error) 
 			run.TerminalError = ""
 			return
 		}
+		if result.Status == corerun.RunWaitingApproval {
+			run.ApprovalAt = time.Now()
+			run.ApprovalNodeID = result.ApprovalNodeID
+			run.ApprovalMessage = result.ApprovalMessage
+			run.PausedAt = time.Time{}
+			run.PauseReason = ""
+			run.FinishedAt = time.Time{}
+			run.FailureReason = ""
+			run.Error = ""
+			run.TerminalError = ""
+			return
+		}
 		run.FinishedAt = time.Now()
 		run.PausedAt = time.Time{}
 		run.PauseReason = ""
@@ -504,6 +666,10 @@ func (m *Manager) finish(runID string, result runworkflow.RunResult, err error) 
 	}
 	if result.Status == corerun.RunPaused {
 		m.logger.Info("workflow paused", "run_id", runID)
+		return
+	}
+	if result.Status == corerun.RunWaitingApproval {
+		m.logger.Info("workflow waiting approval", "run_id", runID)
 		return
 	}
 	m.logger.Info("workflow finished", "run_id", runID, "status", result.Status)
@@ -570,6 +736,14 @@ func (m *Manager) persistLocked(run WorkflowRun) {
 	if err := m.store.UpsertRun(context.Background(), run); err != nil {
 		m.logger.Error("persist workflow run", "run_id", run.ID, "error", err)
 	}
+}
+
+func writeJSONFile(path string, value any) error {
+	data, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o644)
 }
 
 type WorkflowRunService struct {
@@ -661,14 +835,17 @@ func applyProgress(run *WorkflowRun, summary corerun.Summary) {
 }
 
 type runProgress struct {
-	CurrentStep    string
-	CompletedSteps []string
-	PendingSteps   []string
-	TotalSteps     int
-	TerminalError  string
-	RecentEvents   []string
-	Paused         bool
-	PauseReason    string
+	CurrentStep     string
+	CompletedSteps  []string
+	PendingSteps    []string
+	TotalSteps      int
+	TerminalError   string
+	RecentEvents    []string
+	Paused          bool
+	PauseReason     string
+	ApprovalPending bool
+	ApprovalNodeID  string
+	ApprovalMessage string
 }
 
 func loadProgress(runDir string) (runProgress, error) {
@@ -690,6 +867,27 @@ func loadProgress(runDir string) (runProgress, error) {
 	progress.TotalSteps = len(plan.Order)
 	progress.PendingSteps = append(progress.PendingSteps, plan.Order...)
 	completed := map[string]struct{}{}
+	checkpointPath := filepath.Join(runDir, "checkpoint.json")
+	if data, err := os.ReadFile(checkpointPath); err == nil {
+		var checkpoint corerun.Checkpoint
+		if err := json.Unmarshal(data, &checkpoint); err == nil {
+			for id, result := range checkpoint.Nodes {
+				if result.Status == corerun.NodeSuccess || result.Status == corerun.NodeSkipped || result.Status == corerun.NodeFailed || result.Status == corerun.NodeCancelled || result.Status == corerun.NodeTimeout {
+					completed[id] = struct{}{}
+				}
+			}
+			if checkpoint.Status == corerun.RunWaitingApproval {
+				progress.ApprovalPending = true
+			}
+			if checkpoint.Approval != nil {
+				progress.ApprovalNodeID = checkpoint.Approval.NodeID
+				progress.ApprovalMessage = checkpoint.Approval.Message
+				if progress.ApprovalNodeID != "" && progress.CurrentStep == "" {
+					progress.CurrentStep = progress.ApprovalNodeID
+				}
+			}
+		}
+	}
 	eventsPath := filepath.Join(runDir, "events.jsonl")
 	if lines, err := tailLines(eventsPath, 20); err == nil {
 		progress.RecentEvents = lines
@@ -721,9 +919,28 @@ func loadProgress(runDir string) (runProgress, error) {
 						progress.PauseReason = reason
 					}
 				}
+			case "run.wait_approval":
+				progress.ApprovalPending = true
+				if event.NodeID != "" {
+					progress.ApprovalNodeID = event.NodeID
+					if progress.CurrentStep == "" {
+						progress.CurrentStep = event.NodeID
+					}
+				}
+				if event.Data != nil {
+					if message, _ := event.Data["message"].(string); message != "" {
+						progress.ApprovalMessage = message
+					}
+					if nodeID, _ := event.Data["node_id"].(string); nodeID != "" {
+						progress.ApprovalNodeID = nodeID
+					}
+				}
 			case "run.resumed":
 				progress.Paused = false
 				progress.PauseReason = ""
+				progress.ApprovalPending = false
+				progress.ApprovalNodeID = ""
+				progress.ApprovalMessage = ""
 			case "run.failed":
 				if event.Data != nil {
 					if status, _ := event.Data["status"].(string); status != "" {
@@ -744,6 +961,9 @@ func loadProgress(runDir string) (runProgress, error) {
 		if progress.CurrentStep == "" {
 			progress.CurrentStep = id
 		}
+	}
+	if progress.ApprovalPending && progress.ApprovalNodeID != "" {
+		progress.CurrentStep = progress.ApprovalNodeID
 	}
 	return progress, nil
 }
@@ -1371,19 +1591,22 @@ func (m *Manager) WorkflowInspect(runID string) (WorkflowInspectResponse, error)
 		return WorkflowInspectResponse{}, os.ErrNotExist
 	}
 	resp := WorkflowInspectResponse{
-		RunID:          runID,
-		Workflow:       run.Workflow,
-		Status:         run.Status,
-		StartedAt:      run.StartedAt,
-		FinishedAt:     run.FinishedAt,
-		CurrentStep:    run.CurrentStep,
-		CompletedSteps: append([]string(nil), run.CompletedSteps...),
-		PendingSteps:   append([]string(nil), run.PendingSteps...),
-		TotalSteps:     run.TotalSteps,
-		Error:          run.Error,
-		TerminalError:  run.TerminalError,
-		FailureReason:  run.FailureReason,
-		Tag:            run.Tag,
+		RunID:           runID,
+		Workflow:        run.Workflow,
+		Status:          run.Status,
+		StartedAt:       run.StartedAt,
+		FinishedAt:      run.FinishedAt,
+		ApprovalAt:      run.ApprovalAt,
+		CurrentStep:     run.CurrentStep,
+		CompletedSteps:  append([]string(nil), run.CompletedSteps...),
+		PendingSteps:    append([]string(nil), run.PendingSteps...),
+		TotalSteps:      run.TotalSteps,
+		Error:           run.Error,
+		TerminalError:   run.TerminalError,
+		FailureReason:   run.FailureReason,
+		ApprovalNodeID:  run.ApprovalNodeID,
+		ApprovalMessage: run.ApprovalMessage,
+		Tag:             run.Tag,
 	}
 
 	summary, err := m.loadRunSummary(run)

@@ -54,6 +54,8 @@ type workflowDaemonClient interface {
 	CancelWorkflow(context.Context, string) (daemon.CancelWorkflowResponse, error)
 	PauseWorkflow(context.Context, string) (daemon.PauseWorkflowResponse, error)
 	ResumeWorkflow(context.Context, string) (daemon.ResumeWorkflowResponse, error)
+	ApproveWorkflow(context.Context, string) (daemon.ApproveWorkflowResponse, error)
+	RejectWorkflow(context.Context, string) (daemon.RejectWorkflowResponse, error)
 	WorkflowArtifacts(context.Context, string) (daemon.WorkflowArtifactsResponse, error)
 	WorkflowArtifact(context.Context, string, string) (daemon.WorkflowArtifactResponse, error)
 	WorkflowArtifactPath(context.Context, string, string) (string, error)
@@ -250,6 +252,8 @@ func newWorkflowCommand(opts *options) *cobra.Command {
 		newWorkflowCancelCommand(),
 		newWorkflowPauseCommand(),
 		newWorkflowResumeCommand(),
+		newWorkflowApproveCommand(),
+		newWorkflowRejectCommand(),
 		newWorkflowSummaryCommand(),
 		newWorkflowTimelineCommand(),
 		newWorkflowInspectCommand(),
@@ -668,6 +672,40 @@ func newWorkflowResumeCommand() *cobra.Command {
 	}
 }
 
+func newWorkflowApproveCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "approve <id>",
+		Short: "Approve a workflow run waiting on human decision",
+		Long:  "Resume a run that is waiting in the approval state. The run must be in wait_approval.",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			resp, err := newDaemonClient("").ApproveWorkflow(cmd.Context(), args[0])
+			if err != nil {
+				return err
+			}
+			printRun(cmd, resp.Run, isInteractiveWriter(cmd.OutOrStdout()))
+			return nil
+		},
+	}
+}
+
+func newWorkflowRejectCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "reject <id>",
+		Short: "Reject a workflow run waiting on human decision",
+		Long:  "Fail a run that is waiting in the approval state. The run must be in wait_approval.",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			resp, err := newDaemonClient("").RejectWorkflow(cmd.Context(), args[0])
+			if err != nil {
+				return err
+			}
+			printRun(cmd, resp.Run, isInteractiveWriter(cmd.OutOrStdout()))
+			return nil
+		},
+	}
+}
+
 func newWorkflowSummaryCommand() *cobra.Command {
 	var outputFormat string
 	var noColor bool
@@ -1019,6 +1057,15 @@ func printRun(cmd *cobra.Command, run daemon.WorkflowRun, colored bool) {
 	if run.PauseReason != "" {
 		lines = append(lines, f.labelValue("pause_reason", run.PauseReason))
 	}
+	if run.ApprovalNodeID != "" {
+		lines = append(lines, f.labelValue("approval_node", run.ApprovalNodeID))
+	}
+	if run.ApprovalMessage != "" {
+		lines = append(lines, f.labelValue("approval_message", run.ApprovalMessage))
+	}
+	if !run.ApprovalAt.IsZero() {
+		lines = append(lines, f.labelValue("approval_at", run.ApprovalAt.Format(time.RFC3339)))
+	}
 	if run.ResumeCount > 0 {
 		lines = append(lines, f.labelValue("resume_count", fmt.Sprint(run.ResumeCount)))
 	}
@@ -1138,14 +1185,26 @@ func renderWorkflowStatus(w io.Writer, run daemon.WorkflowRun, format string, no
 	if run.FailureReason != "" {
 		lines = append(lines, f.labelValue("failure_reason", run.FailureReason))
 	}
+	if run.ApprovalNodeID != "" {
+		lines = append(lines, f.labelValue("approval_node", run.ApprovalNodeID))
+	}
+	if run.ApprovalMessage != "" {
+		lines = append(lines, f.labelValue("approval_message", run.ApprovalMessage))
+	}
+	if !run.ApprovalAt.IsZero() {
+		lines = append(lines, f.labelValue("approval_at", run.ApprovalAt.Format(time.RFC3339)))
+	}
 	if run.TerminalError != "" {
 		lines = append(lines, f.labelValue("terminal_error", run.TerminalError))
 	}
 	if _, err := fmt.Fprintln(w, f.block(f.title("Workflow status"), lines)); err != nil {
 		return err
 	}
-	if normalizeStatus(run.Status) == "paused" {
+	switch normalizeStatus(run.Status) {
+	case "paused":
 		_, _ = fmt.Fprintln(w, f.note("hint: run `agentflow workflow resume "+run.ID+"` to continue"))
+	case "wait_approval":
+		_, _ = fmt.Fprintln(w, f.note("hint: run `agentflow workflow approve "+run.ID+"` or `agentflow workflow reject "+run.ID+"`"))
 	}
 	return nil
 }
@@ -1277,6 +1336,15 @@ func renderWorkflowInspect(w io.Writer, resp daemon.WorkflowInspectResponse, for
 	)
 	if resp.Tag != "" {
 		lines = append(lines, f.labelValue("tag", resp.Tag))
+	}
+	if resp.ApprovalNodeID != "" {
+		lines = append(lines, f.labelValue("approval_node", resp.ApprovalNodeID))
+	}
+	if resp.ApprovalMessage != "" {
+		lines = append(lines, f.labelValue("approval_message", resp.ApprovalMessage))
+	}
+	if !resp.ApprovalAt.IsZero() {
+		lines = append(lines, f.labelValue("approval_at", resp.ApprovalAt.Format(time.RFC3339)))
 	}
 	if resp.FirstError != "" {
 		lines = append(lines, f.labelValue("first_error", resp.FirstError))

@@ -131,7 +131,10 @@ type RunSummary struct {
 	StartedAt         time.Time
 	FinishedAt        time.Time
 	PausedAt          time.Time
+	ApprovalAt        time.Time
 	PauseReason       string
+	ApprovalNodeID    string
+	ApprovalMessage   string
 	ResumeCount       int
 	CurrentStep       string
 	CompletedSteps    []string

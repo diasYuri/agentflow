@@ -130,6 +130,9 @@ func (m SecretMasker) MaskCheckpoint(checkpoint Checkpoint) Checkpoint {
 		nodes[id] = m.MaskNodeResult(result)
 	}
 	checkpoint.Nodes = nodes
+	if checkpoint.Approval != nil {
+		checkpoint.Approval.Message = m.MaskString(checkpoint.Approval.Message)
+	}
 	nodeMetrics := make(map[string]NodeMetrics, len(checkpoint.Metrics.NodeMetrics))
 	for id, metrics := range checkpoint.Metrics.NodeMetrics {
 		nodeMetrics[id] = m.MaskNodeMetrics(metrics)

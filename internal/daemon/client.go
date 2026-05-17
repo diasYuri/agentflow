@@ -96,6 +96,18 @@ func (c *Client) ResumeWorkflow(ctx context.Context, runID string) (ResumeWorkfl
 	return out, err
 }
 
+func (c *Client) ApproveWorkflow(ctx context.Context, runID string) (ApproveWorkflowResponse, error) {
+	var out ApproveWorkflowResponse
+	err := c.do(ctx, http.MethodPost, "/v1/workflows/"+runID+"/approve", nil, &out)
+	return out, err
+}
+
+func (c *Client) RejectWorkflow(ctx context.Context, runID string) (RejectWorkflowResponse, error) {
+	var out RejectWorkflowResponse
+	err := c.do(ctx, http.MethodPost, "/v1/workflows/"+runID+"/reject", nil, &out)
+	return out, err
+}
+
 func (c *Client) WorkflowArtifacts(ctx context.Context, runID string) (WorkflowArtifactsResponse, error) {
 	var out WorkflowArtifactsResponse
 	err := c.do(ctx, http.MethodGet, "/v1/workflows/"+runID+"/artifacts", nil, &out)

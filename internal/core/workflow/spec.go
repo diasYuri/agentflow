@@ -152,6 +152,7 @@ type NodeKind string
 
 const (
 	NodeKindAgent     NodeKind = "agent"
+	NodeKindApproval  NodeKind = "approval"
 	NodeKindBash      NodeKind = "bash"
 	NodeKindTransform NodeKind = "transform"
 	NodeKindNoop      NodeKind = "noop"
@@ -176,6 +177,7 @@ type NodeSpec struct {
 	Provider     string          `json:"provider,omitempty" yaml:"provider"`
 	Model        string          `json:"model,omitempty" yaml:"model"`
 	Prompt       string          `json:"prompt,omitempty" yaml:"prompt"`
+	Message      string          `json:"message,omitempty" yaml:"message"`
 	System       string          `json:"system,omitempty" yaml:"system"`
 	Sandbox      SandboxSpec     `json:"sandbox,omitempty" yaml:"sandbox"`
 	OutputSchema map[string]any  `json:"output_schema,omitempty" yaml:"output_schema"`

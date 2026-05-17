@@ -64,7 +64,10 @@ CREATE TABLE IF NOT EXISTS workflow_runs (
 	failure_reason TEXT,
 	recent_events TEXT,
 	paused_at TEXT,
+	approval_at TEXT,
 	pause_reason TEXT,
+	approval_node_id TEXT,
+	approval_message TEXT,
 	resume_count INTEGER,
 	request_json TEXT,
 	tag TEXT
@@ -84,7 +87,10 @@ CREATE INDEX IF NOT EXISTS idx_workflow_runs_status ON workflow_runs(status);
 		"failure_reason TEXT",
 		"recent_events TEXT",
 		"paused_at TEXT",
+		"approval_at TEXT",
 		"pause_reason TEXT",
+		"approval_node_id TEXT",
+		"approval_message TEXT",
 		"resume_count INTEGER",
 		"request_json TEXT",
 		"tag TEXT",
@@ -101,7 +107,7 @@ CREATE INDEX IF NOT EXISTS idx_workflow_runs_status ON workflow_runs(status);
 
 func (s *SQLiteRunStore) LoadRuns(ctx context.Context) ([]WorkflowRun, error) {
 	rows, err := s.db.QueryContext(ctx, `
-SELECT id, workflow, run_dir, status, started_at, finished_at, error, current_step, completed_steps, pending_steps, total_steps, terminal_error, failure_reason, recent_events, paused_at, pause_reason, resume_count, request_json, tag
+SELECT id, workflow, run_dir, status, started_at, finished_at, error, current_step, completed_steps, pending_steps, total_steps, terminal_error, failure_reason, recent_events, paused_at, approval_at, pause_reason, approval_node_id, approval_message, resume_count, request_json, tag
 FROM workflow_runs
 ORDER BY started_at DESC`)
 	if err != nil {
@@ -113,10 +119,10 @@ ORDER BY started_at DESC`)
 	for rows.Next() {
 		var run WorkflowRun
 		var startedAt string
-		var finishedAt, pausedAt sql.NullString
+		var finishedAt, pausedAt, approvalAt sql.NullString
 		var completedSteps, pendingSteps, recentEvents sql.NullString
 		var runError, currentStep, terminalError, failureReason sql.NullString
-		var pauseReason, requestJSON sql.NullString
+		var pauseReason, approvalNodeID, approvalMessage, requestJSON sql.NullString
 		var tag sql.NullString
 		var totalSteps, resumeCount sql.NullInt64
 		if err := rows.Scan(
@@ -124,7 +130,7 @@ ORDER BY started_at DESC`)
 			&startedAt, &finishedAt, &runError,
 			&currentStep, &completedSteps, &pendingSteps,
 			&totalSteps, &terminalError, &failureReason, &recentEvents,
-			&pausedAt, &pauseReason, &resumeCount, &requestJSON, &tag,
+			&pausedAt, &approvalAt, &pauseReason, &approvalNodeID, &approvalMessage, &resumeCount, &requestJSON, &tag,
 		); err != nil {
 			return nil, err
 		}
@@ -162,8 +168,21 @@ ORDER BY started_at DESC`)
 			}
 			run.PausedAt = parsedPausedAt
 		}
+		if approvalAt.Valid && approvalAt.String != "" {
+			parsedApprovalAt, err := time.Parse(time.RFC3339Nano, approvalAt.String)
+			if err != nil {
+				return nil, fmt.Errorf("parse approval_at for run %q: %w", run.ID, err)
+			}
+			run.ApprovalAt = parsedApprovalAt
+		}
 		if pauseReason.Valid {
 			run.PauseReason = pauseReason.String
+		}
+		if approvalNodeID.Valid {
+			run.ApprovalNodeID = approvalNodeID.String
+		}
+		if approvalMessage.Valid {
+			run.ApprovalMessage = approvalMessage.String
 		}
 		if resumeCount.Valid {
 			run.ResumeCount = int(resumeCount.Int64)
@@ -192,12 +211,15 @@ ORDER BY started_at DESC`)
 }
 
 func (s *SQLiteRunStore) UpsertRun(ctx context.Context, run WorkflowRun) error {
-	var finishedAt, pausedAt any
+	var finishedAt, pausedAt, approvalAt any
 	if !run.FinishedAt.IsZero() {
 		finishedAt = run.FinishedAt.UTC().Format(time.RFC3339Nano)
 	}
 	if !run.PausedAt.IsZero() {
 		pausedAt = run.PausedAt.UTC().Format(time.RFC3339Nano)
+	}
+	if !run.ApprovalAt.IsZero() {
+		approvalAt = run.ApprovalAt.UTC().Format(time.RFC3339Nano)
 	}
 	completedSteps, _ := json.Marshal(run.CompletedSteps)
 	pendingSteps, _ := json.Marshal(run.PendingSteps)
@@ -209,8 +231,8 @@ func (s *SQLiteRunStore) UpsertRun(ctx context.Context, run WorkflowRun) error {
 		}
 	}
 	_, err := s.db.ExecContext(ctx, `
-INSERT INTO workflow_runs (id, workflow, run_dir, status, started_at, finished_at, error, current_step, completed_steps, pending_steps, total_steps, terminal_error, failure_reason, recent_events, paused_at, pause_reason, resume_count, request_json, tag)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO workflow_runs (id, workflow, run_dir, status, started_at, finished_at, error, current_step, completed_steps, pending_steps, total_steps, terminal_error, failure_reason, recent_events, paused_at, approval_at, pause_reason, approval_node_id, approval_message, resume_count, request_json, tag)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
 	workflow = excluded.workflow,
 	run_dir = excluded.run_dir,
@@ -226,7 +248,10 @@ ON CONFLICT(id) DO UPDATE SET
 	failure_reason = excluded.failure_reason,
 	recent_events = excluded.recent_events,
 	paused_at = excluded.paused_at,
+	approval_at = excluded.approval_at,
 	pause_reason = excluded.pause_reason,
+	approval_node_id = excluded.approval_node_id,
+	approval_message = excluded.approval_message,
 	resume_count = excluded.resume_count,
 	request_json = COALESCE(excluded.request_json, workflow_runs.request_json),
 	tag = COALESCE(excluded.tag, workflow_runs.tag)`,
@@ -245,7 +270,10 @@ ON CONFLICT(id) DO UPDATE SET
 		run.FailureReason,
 		string(recentEvents),
 		pausedAt,
+		approvalAt,
 		run.PauseReason,
+		run.ApprovalNodeID,
+		run.ApprovalMessage,
 		run.ResumeCount,
 		requestJSON,
 		run.Tag,

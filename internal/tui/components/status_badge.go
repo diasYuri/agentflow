@@ -20,7 +20,7 @@ func StatusBadge(t *theme.Theme, status string) string {
 		style = t.Danger
 	case "cancelled", "canceled":
 		style = t.Muted
-	case "paused":
+	case "paused", "wait_approval":
 		style = t.Warning
 	default:
 		style = t.Muted

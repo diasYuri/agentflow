@@ -70,7 +70,7 @@ func (f cliFormat) status(text string) string {
 		return f.render(f.dangerStyle, text)
 	case "running":
 		return f.render(f.accentStyle, text)
-	case "paused":
+	case "paused", "wait_approval":
 		return f.render(f.warningStyle, text)
 	default:
 		return text

@@ -68,25 +68,28 @@ type RunWorkflowRequest struct {
 }
 
 type WorkflowRun struct {
-	ID             string              `json:"id"`
-	Workflow       string              `json:"workflow"`
-	RunDir         string              `json:"run_dir"`
-	Status         corerun.RunStatus   `json:"status"`
-	StartedAt      time.Time           `json:"started_at"`
-	FinishedAt     time.Time           `json:"finished_at,omitempty"`
-	PausedAt       time.Time           `json:"paused_at,omitempty"`
-	PauseReason    string              `json:"pause_reason,omitempty"`
-	ResumeCount    int                 `json:"resume_count,omitempty"`
-	CurrentStep    string              `json:"current_step,omitempty"`
-	CompletedSteps []string            `json:"completed_steps,omitempty"`
-	PendingSteps   []string            `json:"pending_steps,omitempty"`
-	TotalSteps     int                 `json:"total_steps,omitempty"`
-	Error          string              `json:"error,omitempty"`
-	TerminalError  string              `json:"terminal_error,omitempty"`
-	FailureReason  string              `json:"failure_reason,omitempty"`
-	RecentEvents   []string            `json:"recent_events,omitempty"`
-	Tag            string              `json:"tag,omitempty"`
-	Request        *RunWorkflowRequest `json:"-"`
+	ID              string              `json:"id"`
+	Workflow        string              `json:"workflow"`
+	RunDir          string              `json:"run_dir"`
+	Status          corerun.RunStatus   `json:"status"`
+	StartedAt       time.Time           `json:"started_at"`
+	FinishedAt      time.Time           `json:"finished_at,omitempty"`
+	PausedAt        time.Time           `json:"paused_at,omitempty"`
+	ApprovalAt      time.Time           `json:"approval_at,omitempty"`
+	PauseReason     string              `json:"pause_reason,omitempty"`
+	ApprovalNodeID  string              `json:"approval_node_id,omitempty"`
+	ApprovalMessage string              `json:"approval_message,omitempty"`
+	ResumeCount     int                 `json:"resume_count,omitempty"`
+	CurrentStep     string              `json:"current_step,omitempty"`
+	CompletedSteps  []string            `json:"completed_steps,omitempty"`
+	PendingSteps    []string            `json:"pending_steps,omitempty"`
+	TotalSteps      int                 `json:"total_steps,omitempty"`
+	Error           string              `json:"error,omitempty"`
+	TerminalError   string              `json:"terminal_error,omitempty"`
+	FailureReason   string              `json:"failure_reason,omitempty"`
+	RecentEvents    []string            `json:"recent_events,omitempty"`
+	Tag             string              `json:"tag,omitempty"`
+	Request         *RunWorkflowRequest `json:"-"`
 }
 
 type RunWorkflowResponse struct {
@@ -223,29 +226,32 @@ type WorkflowTimelineResponse struct {
 }
 
 type WorkflowInspectResponse struct {
-	RunID          string                `json:"run_id"`
-	Workflow       string                `json:"workflow"`
-	Status         corerun.RunStatus     `json:"status"`
-	StartedAt      time.Time             `json:"started_at"`
-	FinishedAt     time.Time             `json:"finished_at,omitempty"`
-	DurationMS     int64                 `json:"duration_ms"`
-	CurrentStep    string                `json:"current_step,omitempty"`
-	CompletedSteps []string              `json:"completed_steps,omitempty"`
-	PendingSteps   []string              `json:"pending_steps,omitempty"`
-	TotalSteps     int                   `json:"total_steps"`
-	FailedNodes    int                   `json:"failed_nodes"`
-	Retries        int                   `json:"retries"`
-	AgentCalls     int                   `json:"agent_calls"`
-	BashCalls      int                   `json:"bash_calls"`
-	FirstError     string                `json:"first_error,omitempty"`
-	Error          string                `json:"error,omitempty"`
-	TerminalError  string                `json:"terminal_error,omitempty"`
-	FailureReason  string                `json:"failure_reason,omitempty"`
-	Tag            string                `json:"tag,omitempty"`
-	ArtifactCount  int                   `json:"artifact_count"`
-	NodeCount      int                   `json:"node_count"`
-	SlowestNodes   []corerun.SlowestNode `json:"slowest_nodes,omitempty"`
-	AgentUsage     []corerun.AgentUsage  `json:"agent_usage,omitempty"`
+	RunID           string                `json:"run_id"`
+	Workflow        string                `json:"workflow"`
+	Status          corerun.RunStatus     `json:"status"`
+	StartedAt       time.Time             `json:"started_at"`
+	FinishedAt      time.Time             `json:"finished_at,omitempty"`
+	ApprovalAt      time.Time             `json:"approval_at,omitempty"`
+	DurationMS      int64                 `json:"duration_ms"`
+	CurrentStep     string                `json:"current_step,omitempty"`
+	CompletedSteps  []string              `json:"completed_steps,omitempty"`
+	PendingSteps    []string              `json:"pending_steps,omitempty"`
+	TotalSteps      int                   `json:"total_steps"`
+	FailedNodes     int                   `json:"failed_nodes"`
+	Retries         int                   `json:"retries"`
+	AgentCalls      int                   `json:"agent_calls"`
+	BashCalls       int                   `json:"bash_calls"`
+	FirstError      string                `json:"first_error,omitempty"`
+	Error           string                `json:"error,omitempty"`
+	TerminalError   string                `json:"terminal_error,omitempty"`
+	FailureReason   string                `json:"failure_reason,omitempty"`
+	ApprovalNodeID  string                `json:"approval_node_id,omitempty"`
+	ApprovalMessage string                `json:"approval_message,omitempty"`
+	Tag             string                `json:"tag,omitempty"`
+	ArtifactCount   int                   `json:"artifact_count"`
+	NodeCount       int                   `json:"node_count"`
+	SlowestNodes    []corerun.SlowestNode `json:"slowest_nodes,omitempty"`
+	AgentUsage      []corerun.AgentUsage  `json:"agent_usage,omitempty"`
 }
 
 const (
@@ -255,6 +261,14 @@ const (
 )
 
 type CancelWorkflowResponse struct {
+	Run WorkflowRun `json:"run"`
+}
+
+type ApproveWorkflowResponse struct {
+	Run WorkflowRun `json:"run"`
+}
+
+type RejectWorkflowResponse struct {
 	Run WorkflowRun `json:"run"`
 }
 

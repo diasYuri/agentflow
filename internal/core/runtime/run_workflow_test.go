@@ -129,6 +129,55 @@ nodes:
 	}
 }
 
+func TestRunWorkflowApprovalWaitsAndPersistsMessage(t *testing.T) {
+	dir := t.TempDir()
+	workflowPath := writeWorkflow(t, dir, `
+version: "1"
+name: approval-flow
+execution:
+  output_dir: "`+filepath.ToSlash(filepath.Join(dir, "runs"))+`"
+nodes:
+  - id: start
+    kind: noop
+  - id: gate
+    kind: approval
+    depends_on: [start]
+    message: "Approve release for ${run.workflow}?"
+  - id: finish
+    kind: noop
+    depends_on: [gate]
+`)
+	events := eventmemory.New()
+	uc := newTestRunWorkflowUseCase(dir, &scriptedShell{}, events)
+
+	result, err := uc.Run(context.Background(), RunOptions{WorkflowRef: workflowPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != run.RunWaitingApproval {
+		t.Fatalf("expected wait_approval, got %s", result.Status)
+	}
+	if result.ApprovalNodeID != "gate" {
+		t.Fatalf("expected approval node gate, got %q", result.ApprovalNodeID)
+	}
+	if result.ApprovalMessage != "Approve release for approval-flow?" {
+		t.Fatalf("unexpected approval message: %q", result.ApprovalMessage)
+	}
+	checkpoint := readCheckpoint(t, filepath.Join(result.RunDir, "checkpoint.json"))
+	if checkpoint.Status != run.RunWaitingApproval {
+		t.Fatalf("expected wait_approval checkpoint, got %s", checkpoint.Status)
+	}
+	if checkpoint.Approval == nil || checkpoint.Approval.NodeID != "gate" {
+		t.Fatalf("expected approval checkpoint for gate, got %#v", checkpoint.Approval)
+	}
+	if checkpoint.Approval.Message != "Approve release for approval-flow?" {
+		t.Fatalf("unexpected checkpoint message: %q", checkpoint.Approval.Message)
+	}
+	if findEvent(events.Events, "run.wait_approval", "gate") == nil {
+		t.Fatalf("expected run.wait_approval event, got %#v", events.Events)
+	}
+}
+
 func TestRunWorkflowRejectsInvalidProvidedInputType(t *testing.T) {
 	dir := t.TempDir()
 	workflowPath := writeWorkflow(t, dir, `

@@ -414,6 +414,10 @@ func validateNode(spec *WorkflowSpec, node NodeSpec, providers ProviderLookup) e
 		if providers != nil && !providers.HasProvider(provider) {
 			return fmt.Errorf("unknown agent provider %q", provider)
 		}
+	case NodeKindApproval:
+		if strings.TrimSpace(node.Message) == "" {
+			return fmt.Errorf("approval message is required")
+		}
 	case NodeKindBash:
 		if strings.TrimSpace(node.Command) == "" {
 			return fmt.Errorf("bash command is required")
@@ -538,6 +542,9 @@ func validateNodeReferences(node NodeSpec, nodes map[string]NodeSpec) error {
 		return err
 	}
 	if err := check("prompt", node.Prompt); err != nil {
+		return err
+	}
+	if err := check("message", node.Message); err != nil {
 		return err
 	}
 	if err := check("system", node.System); err != nil {
@@ -728,6 +735,7 @@ func validateExpressionsInNode(node NodeSpec, checkTemplate func(string, string)
 		{prefix + ".when", node.When, true},
 		{prefix + ".for_each", node.ForEach, true},
 		{prefix + ".prompt", node.Prompt, false},
+		{prefix + ".message", node.Message, false},
 		{prefix + ".system", node.System, false},
 		{prefix + ".command", node.Command, false},
 		{prefix + ".working_dir", node.WorkingDir, false},

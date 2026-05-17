@@ -26,6 +26,7 @@ type Executor struct {
 const internalGitWorktreeProvider = "git"
 
 var errRunPaused = errors.New("run paused")
+var errRunWaitingApproval = errors.New("run waiting approval")
 
 func Execute(ctx context.Context, svc Services, req ExecutionRequest) (Result, error) {
 	return (&Executor{svc: svc}).execute(ctx, req)
@@ -104,6 +105,9 @@ func (e *Executor) execute(ctx context.Context, req ExecutionRequest) (Result, e
 		}
 		if errors.Is(err, errRunPaused) {
 			return e.finish(ctx, req.Plan, state, corerun.RunPaused, nil)
+		}
+		if errors.Is(err, errRunWaitingApproval) {
+			return e.finish(ctx, req.Plan, state, corerun.RunWaitingApproval, nil)
 		}
 		return e.finish(ctx, req.Plan, state, corerun.RunFailed, err)
 	}
@@ -358,6 +362,9 @@ func (e *Executor) resume(ctx context.Context, req ExecutionRequest) (Result, er
 		if errors.Is(err, errRunPaused) {
 			return e.finish(ctx, plan, state, corerun.RunPaused, nil)
 		}
+		if errors.Is(err, errRunWaitingApproval) {
+			return e.finish(ctx, plan, state, corerun.RunWaitingApproval, nil)
+		}
 		return e.finish(ctx, plan, state, corerun.RunFailed, err)
 	}
 	return e.finish(ctx, plan, state, corerun.RunSuccess, nil)
@@ -435,6 +442,25 @@ func (e *Executor) executeNodes(ctx context.Context, state *ExecutionState, plan
 			continue
 		}
 		_ = e.emitState(ctx, state, corerun.Event{Type: "node.ready", NodeID: nodeID})
+		if node.Kind == coreworkflow.NodeKindApproval {
+			if err := e.requestApproval(ctx, state, pc, node); err != nil {
+				if errors.Is(err, errRunWaitingApproval) {
+					return err
+				}
+				result := corerun.NodeResult{RunID: state.runID, NodeID: nodeID, Status: corerun.NodeFailed, Error: err.Error(), Path: append([]string(nil), state.path...)}
+				e.recordNode(ctx, state, node, result)
+				if !node.ContinueOnError {
+					if plan.Workflow.Execution.PauseWhenFail {
+						return e.pauseOnFailure(ctx, state, pc, nodeID)
+					}
+					return fmt.Errorf("node %q approval failed: %w", nodeID, err)
+				}
+				pc++
+				_ = e.saveCheckpoint(ctx, state, true, pc, "", "")
+				continue
+			}
+			return errRunWaitingApproval
+		}
 		result := e.executeNode(ctx, state, node)
 		e.recordNode(ctx, state, node, result)
 		if isFailure(result.Status) && !node.ContinueOnError {
@@ -486,6 +512,27 @@ func (e *Executor) pauseManual(ctx context.Context, state *ExecutionState, curso
 		return err
 	}
 	return errRunPaused
+}
+
+func (e *Executor) requestApproval(ctx context.Context, state *ExecutionState, cursor int, node coreworkflow.NodeSpec) error {
+	message, err := coreworkflow.RenderTemplate(node.Message, state.evalContext(state.index, state.total, state.item))
+	if err != nil {
+		return err
+	}
+	state.approvalNodeID = node.ID
+	state.approvalMessage = message
+	approval := corerun.ApprovalCheckpoint{NodeID: node.ID, Message: message}
+	eventData := map[string]any{
+		"node_id": node.ID,
+		"message": message,
+	}
+	_ = e.emitState(ctx, state, corerun.Event{Type: "run.wait_approval", NodeID: node.ID, Data: eventData})
+	_ = e.emitState(ctx, state, corerun.Event{Type: "node.approval.requested", NodeID: node.ID, Data: eventData})
+	state.addTimeline(corerun.TimelineEntry{Timestamp: e.now(), Type: "run.wait_approval", NodeID: node.ID})
+	if err := e.saveApprovalCheckpoint(ctx, state, cursor+1, approval); err != nil {
+		return err
+	}
+	return errRunWaitingApproval
 }
 
 func (e *Executor) resolveGoToIf(node coreworkflow.NodeSpec, state *ExecutionState, indexByID map[string]int) (int, error) {

@@ -21,14 +21,15 @@ const (
 type RunStatus string
 
 const (
-	RunCreated    RunStatus = "created"
-	RunValidating RunStatus = "validating"
-	RunPlanned    RunStatus = "planned"
-	RunRunning    RunStatus = "running"
-	RunPaused     RunStatus = "paused"
-	RunSuccess    RunStatus = "success"
-	RunFailed     RunStatus = "failed"
-	RunCancelled  RunStatus = "cancelled"
+	RunCreated         RunStatus = "created"
+	RunValidating      RunStatus = "validating"
+	RunPlanned         RunStatus = "planned"
+	RunRunning         RunStatus = "running"
+	RunPaused          RunStatus = "paused"
+	RunWaitingApproval RunStatus = "wait_approval"
+	RunSuccess         RunStatus = "success"
+	RunFailed          RunStatus = "failed"
+	RunCancelled       RunStatus = "cancelled"
 )
 
 type PauseReason string
@@ -238,6 +239,11 @@ type WorktreeCheckpoint struct {
 	DestinationWorkingDir string `json:"destination_working_dir"`
 }
 
+type ApprovalCheckpoint struct {
+	NodeID  string `json:"node_id"`
+	Message string `json:"message"`
+}
+
 type ArtifactKind string
 
 const (
@@ -279,4 +285,5 @@ type Checkpoint struct {
 	Metrics      CheckpointMetrics     `json:"metrics"`
 	Nodes        map[string]NodeResult `json:"nodes,omitempty"`
 	Worktree     *WorktreeCheckpoint   `json:"worktree,omitempty"`
+	Approval     *ApprovalCheckpoint   `json:"approval,omitempty"`
 }

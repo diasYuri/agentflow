@@ -387,6 +387,8 @@ func (e *Executor) cleanupWorktree(ctx context.Context, state *ExecutionState, m
 		}
 	case corerun.RunPaused:
 		shouldRemove = false
+	case corerun.RunWaitingApproval:
+		shouldRemove = false
 	}
 
 	if shouldRemove {

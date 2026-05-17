@@ -151,6 +151,49 @@ func TestClaudeSampleWorkflowValidates(t *testing.T) {
 	}
 }
 
+func TestGoalV2WorkflowValidates(t *testing.T) {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve test path")
+	}
+	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
+	path := filepath.Join(root, ".agentflow", "workflows", "goal-v2.yaml")
+
+	spec, err := decodeWorkflow(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.Version != workflow.WorkflowVersion2 {
+		t.Fatalf("expected version %q, got %q", workflow.WorkflowVersion2, spec.Version)
+	}
+	if spec.Inputs == nil || spec.Inputs["goal"].Type != "string" || !spec.Inputs["goal"].Required {
+		t.Fatalf("expected required string goal input, got %#v", spec.Inputs["goal"])
+	}
+	if len(spec.Outputs) == 0 {
+		t.Fatal("expected workflow outputs to be decoded")
+	}
+	if _, ok := spec.Outputs["plan_matrix"]; !ok {
+		t.Fatal("expected plan_matrix output")
+	}
+	if _, ok := spec.Outputs["verification"]; !ok {
+		t.Fatal("expected verification output")
+	}
+	if len(spec.Nodes) != 5 {
+		t.Fatalf("expected 5 expanded nodes, got %d", len(spec.Nodes))
+	}
+	verifyNode := spec.Nodes[len(spec.Nodes)-1]
+	if verifyNode.ID != "verify_goal" {
+		t.Fatalf("expected final node verify_goal, got %q", verifyNode.ID)
+	}
+	if verifyNode.GoToIf == nil || verifyNode.GoToIf.Target != "draft_goal_spec" {
+		t.Fatalf("expected verify_goal to loop back to draft_goal_spec, got %#v", verifyNode.GoToIf)
+	}
+
+	if err := workflow.Validate(spec, workflow.DefaultProviders(), nil); err != nil {
+		t.Fatalf("expected goal-v2 workflow to validate: %v", err)
+	}
+}
+
 func TestDecodeWorktreeTrue(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "worktree-true.yaml")

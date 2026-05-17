@@ -165,6 +165,9 @@ func (r *Runs) renderHeader(t *theme.Theme) string {
 		}
 		b.WriteString(t.Muted.Render(fmt.Sprintf("Started: %s • Duration: %s", r.run.StartedAt.Format(time.RFC3339), duration)) + "\n")
 	}
+	if r.run.ApprovalMessage != "" {
+		b.WriteString(t.Warning.Render("Approval: "+trunc(r.run.ApprovalMessage, r.width-10)) + "\n")
+	}
 	return b.String()
 }
 

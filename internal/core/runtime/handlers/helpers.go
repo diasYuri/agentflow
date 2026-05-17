@@ -47,13 +47,15 @@ type PauseSignaller interface {
 }
 
 type Result struct {
-	RunID         string
-	RunDir        string
-	Status        corerun.RunStatus
-	PauseReason   corerun.PauseReason
-	FailureReason string
-	Summary       corerun.Summary
-	Plan          coreworkflow.ExecutionPlan
+	RunID           string
+	RunDir          string
+	Status          corerun.RunStatus
+	PauseReason     corerun.PauseReason
+	ApprovalNodeID  string
+	ApprovalMessage string
+	FailureReason   string
+	Summary         corerun.Summary
+	Plan            coreworkflow.ExecutionPlan
 }
 
 type ExecutionRequest struct {

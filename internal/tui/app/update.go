@@ -404,7 +404,7 @@ func canControlStatus(status, action string) bool {
 	s := strings.ToLower(status)
 	switch action {
 	case "cancel":
-		return s == "running" || s == "created" || s == "paused"
+		return s == "running" || s == "created" || s == "paused" || s == "wait_approval"
 	case "pause":
 		return s == "running" || s == "created"
 	case "resume":

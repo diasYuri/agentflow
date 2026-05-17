@@ -119,7 +119,7 @@ func statusBarChartFallback(t *theme.Theme, width int, statuses map[string]int) 
 			style = t.Danger
 		case "cancelled", "canceled":
 			style = t.Muted
-		case "paused":
+		case "paused", "wait_approval":
 			style = t.Warning
 		}
 		filled := count * barWidth / maxVal

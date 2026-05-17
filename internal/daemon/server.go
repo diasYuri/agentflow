@@ -197,6 +197,25 @@ func (s *Server) handleWorkflow(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, ResumeWorkflowResponse{Run: run})
 		return
 	}
+	if len(parts) == 2 && parts[1] == "approve" && r.Method == http.MethodPost {
+		run, err := s.manager.ApproveWorkflow(runID)
+		if err != nil {
+			writeError(w, statusForError(err), err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, ApproveWorkflowResponse{Run: run})
+		return
+	}
+	if len(parts) == 2 && parts[1] == "reject" && r.Method == http.MethodPost {
+		reason := strings.TrimSpace(r.URL.Query().Get("reason"))
+		run, err := s.manager.RejectWorkflow(runID, reason)
+		if err != nil {
+			writeError(w, statusForError(err), err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, RejectWorkflowResponse{Run: run})
+		return
+	}
 	if len(parts) == 2 && parts[1] == "artifacts" && r.Method == http.MethodGet {
 		resp, err := s.manager.WorkflowArtifacts(runID)
 		if err != nil {
@@ -307,6 +326,8 @@ func statusForError(err error) int {
 	if err != nil {
 		msg := err.Error()
 		if strings.Contains(msg, "only paused runs can be resumed") ||
+			strings.Contains(msg, "only wait_approval runs can be approved") ||
+			strings.Contains(msg, "only wait_approval runs can be rejected") ||
 			strings.Contains(msg, "is not active in this daemon process") ||
 			strings.Contains(msg, "has no persisted request") ||
 			strings.Contains(msg, "is already success") ||

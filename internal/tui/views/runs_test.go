@@ -112,6 +112,16 @@ func TestRunsViewRendersHeader(t *testing.T) {
 	}
 }
 
+func TestRunsViewRendersApprovalMessage(t *testing.T) {
+	r := NewRuns(nil, animation.NewConfig(true))
+	r.SetSize(80, 24)
+	r.SetRun(client.RunSummary{ID: "r1", Workflow: "wf1", Status: "wait_approval", ApprovalMessage: "Approve release?"})
+	v := r.View(theme.Default(theme.ModeDark))
+	if !strings.Contains(v, "Approve release?") {
+		t.Fatal("expected approval message in view")
+	}
+}
+
 func TestRunsViewRendersProgress(t *testing.T) {
 	r := NewRuns(nil, animation.NewConfig(true))
 	r.SetSize(80, 24)

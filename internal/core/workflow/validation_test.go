@@ -98,6 +98,39 @@ func TestValidateAllowsAgentPermissionWrite(t *testing.T) {
 	}
 }
 
+func TestValidateAllowsApprovalMessageTemplate(t *testing.T) {
+	spec := &WorkflowSpec{
+		Version: "1",
+		Name:    "approval",
+		Nodes: []NodeSpec{
+			{ID: "start", Kind: NodeKindNoop},
+			{ID: "gate", Kind: NodeKindApproval, DependsOn: []string{"start"}, Message: "Approve ${run.workflow}?"},
+		},
+	}
+
+	if err := Validate(spec, DefaultProviders(), nil); err != nil {
+		t.Fatalf("expected approval node to validate, got %v", err)
+	}
+}
+
+func TestValidateRejectsApprovalWithoutMessage(t *testing.T) {
+	spec := &WorkflowSpec{
+		Version: "1",
+		Name:    "approval",
+		Nodes: []NodeSpec{
+			{ID: "gate", Kind: NodeKindApproval},
+		},
+	}
+
+	err := Validate(spec, DefaultProviders(), nil)
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+	if !strings.Contains(err.Error(), "approval message is required") {
+		t.Fatalf("expected approval message error, got %v", err)
+	}
+}
+
 func TestValidateAllowsClaudeAgentProvider(t *testing.T) {
 	spec := &WorkflowSpec{
 		Version: "1",

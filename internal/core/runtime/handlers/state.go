@@ -46,6 +46,8 @@ type ExecutionState struct {
 	worktreeBaseCommit    string
 	worktree              coreports.Worktree
 	tag                   string
+	approvalNodeID        string
+	approvalMessage       string
 }
 
 type executionMetrics struct {
@@ -375,6 +377,21 @@ func (e *Executor) saveCheckpoint(ctx context.Context, state *ExecutionState, en
 	if !enabled || state == nil || state.parent != nil {
 		return nil
 	}
+	checkpoint := e.buildCheckpoint(state, cursor, retryNodeID, reason)
+	return e.svc.Runs.SaveCheckpoint(ctx, state.masker.MaskCheckpoint(checkpoint))
+}
+
+func (e *Executor) saveApprovalCheckpoint(ctx context.Context, state *ExecutionState, cursor int, approval corerun.ApprovalCheckpoint) error {
+	if state == nil || state.parent != nil {
+		return nil
+	}
+	checkpoint := e.buildCheckpoint(state, cursor, "", "")
+	checkpoint.Status = corerun.RunWaitingApproval
+	checkpoint.Approval = &approval
+	return e.svc.Runs.SaveCheckpoint(ctx, state.masker.MaskCheckpoint(checkpoint))
+}
+
+func (e *Executor) buildCheckpoint(state *ExecutionState, cursor int, retryNodeID string, reason corerun.PauseReason) corerun.Checkpoint {
 	nodes := make(map[string]corerun.NodeResult, len(state.results))
 	for id, result := range state.results {
 		nodes[id] = result
@@ -420,7 +437,7 @@ func (e *Executor) saveCheckpoint(ctx context.Context, state *ExecutionState, en
 	if reason != "" {
 		checkpoint.Status = corerun.RunPaused
 	}
-	return e.svc.Runs.SaveCheckpoint(ctx, state.masker.MaskCheckpoint(checkpoint))
+	return checkpoint
 }
 
 func (e *Executor) evaluateAndPersistWorkflowOutputs(ctx context.Context, state *ExecutionState, workflow coreworkflow.WorkflowSpec) error {
@@ -494,7 +511,7 @@ func (e *Executor) finish(ctx context.Context, plan coreworkflow.ExecutionPlan, 
 			}
 			e.cleanupWorktree(persistCtx, state, &wtMeta, status)
 			_ = e.saveWorktreeStatus(persistCtx, state, wtMeta)
-		case corerun.RunFailed, corerun.RunCancelled, corerun.RunPaused:
+		case corerun.RunFailed, corerun.RunCancelled, corerun.RunPaused, corerun.RunWaitingApproval:
 			meta := e.initialWorktreeMetadata(persistCtx, state)
 			meta.MergeStatus = corerun.WorktreeMergeFailed
 			if provider, ok := e.svc.Worktrees.Get(state.worktreeProvider); ok {
@@ -536,7 +553,7 @@ func (e *Executor) finish(ctx context.Context, plan coreworkflow.ExecutionPlan, 
 		}
 	}
 
-	if status != corerun.RunPaused {
+	if status != corerun.RunPaused && status != corerun.RunWaitingApproval {
 		if hookErr := e.runHooks(persistCtx, state, coreworkflow.HookPhaseAfterRun); hookErr != nil {
 			if status == corerun.RunSuccess {
 				status = corerun.RunFailed
@@ -554,12 +571,23 @@ func (e *Executor) finish(ctx context.Context, plan coreworkflow.ExecutionPlan, 
 	switch status {
 	case corerun.RunPaused:
 		eventType = "run.paused"
+	case corerun.RunWaitingApproval:
+		eventType = "run.wait_approval"
 	case corerun.RunFailed, corerun.RunCancelled:
 		eventType = "run.failed"
 	}
 	eventData := map[string]any{"status": status}
 	if status == corerun.RunPaused && pauseReason != "" {
 		eventData["reason"] = pauseReason
+	}
+	if status == corerun.RunWaitingApproval && state.cursor < len(plan.Order) {
+		eventData["cursor"] = state.cursor
+		if state.approvalNodeID != "" {
+			eventData["node_id"] = state.approvalNodeID
+		}
+		if state.approvalMessage != "" {
+			eventData["message"] = state.approvalMessage
+		}
 	}
 	_ = e.emitState(persistCtx, state, corerun.Event{Type: eventType, Data: eventData})
 	state.addTimeline(corerun.TimelineEntry{Timestamp: finished, Type: eventType})
@@ -586,6 +614,8 @@ func (e *Executor) finish(ctx context.Context, plan coreworkflow.ExecutionPlan, 
 		}
 	case status == corerun.RunPaused && pauseReason == corerun.PauseReasonPauseWhenFail:
 		failureReason = firstFailureReason(summary.Nodes)
+	case status == corerun.RunWaitingApproval:
+		failureReason = ""
 	case status == corerun.RunFailed:
 		failureReason = firstFailureReason(summary.Nodes)
 	}
@@ -609,7 +639,17 @@ func (e *Executor) finish(ctx context.Context, plan coreworkflow.ExecutionPlan, 
 	if status == corerun.RunPaused {
 		finalErr = nil
 	}
-	return Result{RunID: state.runID, RunDir: dir, Status: status, PauseReason: pauseReason, FailureReason: failureReason, Summary: publicSummary, Plan: plan}, maskError(state.masker, finalErr)
+	return Result{
+		RunID:           state.runID,
+		RunDir:          dir,
+		Status:          status,
+		PauseReason:     pauseReason,
+		ApprovalNodeID:  state.approvalNodeID,
+		ApprovalMessage: state.approvalMessage,
+		FailureReason:   failureReason,
+		Summary:         publicSummary,
+		Plan:            plan,
+	}, maskError(state.masker, finalErr)
 }
 
 func (e *Executor) emit(ctx context.Context, runID string, event corerun.Event) error {
