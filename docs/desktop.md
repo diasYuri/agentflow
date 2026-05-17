@@ -16,6 +16,10 @@ Aplicacao desktop do Agentflow construida com [Wails v3](https://v3.wails.io/).
 - Go 1.24+
 - Node.js + npm
 - Wails v3 CLI (opcional, para gerar bindings e dev mode nativo)
+- macOS: Xcode Command Line Tools
+- Linux: `gcc`, `gtk4` e `webkitgtk-6.0`
+
+Depois da instalacao, rode `wails3 doctor` para validar as dependencias do ambiente.
 
 ```bash
 # Instalar Wails v3 CLI (opcional)
@@ -58,6 +62,80 @@ wails3 dev
 # Build de producao completo
 wails3 build
 ```
+
+## Distribuicao e Instalacao
+
+### Resumo dos requisitos por canal
+
+- Desenvolvimento local: Go, Node.js, npm, Wails CLI e dependencias nativas da plataforma.
+- GitHub Actions: runner da plataforma alvo, Go 1.24+, Node.js, Wails CLI e `task` quando o build usar o fluxo padrao do Wails.
+- Homebrew: artefatos versionados e publicados em release, com cask para o app desktop e formula apenas para binario CLI.
+
+### GitHub Actions
+
+O pipeline de distribuicao precisa cobrir pelo menos os alvos que o app realmente publica. Para o desktop, o caminho mais simples e usar matriz por sistema operacional e compilar em runners hospedados pelo GitHub.
+
+Checklist recomendado:
+
+- `actions/checkout` para obter o codigo;
+- `actions/setup-go` com a versao suportada pelo projeto;
+- `actions/setup-node` para instalar dependencias do frontend;
+- instalacao do `wails3` via `go install github.com/wailsapp/wails/v3/cmd/wails3@latest`;
+- build do frontend antes do empacotamento final;
+- upload do conteudo gerado em `bin/` como artifact;
+- em macOS, configurar assinatura e notarizacao quando a distribuicao exigir app assinado.
+
+Exemplo de fluxo:
+
+```yaml
+name: desktop-build
+on:
+  push:
+    tags:
+      - "v*"
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: go install github.com/wailsapp/wails/v3/cmd/wails3@latest
+      - name: Install Task
+        uses: arduino/setup-task@v2
+      - run: wails3 build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agentflow-${{ matrix.os }}
+          path: bin/
+```
+
+### Homebrew
+
+Para distribuicao via Homebrew, a regra pratica e separar os formatos:
+
+- `formula`: para o binario de linha de comando.
+- `cask`: para o app `.app` do desktop.
+
+Isso segue a orientacao do Homebrew de nao colocar apps `.app` em formulae e de evitar formulae binarias no `homebrew/core`. O caminho mais previsivel e publicar os artefatos em GitHub Releases, gerar checksum por versao e apontar o cask para o pacote correspondente.
+
+Checklist recomendado para Homebrew:
+
+- manter releases etiquetadas com versao estavel;
+- publicar artefatos com nome e checksum consistentes;
+- usar cask para o desktop app;
+- usar formula apenas para o CLI quando houver um binario independente;
+- evitar depender de instalacao manual extra no usuario final;
+- validar a instalacao com `brew install` e `brew install --cask` em ambiente limpo.
+
+Para instalacao local de dependencias de desenvolvimento via Homebrew, tambem e possivel manter um `Brewfile` e usar `brew bundle` para reproduzir o ambiente.
 
 ## Binding Go <-> Frontend
 
