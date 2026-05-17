@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"time"
 
@@ -46,11 +47,13 @@ type PauseSignaller interface {
 }
 
 type Result struct {
-	RunID   string
-	RunDir  string
-	Status  corerun.RunStatus
-	Summary corerun.Summary
-	Plan    coreworkflow.ExecutionPlan
+	RunID         string
+	RunDir        string
+	Status        corerun.RunStatus
+	PauseReason   corerun.PauseReason
+	FailureReason string
+	Summary       corerun.Summary
+	Plan          coreworkflow.ExecutionPlan
 }
 
 type ExecutionRequest struct {
@@ -195,6 +198,26 @@ func eventForResult(success string, failure string, status corerun.NodeStatus) s
 		return failure
 	}
 	return success
+}
+
+func firstFailureReason(nodes map[string]corerun.NodeResult) string {
+	for _, id := range sortedNodeIDs(nodes) {
+		node := nodes[id]
+		if !isFailure(node.Status) || node.Error == "" {
+			continue
+		}
+		return node.Error
+	}
+	return ""
+}
+
+func sortedNodeIDs(nodes map[string]corerun.NodeResult) []string {
+	ids := make([]string, 0, len(nodes))
+	for id := range nodes {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 func sanitizeName(name string) string {

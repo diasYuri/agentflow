@@ -259,11 +259,14 @@ func TestWorkflowStatusRendersTag(t *testing.T) {
 		return workflowDaemonClientFunc{
 			workflowStatus: func(context.Context, string) (daemon.RunWorkflowResponse, error) {
 				return daemon.RunWorkflowResponse{Run: daemon.WorkflowRun{
-					ID:       "run-1",
-					Workflow: "build",
-					Status:   "success",
-					Tag:      "release-123",
-					RunDir:   "/tmp/run-1",
+					ID:            "run-1",
+					Workflow:      "build",
+					Status:        "failed",
+					Tag:           "release-123",
+					RunDir:        "/tmp/run-1",
+					FailureReason: "node flaky failed",
+					TerminalError: "node flaky failed",
+					Error:         "node flaky failed",
 				}}, nil
 			},
 		}
@@ -281,6 +284,9 @@ func TestWorkflowStatusRendersTag(t *testing.T) {
 	got := out.String()
 	if !strings.Contains(got, "tag: release-123") {
 		t.Fatalf("expected tag in status output: %q", got)
+	}
+	if !strings.Contains(got, "failure_reason: node flaky failed") {
+		t.Fatalf("expected failure_reason in status output: %q", got)
 	}
 }
 
@@ -347,6 +353,59 @@ func TestWorkflowStatusAndWatchRenderProgress(t *testing.T) {
 	}
 	if got := strings.TrimSpace(out.String()); strings.Count(got, "\n") < 1 || strings.Contains(got, "\n\n") {
 		t.Fatalf("unexpected json watch output: %q", out.String())
+	}
+}
+
+func TestWorkflowWatchRendersFailureReason(t *testing.T) {
+	oldClient := newDaemonClient
+	oldInterval := workflowWatchInterval
+	workflowWatchInterval = time.Millisecond
+	defer func() {
+		newDaemonClient = oldClient
+		workflowWatchInterval = oldInterval
+	}()
+	var calls int
+	newDaemonClient = func(socketPath string) workflowDaemonClient {
+		return workflowDaemonClientFunc{
+			workflowStatus: func(context.Context, string) (daemon.RunWorkflowResponse, error) {
+				calls++
+				if calls == 1 {
+					return daemon.RunWorkflowResponse{Run: daemon.WorkflowRun{
+						ID:          "run-1",
+						Workflow:    "build",
+						Status:      "running",
+						CurrentStep: "plan",
+						RunDir:      "/tmp/run-1",
+					}}, nil
+				}
+				return daemon.RunWorkflowResponse{Run: daemon.WorkflowRun{
+					ID:            "run-1",
+					Workflow:      "build",
+					Status:        "failed",
+					CurrentStep:   "plan",
+					RunDir:        "/tmp/run-1",
+					FailureReason: "node plan failed",
+					TerminalError: "node plan failed",
+					Error:         "node plan failed",
+				}}, nil
+			},
+		}
+	}
+
+	cmd := NewRootCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"workflow", "watch", "run-1", "--no-color"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "failure_reason: node plan failed") {
+		t.Fatalf("expected failure_reason in watch output, got %q", got)
+	}
+	if !strings.Contains(got, "status: failed") {
+		t.Fatalf("expected failed status in watch output, got %q", got)
 	}
 }
 

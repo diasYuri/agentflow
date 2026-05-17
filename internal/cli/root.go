@@ -885,6 +885,12 @@ func printRun(cmd *cobra.Command, run daemon.WorkflowRun) {
 	if run.Error != "" {
 		fmt.Fprintf(cmd.OutOrStdout(), "error: %s\n", run.Error)
 	}
+	if run.FailureReason != "" {
+		fmt.Fprintf(cmd.OutOrStdout(), "failure_reason: %s\n", run.FailureReason)
+	}
+	if run.TerminalError != "" {
+		fmt.Fprintf(cmd.OutOrStdout(), "terminal_error: %s\n", run.TerminalError)
+	}
 }
 
 type workflowOutputFormat string
@@ -986,6 +992,9 @@ func renderWorkflowStatus(w io.Writer, run daemon.WorkflowRun, format string, no
 	}
 	if run.Error != "" {
 		lines = append(lines, fmt.Sprintf("error: %s", run.Error))
+	}
+	if run.FailureReason != "" {
+		lines = append(lines, fmt.Sprintf("failure_reason: %s", run.FailureReason))
 	}
 	if run.TerminalError != "" {
 		lines = append(lines, fmt.Sprintf("terminal_error: %s", run.TerminalError))

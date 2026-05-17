@@ -170,11 +170,13 @@ func (m *Manager) CancelWorkflow(runID string) (WorkflowRun, error) {
 			if record.service == nil {
 				run.Error = "workflow is not active in this daemon process"
 			}
+			run.FailureReason = ""
 		case corerun.RunPaused:
 			run.Status = corerun.RunCancelled
 			run.FinishedAt = time.Now()
 			run.PausedAt = time.Time{}
 			run.PauseReason = ""
+			run.FailureReason = ""
 		}
 	})
 	m.clearCheckpointForRun(runID)
@@ -246,6 +248,7 @@ func (m *Manager) ResumeWorkflow(runID string) (WorkflowRun, error) {
 	record.run.PauseReason = ""
 	record.run.Error = ""
 	record.run.TerminalError = ""
+	record.run.FailureReason = ""
 	record.run.FinishedAt = time.Time{}
 	updated := record.run
 	m.persistLocked(updated)
@@ -419,6 +422,13 @@ func (m *Manager) refreshRun(run WorkflowRun) WorkflowRun {
 	if run.Status == corerun.RunPaused && run.PauseReason == "" && progress.PauseReason != "" {
 		run.PauseReason = progress.PauseReason
 	}
+	if run.FailureReason == "" && (run.Status == corerun.RunFailed || run.Status == corerun.RunPaused) {
+		if run.Error != "" {
+			run.FailureReason = run.Error
+		} else if run.TerminalError != "" {
+			run.FailureReason = run.TerminalError
+		}
+	}
 	return run
 }
 
@@ -447,6 +457,7 @@ func (m *Manager) finish(runID string, result runworkflow.RunResult, err error) 
 			}
 			run.PausedAt = time.Time{}
 			run.PauseReason = ""
+			run.FailureReason = ""
 			if err != nil && run.Error == "" {
 				run.Error = err.Error()
 				run.TerminalError = err.Error()
@@ -460,8 +471,13 @@ func (m *Manager) finish(runID string, result runworkflow.RunResult, err error) 
 		if result.Status == corerun.RunPaused {
 			run.PausedAt = time.Now()
 			if run.PauseReason == "" {
-				run.PauseReason = string(corerun.PauseReasonPauseWhenFail)
+				if result.PauseReason != "" {
+					run.PauseReason = string(result.PauseReason)
+				} else {
+					run.PauseReason = string(corerun.PauseReasonPauseWhenFail)
+				}
 			}
+			run.FailureReason = result.FailureReason
 			run.FinishedAt = time.Time{}
 			run.Error = ""
 			run.TerminalError = ""
@@ -470,6 +486,7 @@ func (m *Manager) finish(runID string, result runworkflow.RunResult, err error) 
 		run.FinishedAt = time.Now()
 		run.PausedAt = time.Time{}
 		run.PauseReason = ""
+		run.FailureReason = result.FailureReason
 		if err != nil {
 			run.Error = err.Error()
 			run.TerminalError = err.Error()

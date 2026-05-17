@@ -82,6 +82,7 @@ type RunSummary struct {
 	TotalSteps     int
 	Error          string
 	TerminalError  string
+	FailureReason  string
 	Tag            string
 }
 

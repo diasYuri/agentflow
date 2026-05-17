@@ -401,6 +401,24 @@ func (e *Executor) finish(ctx context.Context, plan coreworkflow.ExecutionPlan, 
 		BashCalls: state.bashCalls(), FailedNodes: countFailedNodes(state.results), Retries: state.retries(), Nodes: state.results,
 		Tag: state.tag,
 	}
+	failureReason := ""
+	switch {
+	case finalErr != nil:
+		failureReason = finalErr.Error()
+	case status == corerun.RunPaused && pauseReason == corerun.PauseReasonWorktreeMerge:
+		if wtMeta.MergeFailureCause != "" {
+			failureReason = wtMeta.MergeFailureCause
+		} else {
+			failureReason = firstFailureReason(summary.Nodes)
+		}
+	case status == corerun.RunPaused && pauseReason == corerun.PauseReasonPauseWhenFail:
+		failureReason = firstFailureReason(summary.Nodes)
+	case status == corerun.RunFailed:
+		failureReason = firstFailureReason(summary.Nodes)
+	}
+	if failureReason != "" {
+		failureReason = state.masker.MaskString(failureReason)
+	}
 	publicSummary := state.masker.MaskSummary(summary)
 	_ = e.svc.Runs.FinalizeRun(persistCtx, state.runID, publicSummary)
 	eventType := "run.completed"
@@ -426,7 +444,7 @@ func (e *Executor) finish(ctx context.Context, plan coreworkflow.ExecutionPlan, 
 	if status == corerun.RunPaused {
 		finalErr = nil
 	}
-	return Result{RunID: state.runID, RunDir: dir, Status: status, Summary: publicSummary, Plan: plan}, maskError(state.masker, finalErr)
+	return Result{RunID: state.runID, RunDir: dir, Status: status, PauseReason: pauseReason, FailureReason: failureReason, Summary: publicSummary, Plan: plan}, maskError(state.masker, finalErr)
 }
 
 func (e *Executor) emit(ctx context.Context, runID string, event corerun.Event) error {

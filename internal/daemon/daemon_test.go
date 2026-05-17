@@ -296,6 +296,81 @@ nodes:
 	}
 }
 
+func TestSQLiteRunStorePersistsFailureReason(t *testing.T) {
+	dir := shortTempDir(t)
+	dbPath := filepath.Join(dir, "agentflowd.sqlite")
+	store, err := OpenSQLiteRunStore(context.Background(), dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	run := WorkflowRun{
+		ID:            "run-failed",
+		Workflow:      "demo",
+		RunDir:        "/tmp/run-failed",
+		Status:        corerun.RunFailed,
+		StartedAt:     time.Unix(100, 0),
+		FinishedAt:    time.Unix(110, 0),
+		Error:         "node flaky failed",
+		TerminalError: "node flaky failed",
+		FailureReason: "node flaky failed",
+	}
+	if err := store.UpsertRun(context.Background(), run); err != nil {
+		t.Fatal(err)
+	}
+
+	runs, err := store.LoadRuns(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("expected one run, got %d", len(runs))
+	}
+	got := runs[0]
+	if got.FailureReason != "node flaky failed" {
+		t.Fatalf("expected failure reason to persist, got %#v", got)
+	}
+}
+
+func TestManagerPersistsFailureReason(t *testing.T) {
+	dir := shortTempDir(t)
+	manager := NewManager(Config{RunRoot: filepath.Join(dir, "runs")}, nil, nil)
+	runID := "run-failed"
+	manager.records[runID] = &runRecord{
+		run: WorkflowRun{
+			ID:        runID,
+			Workflow:  "demo",
+			RunDir:    filepath.Join(dir, "runs", runID),
+			Status:    corerun.RunRunning,
+			StartedAt: time.Unix(100, 0),
+		},
+	}
+
+	result := runworkflow.RunResult{
+		RunID:         runID,
+		RunDir:        filepath.Join(dir, "runs", runID),
+		Status:        corerun.RunFailed,
+		FailureReason: "node flaky failed",
+		Summary: corerun.Summary{
+			RunID:  runID,
+			Status: corerun.RunFailed,
+			Nodes: map[string]corerun.NodeResult{
+				"flaky": {RunID: runID, NodeID: "flaky", Status: corerun.NodeFailed, Error: "node flaky failed"},
+			},
+		},
+	}
+	manager.finish(runID, result, errors.New("node flaky failed"))
+
+	got, ok := manager.WorkflowStatus(runID)
+	if !ok {
+		t.Fatal("expected run to be present")
+	}
+	if got.FailureReason != "node flaky failed" {
+		t.Fatalf("expected failure reason to be persisted, got %#v", got)
+	}
+}
+
 func TestSQLiteRunStoreMigratesRunsWithoutTag(t *testing.T) {
 	dir := shortTempDir(t)
 	dbPath := filepath.Join(dir, "agentflowd.sqlite")

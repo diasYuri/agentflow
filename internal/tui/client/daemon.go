@@ -234,6 +234,7 @@ func runSummaryFromDaemon(r daemon.WorkflowRun) RunSummary {
 		TotalSteps:     r.TotalSteps,
 		Error:          r.Error,
 		TerminalError:  r.TerminalError,
+		FailureReason:  r.FailureReason,
 		Tag:            r.Tag,
 	}
 }

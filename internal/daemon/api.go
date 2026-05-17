@@ -83,6 +83,7 @@ type WorkflowRun struct {
 	TotalSteps     int                 `json:"total_steps,omitempty"`
 	Error          string              `json:"error,omitempty"`
 	TerminalError  string              `json:"terminal_error,omitempty"`
+	FailureReason  string              `json:"failure_reason,omitempty"`
 	RecentEvents   []string            `json:"recent_events,omitempty"`
 	Tag            string              `json:"tag,omitempty"`
 	Request        *RunWorkflowRequest `json:"-"`
