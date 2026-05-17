@@ -1,5 +1,17 @@
 package workflow
 
+import (
+	"fmt"
+	"strings"
+
+	"gopkg.in/yaml.v3"
+)
+
+const (
+	WorkflowVersion1 = "1"
+	WorkflowVersion2 = "2"
+)
+
 type WorkflowSpec struct {
 	Version     string                `json:"version" yaml:"version"`
 	Name        string                `json:"name" yaml:"name"`
@@ -11,6 +23,80 @@ type WorkflowSpec struct {
 	Execution   ExecutionSpec         `json:"execution,omitempty" yaml:"execution"`
 	Nodes       []NodeSpec            `json:"nodes" yaml:"nodes"`
 	Worktree    WorktreeSpec          `json:"worktree,omitempty" yaml:"worktree"`
+
+	// V2 fields (modeled, not yet executed)
+	Imports []ImportSpec                `json:"imports,omitempty" yaml:"imports"`
+	Outputs map[string]OutputSpec       `json:"outputs,omitempty" yaml:"outputs"`
+	Hooks   []HookSpec                  `json:"hooks,omitempty" yaml:"hooks"`
+	Steps   map[string]ReusableStepSpec `json:"steps,omitempty" yaml:"steps"`
+}
+
+type ImportSpec struct {
+	Path string `json:"path" yaml:"path"`
+}
+
+func (i *ImportSpec) UnmarshalYAML(value *yaml.Node) error {
+	if value == nil {
+		return nil
+	}
+	switch value.Kind {
+	case yaml.ScalarNode:
+		i.Path = strings.TrimSpace(value.Value)
+		return nil
+	case yaml.MappingNode:
+		type importSpecAlias ImportSpec
+		var raw importSpecAlias
+		if err := value.Decode(&raw); err != nil {
+			return err
+		}
+		*i = ImportSpec(raw)
+		return nil
+	default:
+		return fmt.Errorf("import must be a string or mapping")
+	}
+}
+
+type OutputSpec struct {
+	Value  any            `json:"value,omitempty" yaml:"value"`
+	Type   string         `json:"type,omitempty" yaml:"type"`
+	Schema map[string]any `json:"schema,omitempty" yaml:"schema"`
+}
+
+type HookPhase string
+
+const (
+	HookPhaseBeforeRun    HookPhase = "before_run"
+	HookPhaseAfterSuccess HookPhase = "after_success"
+	HookPhaseAfterFailure HookPhase = "after_failure"
+	HookPhaseAfterRun     HookPhase = "after_run"
+)
+
+func IsValidHookPhase(phase string) bool {
+	switch HookPhase(phase) {
+	case HookPhaseBeforeRun, HookPhaseAfterSuccess, HookPhaseAfterFailure, HookPhaseAfterRun:
+		return true
+	default:
+		return false
+	}
+}
+
+type HookSpec struct {
+	Phase      string            `json:"phase" yaml:"phase"`
+	Kind       string            `json:"kind" yaml:"kind"`
+	Command    string            `json:"command,omitempty" yaml:"command"`
+	Env        map[string]string `json:"env,omitempty" yaml:"env"`
+	WorkingDir string            `json:"working_dir,omitempty" yaml:"working_dir"`
+	Timeout    int               `json:"timeout,omitempty" yaml:"timeout"`
+}
+
+type ReusableStepSpec struct {
+	Parameters []string   `json:"parameters,omitempty" yaml:"parameters"`
+	Nodes      []NodeSpec `json:"nodes,omitempty" yaml:"nodes"`
+}
+
+type NodeOutputSpec struct {
+	Type   string         `json:"type,omitempty" yaml:"type"`
+	Schema map[string]any `json:"schema,omitempty" yaml:"schema"`
 }
 
 type WorktreeSpec struct {
@@ -32,9 +118,10 @@ type WorktreeCleanupSpec struct {
 }
 
 type InputSpec struct {
-	Type     string `json:"type" yaml:"type"`
-	Required bool   `json:"required,omitempty" yaml:"required"`
-	Default  any    `json:"default,omitempty" yaml:"default"`
+	Type     string         `json:"type" yaml:"type"`
+	Required bool           `json:"required,omitempty" yaml:"required"`
+	Default  any            `json:"default,omitempty" yaml:"default"`
+	Schema   map[string]any `json:"schema,omitempty" yaml:"schema"`
 }
 
 type SecretSpec struct {
@@ -103,6 +190,11 @@ type NodeSpec struct {
 	Input     string         `json:"input,omitempty" yaml:"input"`
 	With      map[string]any `json:"with,omitempty" yaml:"with"`
 	Nodes     []NodeSpec     `json:"nodes,omitempty" yaml:"nodes"`
+
+	// V2 fields (modeled, not yet executed)
+	Ref     string                    `json:"ref,omitempty" yaml:"ref"`
+	Params  map[string]any            `json:"params,omitempty" yaml:"params"`
+	Outputs map[string]NodeOutputSpec `json:"outputs,omitempty" yaml:"outputs"`
 }
 
 type SandboxSpec struct {

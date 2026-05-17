@@ -50,20 +50,21 @@ type Event struct {
 }
 
 type NodeResult struct {
-	RunID      string        `json:"run_id,omitempty"`
-	NodeID     string        `json:"node_id"`
-	InstanceID string        `json:"instance_id,omitempty"`
-	Path       []string      `json:"path,omitempty"`
-	Index      *int          `json:"index,omitempty"`
-	Status     NodeStatus    `json:"status"`
-	Output     any           `json:"output,omitempty"`
-	Outputs    []any         `json:"outputs,omitempty"`
-	Stdout     string        `json:"stdout,omitempty"`
-	Stderr     string        `json:"stderr,omitempty"`
-	ExitCode   *int          `json:"exit_code,omitempty"`
-	Error      string        `json:"error,omitempty"`
-	Duration   time.Duration `json:"duration,omitempty"`
-	Attempts   int           `json:"attempts,omitempty"`
+	RunID           string         `json:"run_id,omitempty"`
+	NodeID          string         `json:"node_id"`
+	InstanceID      string         `json:"instance_id,omitempty"`
+	Path            []string       `json:"path,omitempty"`
+	Index           *int           `json:"index,omitempty"`
+	Status          NodeStatus     `json:"status"`
+	Output          any            `json:"output,omitempty"`
+	Outputs         []any          `json:"outputs,omitempty"`
+	DeclaredOutputs map[string]any `json:"declared_outputs,omitempty"`
+	Stdout          string         `json:"stdout,omitempty"`
+	Stderr          string         `json:"stderr,omitempty"`
+	ExitCode        *int           `json:"exit_code,omitempty"`
+	Error           string         `json:"error,omitempty"`
+	Duration        time.Duration  `json:"duration,omitempty"`
+	Attempts        int            `json:"attempts,omitempty"`
 }
 
 type RunMetadata struct {

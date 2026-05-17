@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -2212,5 +2213,539 @@ nodes:
 	}
 	if !strings.Contains(err.Error(), "destination HEAD changed") {
 		t.Fatalf("expected destination HEAD changed error, got %v", err)
+	}
+}
+
+func TestRunWorkflowV2OutputsPersistedOnSuccess(t *testing.T) {
+	dir := t.TempDir()
+	workflowPath := writeWorkflow(t, dir, `
+version: "2"
+name: v2-outputs
+execution:
+  output_dir: "`+filepath.ToSlash(filepath.Join(dir, "runs"))+`"
+outputs:
+  result:
+    value: "${nodes.produce.output.stdout}"
+    type: string
+nodes:
+  - id: produce
+    kind: bash
+    command: "echo hello"
+`)
+	shell := &scriptedShell{
+		run: func(ctx context.Context, req ports.ShellRequest, call int) (ports.ShellResult, error) {
+			return ports.ShellResult{Stdout: "hello\n", ExitCode: 0}, nil
+		},
+	}
+	events := eventmemory.New()
+	uc := newTestRunWorkflowUseCase(dir, shell, events)
+
+	result, err := uc.Run(context.Background(), RunOptions{WorkflowRef: workflowPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != run.RunSuccess {
+		t.Fatalf("expected success, got %s", result.Status)
+	}
+
+	outputsPath := filepath.Join(result.RunDir, "artifacts", "workflow", "outputs.json")
+	assertFileExists(t, outputsPath)
+	assertFileContains(t, outputsPath, `"result": "hello\n"`)
+
+	outputsEvent := findEvent(events.Events, "workflow.outputs", "")
+	if outputsEvent == nil {
+		t.Fatal("expected workflow.outputs event")
+	}
+	if outputsEvent.Data["result"] != "hello\n" {
+		t.Fatalf("unexpected event data: %#v", outputsEvent.Data)
+	}
+}
+
+func TestRunWorkflowV2OutputTypeMismatchFailsRun(t *testing.T) {
+	dir := t.TempDir()
+	workflowPath := writeWorkflow(t, dir, `
+version: "2"
+name: v2-output-mismatch
+execution:
+  output_dir: "`+filepath.ToSlash(filepath.Join(dir, "runs"))+`"
+outputs:
+  result:
+    value: "${nodes.produce.output.stdout}"
+    type: integer
+nodes:
+  - id: produce
+    kind: bash
+    command: "echo hello"
+`)
+	shell := &scriptedShell{
+		run: func(ctx context.Context, req ports.ShellRequest, call int) (ports.ShellResult, error) {
+			return ports.ShellResult{Stdout: "hello\n", ExitCode: 0}, nil
+		},
+	}
+	uc := newTestRunWorkflowUseCase(dir, shell, eventmemory.New())
+
+	result, err := uc.Run(context.Background(), RunOptions{WorkflowRef: workflowPath})
+	if err == nil {
+		t.Fatal("expected error for output type mismatch")
+	}
+	if result.Status != run.RunFailed {
+		t.Fatalf("expected failed run, got %s", result.Status)
+	}
+	if !strings.Contains(err.Error(), "outputs.result") {
+		t.Fatalf("expected localized output error, got %v", err)
+	}
+}
+
+func TestRunWorkflowV2NodeDeclaredOutputsAreMaterialized(t *testing.T) {
+	dir := t.TempDir()
+	workflowPath := writeWorkflow(t, dir, `
+version: "2"
+name: v2-node-outputs
+execution:
+  output_dir: "`+filepath.ToSlash(filepath.Join(dir, "runs"))+`"
+nodes:
+  - id: produce
+    kind: bash
+    command: "echo hello"
+    outputs:
+      stdout:
+        type: string
+      exit_code:
+        type: integer
+`)
+	shell := &scriptedShell{
+		run: func(ctx context.Context, req ports.ShellRequest, call int) (ports.ShellResult, error) {
+			return ports.ShellResult{Stdout: "hello\n", ExitCode: 0}, nil
+		},
+	}
+	uc := newTestRunWorkflowUseCase(dir, shell, eventmemory.New())
+
+	result, err := uc.Run(context.Background(), RunOptions{WorkflowRef: workflowPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != run.RunSuccess {
+		t.Fatalf("expected success, got %s", result.Status)
+	}
+	produce := result.Summary.Nodes["produce"]
+	if produce.DeclaredOutputs == nil {
+		t.Fatal("expected declared outputs to be materialized")
+	}
+	if got := produce.DeclaredOutputs["stdout"]; got != "hello\n" {
+		t.Fatalf("unexpected stdout output: %#v", got)
+	}
+	if got := produce.DeclaredOutputs["exit_code"]; got != 0 {
+		t.Fatalf("unexpected exit_code output: %#v", got)
+	}
+}
+
+func TestRunWorkflowV2NodeDeclaredOutputsMismatchFailsRun(t *testing.T) {
+	dir := t.TempDir()
+	workflowPath := writeWorkflow(t, dir, `
+version: "2"
+name: v2-node-outputs-mismatch
+execution:
+  output_dir: "`+filepath.ToSlash(filepath.Join(dir, "runs"))+`"
+nodes:
+  - id: produce
+    kind: bash
+    command: "echo hello"
+    outputs:
+      stdout:
+        type: integer
+`)
+	shell := &scriptedShell{
+		run: func(ctx context.Context, req ports.ShellRequest, call int) (ports.ShellResult, error) {
+			return ports.ShellResult{Stdout: "hello\n", ExitCode: 0}, nil
+		},
+	}
+	uc := newTestRunWorkflowUseCase(dir, shell, eventmemory.New())
+
+	result, err := uc.Run(context.Background(), RunOptions{WorkflowRef: workflowPath})
+	if err == nil {
+		t.Fatal("expected node output contract error")
+	}
+	if result.Status != run.RunFailed {
+		t.Fatalf("expected failed run, got %s", result.Status)
+	}
+	if !strings.Contains(err.Error(), `node "produce" outputs.stdout`) {
+		t.Fatalf("expected localized node output error, got %v", err)
+	}
+}
+
+func TestRunWorkflowV1IgnoresOutputs(t *testing.T) {
+	dir := t.TempDir()
+	workflowPath := writeWorkflow(t, dir, `
+version: "1"
+name: v1-no-outputs
+execution:
+  output_dir: "`+filepath.ToSlash(filepath.Join(dir, "runs"))+`"
+nodes:
+  - id: ok
+    kind: noop
+`)
+	uc := newTestRunWorkflowUseCase(dir, &scriptedShell{}, eventmemory.New())
+
+	result, err := uc.Run(context.Background(), RunOptions{WorkflowRef: workflowPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != run.RunSuccess {
+		t.Fatalf("expected success, got %s", result.Status)
+	}
+	outputsPath := filepath.Join(result.RunDir, "artifacts", "workflow", "outputs.json")
+	assertFileNotExists(t, outputsPath)
+}
+
+func TestRunWorkflowHooksBeforeRunExecutesBeforeNodes(t *testing.T) {
+	dir := t.TempDir()
+	workflowPath := writeWorkflow(t, dir, `
+version: "2"
+name: hooks-before-run
+execution:
+  output_dir: "`+filepath.ToSlash(filepath.Join(dir, "runs"))+`"
+hooks:
+  - phase: before_run
+    kind: bash
+    command: "echo before"
+nodes:
+  - id: ok
+    kind: bash
+    command: "echo node"
+`)
+	shell := &scriptedShell{
+		run: func(ctx context.Context, req ports.ShellRequest, call int) (ports.ShellResult, error) {
+			return ports.ShellResult{Stdout: req.Command + "\n", ExitCode: 0}, nil
+		},
+	}
+	events := eventmemory.New()
+	uc := newTestRunWorkflowUseCase(dir, shell, events)
+
+	result, err := uc.Run(context.Background(), RunOptions{WorkflowRef: workflowPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != run.RunSuccess {
+		t.Fatalf("expected success, got %s", result.Status)
+	}
+	cmds := shell.commands()
+	if len(cmds) != 2 {
+		t.Fatalf("expected 2 shell calls, got %d: %v", len(cmds), cmds)
+	}
+	if cmds[0] != "echo before" {
+		t.Fatalf("expected before_run first, got %q", cmds[0])
+	}
+	if cmds[1] != "echo node" {
+		t.Fatalf("expected node second, got %q", cmds[1])
+	}
+	if findEvent(events.Events, "hook.started", "") == nil {
+		t.Fatal("expected hook.started event")
+	}
+	if findEvent(events.Events, "hook.finished", "") == nil {
+		t.Fatal("expected hook.finished event")
+	}
+}
+
+func TestRunWorkflowHooksBeforeRunFailurePreventsNodes(t *testing.T) {
+	dir := t.TempDir()
+	workflowPath := writeWorkflow(t, dir, `
+version: "2"
+name: hooks-before-run-fail
+execution:
+  output_dir: "`+filepath.ToSlash(filepath.Join(dir, "runs"))+`"
+hooks:
+  - phase: before_run
+    kind: bash
+    command: "exit 1"
+nodes:
+  - id: ok
+    kind: bash
+    command: "echo node"
+`)
+	shell := &scriptedShell{
+		run: func(ctx context.Context, req ports.ShellRequest, call int) (ports.ShellResult, error) {
+			if req.Command == "exit 1" {
+				return ports.ShellResult{ExitCode: 1}, fmt.Errorf("before_run failed")
+			}
+			return ports.ShellResult{Stdout: req.Command + "\n", ExitCode: 0}, nil
+		},
+	}
+	events := eventmemory.New()
+	uc := newTestRunWorkflowUseCase(dir, shell, events)
+
+	result, err := uc.Run(context.Background(), RunOptions{WorkflowRef: workflowPath})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if result.Status != run.RunFailed {
+		t.Fatalf("expected failed, got %s", result.Status)
+	}
+	cmds := shell.commands()
+	if len(cmds) != 1 {
+		t.Fatalf("expected 1 shell call, got %d: %v", len(cmds), cmds)
+	}
+	if cmds[0] != "exit 1" {
+		t.Fatalf("expected before_run command, got %q", cmds[0])
+	}
+	if findEvent(events.Events, "hook.failed", "") == nil {
+		t.Fatal("expected hook.failed event")
+	}
+}
+
+func TestRunWorkflowHooksAfterSuccessExecutesOnSuccess(t *testing.T) {
+	dir := t.TempDir()
+	workflowPath := writeWorkflow(t, dir, `
+version: "2"
+name: hooks-after-success
+execution:
+  output_dir: "`+filepath.ToSlash(filepath.Join(dir, "runs"))+`"
+hooks:
+  - phase: after_success
+    kind: bash
+    command: "echo after"
+nodes:
+  - id: ok
+    kind: bash
+    command: "echo node"
+`)
+	shell := &scriptedShell{
+		run: func(ctx context.Context, req ports.ShellRequest, call int) (ports.ShellResult, error) {
+			return ports.ShellResult{Stdout: req.Command + "\n", ExitCode: 0}, nil
+		},
+	}
+	events := eventmemory.New()
+	uc := newTestRunWorkflowUseCase(dir, shell, events)
+
+	result, err := uc.Run(context.Background(), RunOptions{WorkflowRef: workflowPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != run.RunSuccess {
+		t.Fatalf("expected success, got %s", result.Status)
+	}
+	cmds := shell.commands()
+	if len(cmds) != 2 {
+		t.Fatalf("expected 2 shell calls, got %d: %v", len(cmds), cmds)
+	}
+	if cmds[1] != "echo after" {
+		t.Fatalf("expected after_success last, got %q", cmds[1])
+	}
+}
+
+func TestRunWorkflowHooksAfterFailureExecutesOnNodeFailure(t *testing.T) {
+	dir := t.TempDir()
+	workflowPath := writeWorkflow(t, dir, `
+version: "2"
+name: hooks-after-failure
+execution:
+  output_dir: "`+filepath.ToSlash(filepath.Join(dir, "runs"))+`"
+hooks:
+  - phase: after_failure
+    kind: bash
+    command: "echo cleanup"
+nodes:
+  - id: bad
+    kind: bash
+    command: "exit 1"
+`)
+	shell := &scriptedShell{
+		run: func(ctx context.Context, req ports.ShellRequest, call int) (ports.ShellResult, error) {
+			if req.Command == "exit 1" {
+				return ports.ShellResult{ExitCode: 1}, fmt.Errorf("node failed")
+			}
+			return ports.ShellResult{Stdout: req.Command + "\n", ExitCode: 0}, nil
+		},
+	}
+	events := eventmemory.New()
+	uc := newTestRunWorkflowUseCase(dir, shell, events)
+
+	result, err := uc.Run(context.Background(), RunOptions{WorkflowRef: workflowPath})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if result.Status != run.RunFailed {
+		t.Fatalf("expected failed, got %s", result.Status)
+	}
+	cmds := shell.commands()
+	if len(cmds) != 2 {
+		t.Fatalf("expected 2 shell calls, got %d: %v", len(cmds), cmds)
+	}
+	if cmds[1] != "echo cleanup" {
+		t.Fatalf("expected after_failure last, got %q", cmds[1])
+	}
+	if findEvent(events.Events, "hook.started", "") == nil {
+		t.Fatal("expected hook.started event")
+	}
+	if findEvent(events.Events, "hook.finished", "") == nil {
+		t.Fatal("expected hook.finished event")
+	}
+}
+
+func TestRunWorkflowHooksAfterRunExecutesOnSuccessAndFailure(t *testing.T) {
+	dir := t.TempDir()
+	workflowPath := writeWorkflow(t, dir, `
+version: "2"
+name: hooks-after-run
+execution:
+  output_dir: "`+filepath.ToSlash(filepath.Join(dir, "runs"))+`"
+hooks:
+  - phase: after_run
+    kind: bash
+    command: "echo final"
+nodes:
+  - id: ok
+    kind: noop
+`)
+	shell := &scriptedShell{
+		run: func(ctx context.Context, req ports.ShellRequest, call int) (ports.ShellResult, error) {
+			return ports.ShellResult{Stdout: req.Command + "\n", ExitCode: 0}, nil
+		},
+	}
+	events := eventmemory.New()
+	uc := newTestRunWorkflowUseCase(dir, shell, events)
+
+	result, err := uc.Run(context.Background(), RunOptions{WorkflowRef: workflowPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != run.RunSuccess {
+		t.Fatalf("expected success, got %s", result.Status)
+	}
+	cmds := shell.commands()
+	if len(cmds) != 1 {
+		t.Fatalf("expected 1 shell call, got %d: %v", len(cmds), cmds)
+	}
+	if cmds[0] != "echo final" {
+		t.Fatalf("expected after_run command, got %q", cmds[0])
+	}
+
+	// Failure case
+	workflowPathFail := writeWorkflow(t, dir, `
+version: "2"
+name: hooks-after-run-fail
+execution:
+  output_dir: "`+filepath.ToSlash(filepath.Join(dir, "runs"))+`"
+hooks:
+  - phase: after_run
+    kind: bash
+    command: "echo final-fail"
+nodes:
+  - id: bad
+    kind: bash
+    command: "exit 1"
+`)
+	shellFail := &scriptedShell{
+		run: func(ctx context.Context, req ports.ShellRequest, call int) (ports.ShellResult, error) {
+			if req.Command == "exit 1" {
+				return ports.ShellResult{ExitCode: 1}, fmt.Errorf("node failed")
+			}
+			return ports.ShellResult{Stdout: req.Command + "\n", ExitCode: 0}, nil
+		},
+	}
+	eventsFail := eventmemory.New()
+	ucFail := newTestRunWorkflowUseCase(dir, shellFail, eventsFail)
+
+	resultFail, err := ucFail.Run(context.Background(), RunOptions{WorkflowRef: workflowPathFail})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if resultFail.Status != run.RunFailed {
+		t.Fatalf("expected failed, got %s", resultFail.Status)
+	}
+	cmdsFail := shellFail.commands()
+	if len(cmdsFail) != 2 {
+		t.Fatalf("expected 2 shell calls, got %d: %v", len(cmdsFail), cmdsFail)
+	}
+	if cmdsFail[1] != "echo final-fail" {
+		t.Fatalf("expected after_run command, got %q", cmdsFail[1])
+	}
+}
+
+func TestRunWorkflowHooksAfterRunFailureMarksSuccessfulRunAsFailed(t *testing.T) {
+	dir := t.TempDir()
+	workflowPath := writeWorkflow(t, dir, `
+version: "2"
+name: hooks-after-run-success-fail
+execution:
+  output_dir: "`+filepath.ToSlash(filepath.Join(dir, "runs"))+`"
+hooks:
+  - phase: after_run
+    kind: bash
+    command: "exit 1"
+nodes:
+  - id: ok
+    kind: noop
+`)
+	shell := &scriptedShell{
+		run: func(ctx context.Context, req ports.ShellRequest, call int) (ports.ShellResult, error) {
+			if req.Command == "exit 1" {
+				return ports.ShellResult{ExitCode: 1}, fmt.Errorf("after_run failed")
+			}
+			return ports.ShellResult{Stdout: req.Command + "\n", ExitCode: 0}, nil
+		},
+	}
+	events := eventmemory.New()
+	uc := newTestRunWorkflowUseCase(dir, shell, events)
+
+	result, err := uc.Run(context.Background(), RunOptions{WorkflowRef: workflowPath})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if result.Status != run.RunFailed {
+		t.Fatalf("expected failed run, got %s", result.Status)
+	}
+	if result.Summary.Status != run.RunFailed {
+		t.Fatalf("expected failed summary, got %s", result.Summary.Status)
+	}
+}
+
+func TestRunWorkflowHooksMaskSecrets(t *testing.T) {
+	dir := t.TempDir()
+	secret := "hook-secret-value"
+	t.Setenv("agentflow_HOOK_SECRET", secret)
+	workflowPath := writeWorkflow(t, dir, `
+version: "2"
+name: hooks-mask-secrets
+secrets:
+  token:
+    env: agentflow_HOOK_SECRET
+execution:
+  output_dir: "`+filepath.ToSlash(filepath.Join(dir, "runs"))+`"
+hooks:
+  - phase: before_run
+    kind: bash
+    command: "echo ${secrets.token}"
+nodes:
+  - id: ok
+    kind: noop
+`)
+	shell := &scriptedShell{
+		run: func(ctx context.Context, req ports.ShellRequest, call int) (ports.ShellResult, error) {
+			return ports.ShellResult{Stdout: req.Command + "\n", ExitCode: 0}, nil
+		},
+	}
+	events := eventmemory.New()
+	uc := newTestRunWorkflowUseCase(dir, shell, events)
+
+	result, err := uc.Run(context.Background(), RunOptions{WorkflowRef: workflowPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != run.RunSuccess {
+		t.Fatalf("expected success, got %s", result.Status)
+	}
+
+	assertFileRedacted(t, filepath.Join(result.RunDir, "artifacts", "hooks", "before_run", "000", "stdout.txt"), secret)
+
+	for _, ev := range events.Events {
+		if ev.Type == "hook.started" {
+			cmd, _ := ev.Data["command"].(string)
+			if strings.Contains(cmd, secret) {
+				t.Fatalf("hook.started event contains secret: %q", cmd)
+			}
+			if !strings.Contains(cmd, run.MaskReplacement) {
+				t.Fatalf("hook.started command is not masked: %q", cmd)
+			}
+		}
 	}
 }

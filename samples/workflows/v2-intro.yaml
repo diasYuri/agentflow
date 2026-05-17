@@ -1,0 +1,26 @@
+version: "2"
+name: v2-intro
+description: "Introdução ao DSL V2 com outputs, hooks e expressões."
+
+inputs:
+  name:
+    type: string
+    required: true
+
+vars:
+  greeting: "Olá"
+
+outputs:
+  message:
+    value: "${nodes.greet.output}"
+    type: string
+
+hooks:
+  - phase: before_run
+    kind: bash
+    command: echo "Iniciando workflow v2-intro"
+
+nodes:
+  - id: greet
+    kind: bash
+    command: "echo ${vars.greeting}, ${inputs.name}!"

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -111,8 +112,8 @@ func (s *ExecutionState) set(id string, result corerun.NodeResult) {
 	}
 	s.results[id] = result
 	s.nodes[id] = map[string]any{
-		"status": string(result.Status), "output": result.Output, "outputs": result.Outputs, "stdout": result.Stdout,
-		"stderr": result.Stderr, "exit_code": result.ExitCode, "error": result.Error, "path": result.Path,
+		"status": string(result.Status), "output": result.Output, "outputs": result.Outputs, "declared_outputs": result.DeclaredOutputs,
+		"stdout": result.Stdout, "stderr": result.Stderr, "exit_code": result.ExitCode, "error": result.Error, "path": result.Path,
 	}
 }
 
@@ -262,6 +263,41 @@ func (e *Executor) saveCheckpoint(ctx context.Context, state *ExecutionState, en
 	return e.svc.Runs.SaveCheckpoint(ctx, state.masker.MaskCheckpoint(checkpoint))
 }
 
+func (e *Executor) evaluateAndPersistWorkflowOutputs(ctx context.Context, state *ExecutionState, workflow coreworkflow.WorkflowSpec) error {
+	if len(workflow.Outputs) == 0 {
+		return nil
+	}
+	outputs := make(map[string]any, len(workflow.Outputs))
+	evalCtx := state.evalContext(nil, nil, nil)
+	for name, spec := range workflow.Outputs {
+		value, err := coreworkflow.EvalTemplateValue(fmt.Sprintf("%v", spec.Value), evalCtx)
+		if err != nil {
+			return fmt.Errorf("outputs.%s: %w", name, err)
+		}
+		if spec.Type != "" {
+			if err := coreworkflow.ValidateSchema(value, map[string]any{"type": spec.Type}, "outputs."+name); err != nil {
+				return err
+			}
+		}
+		if len(spec.Schema) > 0 {
+			if err := coreworkflow.ValidateSchema(value, spec.Schema, "outputs."+name); err != nil {
+				return err
+			}
+		}
+		outputs[name] = value
+	}
+	data, err := json.MarshalIndent(outputs, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal workflow outputs: %w", err)
+	}
+	maskedData := []byte(state.masker.MaskString(string(data)))
+	if err := e.svc.Runs.SaveArtifact(ctx, state.runID, "workflow/outputs.json", maskedData); err != nil {
+		return fmt.Errorf("failed to save workflow outputs artifact: %w", err)
+	}
+	_ = e.emitState(ctx, state, corerun.Event{Type: "workflow.outputs", Data: outputs})
+	return nil
+}
+
 func (e *Executor) finish(ctx context.Context, plan coreworkflow.ExecutionPlan, state *ExecutionState, status corerun.RunStatus, finalErr error) (Result, error) {
 	persistCtx := context.WithoutCancel(ctx)
 	var wtMeta corerun.WorktreeMetadata
@@ -294,6 +330,44 @@ func (e *Executor) finish(ctx context.Context, plan coreworkflow.ExecutionPlan, 
 			_ = e.saveWorktreeStatus(persistCtx, state, meta)
 		}
 	}
+	if status == corerun.RunSuccess {
+		if err := e.evaluateAndPersistWorkflowOutputs(persistCtx, state, plan.Workflow); err != nil {
+			_ = e.emitState(persistCtx, state, corerun.Event{Type: "workflow.outputs_failed", Data: map[string]any{"error": err.Error()}})
+			status = corerun.RunFailed
+			finalErr = err
+		}
+	}
+
+	if status == corerun.RunSuccess {
+		if err := e.runHooks(persistCtx, state, coreworkflow.HookPhaseAfterSuccess); err != nil {
+			status = corerun.RunFailed
+			finalErr = err
+		}
+	}
+
+	if status == corerun.RunFailed {
+		if hookErr := e.runHooks(persistCtx, state, coreworkflow.HookPhaseAfterFailure); hookErr != nil {
+			if finalErr != nil {
+				finalErr = fmt.Errorf("%w; after_failure hook failed: %v", finalErr, hookErr)
+			} else {
+				finalErr = hookErr
+			}
+		}
+	}
+
+	if status != corerun.RunPaused {
+		if hookErr := e.runHooks(persistCtx, state, coreworkflow.HookPhaseAfterRun); hookErr != nil {
+			if status == corerun.RunSuccess {
+				status = corerun.RunFailed
+			}
+			if finalErr != nil {
+				finalErr = fmt.Errorf("%w; after_run hook failed: %v", finalErr, hookErr)
+			} else {
+				finalErr = hookErr
+			}
+		}
+	}
+
 	finished := e.now()
 	summary := corerun.Summary{
 		RunID: state.runID, Workflow: plan.Workflow.Name, Status: status, StartedAt: state.startedAt,

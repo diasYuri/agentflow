@@ -88,6 +88,9 @@ func (e *Executor) execute(ctx context.Context, req ExecutionRequest) (Result, e
 	if err := e.saveCheckpoint(ctx, state, true, 0, "", ""); err != nil {
 		return Result{}, err
 	}
+	if err := e.runHooks(ctx, state, coreworkflow.HookPhaseBeforeRun); err != nil {
+		return e.finish(ctx, req.Plan, state, corerun.RunFailed, err)
+	}
 	if err := e.setupWorktree(ctx, state, req.Plan, destinationDir); err != nil {
 		return e.finish(ctx, req.Plan, state, corerun.RunFailed, err)
 	}
@@ -741,7 +744,17 @@ func (e *Executor) executeAttempt(ctx context.Context, state *ExecutionState, no
 	result.Stdout = output.Stdout
 	result.Stderr = output.Stderr
 	result.ExitCode = output.ExitCode
+	if err == nil && status == corerun.NodeSuccess && len(node.Outputs) > 0 {
+		declaredOutputs, outputErr := materializeDeclaredOutputs(node, output.Output)
+		if outputErr != nil {
+			err = outputErr
+			status = corerun.NodeFailed
+		} else {
+			result.DeclaredOutputs = declaredOutputs
+		}
+	}
 	if err != nil {
+		result.Status = status
 		result.Error = err.Error()
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			result.Status = corerun.NodeTimeout

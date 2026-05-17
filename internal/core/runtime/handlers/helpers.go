@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"time"
 
@@ -230,6 +231,101 @@ func resultValue(result corerun.NodeResult) any {
 		return result.Outputs
 	}
 	return result.Output
+}
+
+func materializeDeclaredOutputs(node coreworkflow.NodeSpec, rawOutput any) (map[string]any, error) {
+	if len(node.Outputs) == 0 {
+		return nil, nil
+	}
+	if len(node.Outputs) == 1 {
+		for name, out := range node.Outputs {
+			if values, ok := toStringKeyMap(rawOutput); ok {
+				value, exists := values[name]
+				if !exists {
+					return nil, fmt.Errorf("node %q outputs.%s: value is required", node.ID, name)
+				}
+				if err := validateDeclaredOutputValue(node.ID, name, value, out); err != nil {
+					return nil, err
+				}
+				return map[string]any{name: value}, nil
+			}
+			if err := validateDeclaredOutputValue(node.ID, name, rawOutput, out); err != nil {
+				return nil, err
+			}
+			return map[string]any{name: rawOutput}, nil
+		}
+	}
+	values, ok := toStringKeyMap(rawOutput)
+	if !ok {
+		return nil, fmt.Errorf("node %q outputs: expected object result, got %T", node.ID, rawOutput)
+	}
+	materialized := make(map[string]any, len(node.Outputs))
+	for name, out := range node.Outputs {
+		value, exists := values[name]
+		if !exists {
+			return nil, fmt.Errorf("node %q outputs.%s: value is required", node.ID, name)
+		}
+		if err := validateDeclaredOutputValue(node.ID, name, value, out); err != nil {
+			return nil, err
+		}
+		materialized[name] = value
+	}
+	return materialized, nil
+}
+
+func validateDeclaredOutputValue(nodeID string, name string, value any, spec coreworkflow.NodeOutputSpec) error {
+	path := fmt.Sprintf("node %q outputs.%s", nodeID, name)
+	if spec.Type != "" {
+		if err := coreworkflow.ValidateSchema(value, map[string]any{"type": spec.Type}, path); err != nil {
+			return err
+		}
+	}
+	if len(spec.Schema) > 0 {
+		if err := coreworkflow.ValidateSchema(value, spec.Schema, path); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func toStringKeyMap(value any) (map[string]any, bool) {
+	switch typed := value.(type) {
+	case map[string]any:
+		return typed, true
+	case map[string]string:
+		out := make(map[string]any, len(typed))
+		for key, item := range typed {
+			out[key] = item
+		}
+		return out, true
+	}
+	rv := reflect.ValueOf(value)
+	if !rv.IsValid() {
+		return nil, false
+	}
+	if rv.Kind() == reflect.Map {
+		if rv.Type().Key().Kind() != reflect.String {
+			return nil, false
+		}
+		out := make(map[string]any, rv.Len())
+		for _, key := range rv.MapKeys() {
+			out[key.String()] = rv.MapIndex(key).Interface()
+		}
+		return out, true
+	}
+	if rv.Kind() == reflect.Struct {
+		out := make(map[string]any, rv.NumField())
+		rt := rv.Type()
+		for i := 0; i < rv.NumField(); i++ {
+			field := rt.Field(i)
+			if field.PkgPath != "" {
+				continue
+			}
+			out[field.Name] = rv.Field(i).Interface()
+		}
+		return out, true
+	}
+	return nil, false
 }
 
 func (e *Executor) forEachItems(ctx context.Context, state *ExecutionState, node coreworkflow.NodeSpec) ([]any, error) {

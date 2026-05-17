@@ -122,7 +122,31 @@ func env(ctx EvalContext) map[string]any {
 	}
 	env["contains"] = contains
 	env["len"] = length
+	env["default"] = defaultValue
+	env["json"] = jsonValue
 	return env
+}
+
+func defaultValue(value any, fallback any) any {
+	if value == nil {
+		return fallback
+	}
+	if s, ok := value.(string); ok && s == "" {
+		return fallback
+	}
+	return value
+}
+
+func jsonValue(value any) (any, error) {
+	s, ok := value.(string)
+	if !ok {
+		return nil, fmt.Errorf("json() requires a string argument, got %T", value)
+	}
+	var result any
+	if err := json.Unmarshal([]byte(s), &result); err != nil {
+		return nil, fmt.Errorf("json() parse error: %w", err)
+	}
+	return result, nil
 }
 
 func contains(container any, needle any) bool {
