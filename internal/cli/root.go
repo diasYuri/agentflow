@@ -74,6 +74,7 @@ func NewRootCommand() *cobra.Command {
 		newDryRunCommand(opts),
 		newRunCommand(opts),
 		newGraphCommand(opts),
+		newMigrateCommand(),
 		newDaemonCommand(opts),
 		newWorkflowCommand(opts),
 	)

@@ -122,14 +122,14 @@ worktree:
 
 #### Valores suportados nesta versão
 
-| Campo                | Valores suportados | Padrão          |
-| -------------------- | ------------------ | --------------- |
-| `provider`           | `codex`, `claude`, `pi` | `codex`    |
-| `base`               | `current`          | `current`       |
-| `merge.strategy`     | `deterministic`    | `deterministic` |
-| `merge.on_conflict`  | `agent`            | `agent`         |
-| `cleanup.on_success` | `true`, `false`    | `true`          |
-| `cleanup.on_failure` | `keep`             | `keep`          |
+| Campo                | Valores suportados      | Padrão          |
+| -------------------- | ----------------------- | --------------- |
+| `provider`           | `codex`, `claude`, `pi` | `codex`         |
+| `base`               | `current`               | `current`       |
+| `merge.strategy`     | `deterministic`         | `deterministic` |
+| `merge.on_conflict`  | `agent`                 | `agent`         |
+| `cleanup.on_success` | `true`, `false`         | `true`          |
+| `cleanup.on_failure` | `keep`                  | `keep`          |
 
 Workflows sem a chave `worktree` continuam executando no diretório atual, sem alteração de
 comportamento.
@@ -150,3 +150,7 @@ comportamento.
 - `map` cria um escopo aninhado, mas mantém visíveis os nodes do escopo externo para referências controladas.
 - `ValidateInputValues` é útil para checar payloads recebidos sem repetir a lógica de tipos do spec.
 - A validação ocorre antes da execução, então erros de schema, referência e ciclo aparecem cedo e com contexto do node afetado.
+
+## Workflow V2
+
+A versão 2 do DSL estende V1 com `imports`, `outputs`, `hooks`, `steps` (macros), validação de schema em inputs/outputs e referências reutilizáveis via `ref`/`params`. Workflows V1 continuam totalmente compatíveis. Veja o contrato completo e o guia de migração em [`docs/workflow-dsl-v2.md`](workflow-dsl-v2.md).

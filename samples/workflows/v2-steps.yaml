@@ -1,0 +1,18 @@
+version: "2"
+name: v2-steps
+description: "Demonstra steps reutilizáveis com ref e params no DSL V2."
+
+steps:
+  greet:
+    parameters:
+      - target
+    nodes:
+      - id: say
+        kind: bash
+        command: "echo Hello ${target}"
+
+nodes:
+  - id: hello
+    ref: greet
+    params:
+      target: "World"

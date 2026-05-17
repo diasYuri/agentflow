@@ -25,6 +25,12 @@ type rawWorkflowSpec struct {
 	Nodes            []workflow.NodeSpec            `yaml:"nodes"`
 	Worktree         yaml.Node                      `yaml:"worktree"`
 	WorktreeProvider string                         `yaml:"worktree-provider"`
+
+	// V2 fields (modeled, not yet executed)
+	Imports []workflow.ImportSpec                `yaml:"imports"`
+	Outputs map[string]workflow.OutputSpec       `yaml:"outputs"`
+	Hooks   []workflow.HookSpec                  `yaml:"hooks"`
+	Steps   map[string]workflow.ReusableStepSpec `yaml:"steps"`
 }
 
 type WorkflowRepository struct {
@@ -154,8 +160,24 @@ func isWorkflowPath(ref string) bool {
 	return false
 }
 
+// DecodeWorkflow loads and decodes a workflow YAML file without resolving imports or expanding macros.
+func DecodeWorkflow(path string) (*workflow.WorkflowSpec, error) {
+	return decodeWorkflowWithImports(path, nil)
+}
+
 func decodeWorkflow(path string) (*workflow.WorkflowSpec, error) {
-	file, err := os.Open(path)
+	return decodeWorkflowWithImports(path, nil)
+}
+
+func decodeWorkflowWithImports(path string, stack []string) (*workflow.WorkflowSpec, error) {
+	cleanPath := filepath.Clean(path)
+	for _, s := range stack {
+		if s == cleanPath {
+			return nil, fmt.Errorf("import cycle: %s", formatCyclePath(stack, cleanPath))
+		}
+	}
+
+	file, err := os.Open(cleanPath)
 	if err != nil {
 		return nil, err
 	}
@@ -178,10 +200,37 @@ func decodeWorkflow(path string) (*workflow.WorkflowSpec, error) {
 		Defaults:    raw.Defaults,
 		Execution:   raw.Execution,
 		Nodes:       raw.Nodes,
+		Imports:     raw.Imports,
+		Outputs:     raw.Outputs,
+		Hooks:       raw.Hooks,
+		Steps:       raw.Steps,
 	}
 
 	if err := normalizeWorktree(&spec, raw.Worktree, raw.WorktreeProvider); err != nil {
 		return nil, fmt.Errorf("decode workflow yaml: %w", err)
+	}
+
+	if spec.Version == workflow.WorkflowVersion1 && len(spec.Imports) > 0 {
+		return nil, fmt.Errorf("imports are not supported in workflow version %q", spec.Version)
+	}
+
+	if spec.Version == workflow.WorkflowVersion2 && len(spec.Imports) > 0 {
+		baseDir := filepath.Dir(cleanPath)
+		imported, err := resolveImports(baseDir, spec.Imports, append(stack, cleanPath))
+		if err != nil {
+			return nil, err
+		}
+		merged, err := mergeSpecs(imported, spec)
+		if err != nil {
+			return nil, err
+		}
+		spec = merged
+	}
+
+	if spec.Version == workflow.WorkflowVersion2 {
+		if err := workflow.ExpandMacros(&spec); err != nil {
+			return nil, fmt.Errorf("expand macros: %w", err)
+		}
 	}
 
 	if spec.Inputs == nil {
@@ -191,6 +240,145 @@ func decodeWorkflow(path string) (*workflow.WorkflowSpec, error) {
 		spec.Vars = map[string]any{}
 	}
 	return &spec, nil
+}
+
+func formatCyclePath(stack []string, current string) string {
+	path := append([]string(nil), stack...)
+	path = append(path, current)
+	out := path[0]
+	for _, next := range path[1:] {
+		out += " -> " + next
+	}
+	return out
+}
+
+func resolveImports(baseDir string, imports []workflow.ImportSpec, stack []string) (workflow.WorkflowSpec, error) {
+	var result workflow.WorkflowSpec
+	for _, imp := range imports {
+		if strings.TrimSpace(imp.Path) == "" {
+			return workflow.WorkflowSpec{}, fmt.Errorf("import path is required")
+		}
+		impPath := filepath.Clean(filepath.Join(baseDir, imp.Path))
+		imported, err := decodeWorkflowWithImports(impPath, stack)
+		if err != nil {
+			return workflow.WorkflowSpec{}, fmt.Errorf("import %q: %w", imp.Path, err)
+		}
+		merged, err := mergeSpecs(result, *imported)
+		if err != nil {
+			return workflow.WorkflowSpec{}, fmt.Errorf("import %q: %w", imp.Path, err)
+		}
+		result = merged
+	}
+	return result, nil
+}
+
+func mergeSpecs(base workflow.WorkflowSpec, overlay workflow.WorkflowSpec) (workflow.WorkflowSpec, error) {
+	mergedInputs := make(map[string]workflow.InputSpec, len(base.Inputs)+len(overlay.Inputs))
+	for k, v := range base.Inputs {
+		mergedInputs[k] = v
+	}
+	for k, v := range overlay.Inputs {
+		mergedInputs[k] = v
+	}
+
+	mergedVars := make(map[string]any, len(base.Vars)+len(overlay.Vars))
+	for k, v := range base.Vars {
+		mergedVars[k] = v
+	}
+	for k, v := range overlay.Vars {
+		mergedVars[k] = v
+	}
+
+	mergedSecrets := make(map[string]workflow.SecretSpec, len(base.Secrets)+len(overlay.Secrets))
+	for k, v := range base.Secrets {
+		mergedSecrets[k] = v
+	}
+	for k, v := range overlay.Secrets {
+		mergedSecrets[k] = v
+	}
+
+	mergedDefaults := base.Defaults
+	if overlay.Defaults.Timeout != 0 {
+		mergedDefaults.Timeout = overlay.Defaults.Timeout
+	}
+	if overlay.Defaults.Retries != 0 {
+		mergedDefaults.Retries = overlay.Defaults.Retries
+	}
+	if overlay.Defaults.WorkingDir != "" {
+		mergedDefaults.WorkingDir = overlay.Defaults.WorkingDir
+	}
+
+	mergedExecution := base.Execution
+	if overlay.Execution.MaxConcurrency != 0 {
+		mergedExecution.MaxConcurrency = overlay.Execution.MaxConcurrency
+	}
+	if overlay.Execution.FailFast != nil {
+		mergedExecution.FailFast = overlay.Execution.FailFast
+	}
+	if overlay.Execution.PauseWhenFail {
+		mergedExecution.PauseWhenFail = overlay.Execution.PauseWhenFail
+	}
+	if overlay.Execution.OutputDir != "" {
+		mergedExecution.OutputDir = overlay.Execution.OutputDir
+	}
+	if overlay.Execution.MaxNodeOutputBytes != 0 {
+		mergedExecution.MaxNodeOutputBytes = overlay.Execution.MaxNodeOutputBytes
+	}
+
+	mergedWorktree := base.Worktree
+	if overlay.Worktree.Enabled {
+		mergedWorktree = overlay.Worktree
+	}
+
+	mergedOutputs := make(map[string]workflow.OutputSpec, len(base.Outputs)+len(overlay.Outputs))
+	for k, v := range base.Outputs {
+		mergedOutputs[k] = v
+	}
+	for k, v := range overlay.Outputs {
+		mergedOutputs[k] = v
+	}
+
+	mergedHooks := append([]workflow.HookSpec(nil), base.Hooks...)
+	mergedHooks = append(mergedHooks, overlay.Hooks...)
+
+	mergedSteps := make(map[string]workflow.ReusableStepSpec, len(base.Steps)+len(overlay.Steps))
+	for k, v := range base.Steps {
+		mergedSteps[k] = v
+	}
+	for k, v := range overlay.Steps {
+		if _, exists := mergedSteps[k]; exists {
+			return workflow.WorkflowSpec{}, fmt.Errorf("step name conflict: %q", k)
+		}
+		mergedSteps[k] = v
+	}
+
+	seen := make(map[string]struct{}, len(base.Nodes)+len(overlay.Nodes))
+	for _, n := range base.Nodes {
+		seen[n.ID] = struct{}{}
+	}
+	for _, n := range overlay.Nodes {
+		if _, ok := seen[n.ID]; ok {
+			return workflow.WorkflowSpec{}, fmt.Errorf("node id conflict after merge: %q", n.ID)
+		}
+	}
+	mergedNodes := append([]workflow.NodeSpec(nil), base.Nodes...)
+	mergedNodes = append(mergedNodes, overlay.Nodes...)
+
+	return workflow.WorkflowSpec{
+		Version:     overlay.Version,
+		Name:        overlay.Name,
+		Description: overlay.Description,
+		Inputs:      mergedInputs,
+		Vars:        mergedVars,
+		Secrets:     mergedSecrets,
+		Defaults:    mergedDefaults,
+		Execution:   mergedExecution,
+		Nodes:       mergedNodes,
+		Worktree:    mergedWorktree,
+		Outputs:     mergedOutputs,
+		Hooks:       mergedHooks,
+		Steps:       mergedSteps,
+	}, nil
 }
 
 func normalizeWorktree(spec *workflow.WorkflowSpec, worktreeNode yaml.Node, worktreeProvider string) error {

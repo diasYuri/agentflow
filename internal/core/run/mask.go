@@ -92,6 +92,7 @@ func (m SecretMasker) MaskNodeResult(result NodeResult) NodeResult {
 	}
 	result.Output = m.MaskValue(result.Output)
 	result.Outputs = maskSlice(m, result.Outputs)
+	result.DeclaredOutputs = maskMap(m, result.DeclaredOutputs)
 	result.Stdout = m.MaskString(result.Stdout)
 	result.Stderr = m.MaskString(result.Stderr)
 	result.Error = m.MaskString(result.Error)

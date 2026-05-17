@@ -650,3 +650,185 @@ func (f workflowDaemonClientFunc) Status(ctx context.Context) (daemon.DaemonStat
 func (f workflowDaemonClientFunc) Stop(ctx context.Context) (daemon.StopResponse, error) {
 	return f.stop(ctx)
 }
+
+func TestMigrateCommandRejectsNonV1Source(t *testing.T) {
+	root := t.TempDir()
+	v2Path := filepath.Join(root, "v2.yaml")
+	content := []byte(`version: "2"
+name: already-v2
+nodes:
+  - id: ok
+    kind: noop
+`)
+	if err := os.WriteFile(v2Path, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := NewRootCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"migrate", v2Path, "--to", "2"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for non-v1 source")
+	}
+	if !strings.Contains(err.Error(), `migration only supports source version "1"`) {
+		t.Fatalf("expected source version error, got %v", err)
+	}
+}
+
+func TestMigrateCommandRejectsUnsupportedTarget(t *testing.T) {
+	root := t.TempDir()
+	v1Path := filepath.Join(root, "v1.yaml")
+	content := []byte(`version: "1"
+name: simple
+nodes:
+  - id: ok
+    kind: noop
+`)
+	if err := os.WriteFile(v1Path, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := NewRootCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"migrate", v1Path, "--to", "3"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for unsupported target")
+	}
+	if !strings.Contains(err.Error(), `unsupported target version`) {
+		t.Fatalf("expected target version error, got %v", err)
+	}
+}
+
+func TestMigrateCommandOutputsV2ToStdout(t *testing.T) {
+	root := t.TempDir()
+	v1Path := filepath.Join(root, "v1.yaml")
+	content := []byte(`version: "1"
+name: simple
+inputs:
+  name:
+    type: string
+vars:
+  env: dev
+nodes:
+  - id: ok
+    kind: bash
+    command: echo ${inputs.name}
+`)
+	if err := os.WriteFile(v1Path, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := NewRootCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"migrate", v1Path, "--to", "2"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if !strings.Contains(got, `version: "2"`) {
+		t.Fatalf("expected version 2 in output, got %q", got)
+	}
+	if !strings.Contains(got, "name: simple") {
+		t.Fatalf("expected name preserved, got %q", got)
+	}
+	if !strings.Contains(got, "id: ok") {
+		t.Fatalf("expected node id preserved, got %q", got)
+	}
+}
+
+func TestMigrateCommandWritesToFile(t *testing.T) {
+	root := t.TempDir()
+	v1Path := filepath.Join(root, "v1.yaml")
+	outPath := filepath.Join(root, "v2.yaml")
+	content := []byte(`version: "1"
+name: simple
+nodes:
+  - id: ok
+    kind: noop
+`)
+	if err := os.WriteFile(v1Path, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := NewRootCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"migrate", v1Path, "--to", "2", "--out", outPath})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "migrated workflow written to") {
+		t.Fatalf("expected written message, got %q", out.String())
+	}
+	data, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `version: "2"`) {
+		t.Fatalf("expected version 2 in file, got %q", string(data))
+	}
+}
+
+func TestMigrateAndValidateEndToEnd(t *testing.T) {
+	root := t.TempDir()
+	v1Path := filepath.Join(root, "v1.yaml")
+	v2Path := filepath.Join(root, "v2.yaml")
+	content := []byte(`version: "1"
+name: e2e-migrate
+inputs:
+  count:
+    type: integer
+vars:
+  env: test
+defaults:
+  timeout: 60
+execution:
+  max_concurrency: 2
+worktree: true
+nodes:
+  - id: plan
+    kind: bash
+    command: echo "plan"
+  - id: build
+    kind: bash
+    command: echo "build"
+    depends_on: [plan]
+`)
+	if err := os.WriteFile(v1Path, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := NewRootCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"migrate", v1Path, "--to", "2", "--out", v2Path})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd = NewRootCommand()
+	out.Reset()
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"validate", v2Path})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("expected migrated workflow to validate: %v", err)
+	}
+	if !strings.Contains(out.String(), "valid: e2e-migrate") {
+		t.Fatalf("expected validation success, got %q", out.String())
+	}
+}
