@@ -106,7 +106,3 @@ agentflow completion fish | source
 ```
 
 To make completions persistent, add the command to your shell profile (`~/.bashrc`, `~/.zshrc`, or `~/.config/fish/config.fish`).
-
-## Desktop app
-
-The desktop application is distributed separately. See [docs/desktop.md](desktop.md) for build instructions and distribution notes.
