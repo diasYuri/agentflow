@@ -1,0 +1,6 @@
+version: "1"
+name: slow
+nodes:
+  - id: sleep
+    kind: bash
+    command: sleep 30

@@ -235,6 +235,28 @@ See also [samples/README.md](samples/README.md) for ready-to-run commands and de
 
 Workflows can run local commands. Review each `command` before running it. Use `graph` and `dry-run` to audit the plan, and prefer `-it` when you want to keep execution in the foreground.
 
+## Testing
+
+Run the unit-test suite:
+
+```bash
+go test ./...
+```
+
+Run the fast end-to-end subset (CLI validation, graph, dry-run, harness, and runtime):
+
+```bash
+go test -tags=e2e ./test/e2e/...
+```
+
+Run the full E2E suite including slower daemon integration cases:
+
+```bash
+go test -tags="e2e integration" ./test/e2e/...
+```
+
+The E2E suite builds `agentflow` and `agentflowd` once per package, executes them in isolated temp directories, and cleans up automatically.
+
 ## Next Steps
 
 1. Install AgentFlow via [docs/installation.md](docs/installation.md) or run directly from source:

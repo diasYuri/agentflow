@@ -1,0 +1,9 @@
+version: "1"
+name: simple-run
+nodes:
+  - id: hello
+    kind: bash
+    command: echo "hello world"
+    capture:
+      stdout: true
+      exit_code: true

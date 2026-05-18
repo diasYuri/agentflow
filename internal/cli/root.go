@@ -25,22 +25,23 @@ import (
 )
 
 type options struct {
-	inputs         []string
-	inputJSON      string
-	vars           []string
-	maxConcurrency int
-	workingDir     string
-	project        string
-	codexPath      string
-	claudePath     string
-	piPath         string
-	logFormat      string
-	eventsJSONL    string
-	graphFormat    string
-	dryRun         bool
-	interactive    bool
-	noColor        bool
-	tag            string
+	inputs           []string
+	inputJSON        string
+	vars             []string
+	maxConcurrency   int
+	workingDir       string
+	project          string
+	codexPath        string
+	claudePath       string
+	piPath           string
+	fakeProviderPath string
+	logFormat        string
+	eventsJSONL      string
+	graphFormat      string
+	dryRun           bool
+	interactive      bool
+	noColor          bool
+	tag              string
 }
 
 type workflowRunClient interface {
@@ -163,29 +164,7 @@ func newDryRunCommand(opts *options) *cobra.Command {
 		Short: "Validate and print the execution plan",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			uc, err := buildUseCase(&local)
-			if err != nil {
-				return err
-			}
-			inputs, vars, err := parseInputsAndVars(&local)
-			if err != nil {
-				return err
-			}
-			ref, workingDir, err := resolveWorkflowRunContext(cmd, args[0], &local)
-			if err != nil {
-				return err
-			}
-			plan, resolved, err := uc.DryRun(cmd.Context(), runworkflow.RunOptions{
-				WorkflowRef: ref, Inputs: inputs, Vars: vars, MaxConcurrency: local.maxConcurrency,
-				WorkingDir: workingDir,
-			})
-			if err != nil {
-				return err
-			}
-			out := map[string]any{"workflow": plan.Workflow.Name, "inputs": resolved, "order": plan.Order, "nodes": plan.Nodes}
-			data, _ := json.MarshalIndent(out, "", "  ")
-			fmt.Fprintln(cmd.OutOrStdout(), string(data))
-			return nil
+			return runWorkflowDryRun(cmd, args[0], &local)
 		},
 	}
 	addCommonFlags(cmd, &local)
@@ -199,6 +178,9 @@ func newRunCommand(opts *options) *cobra.Command {
 		Short: "Run a workflow through agentflowd unless -it is set",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if local.dryRun {
+				return runWorkflowDryRun(cmd, args[0], &local)
+			}
 			if !local.interactive {
 				return runWorkflowViaDaemon(cmd, args[0], &local)
 			}
@@ -815,7 +797,12 @@ func newDaemonStartCommand(opts *options) *cobra.Command {
 			proc := exec.Command(path)
 			proc.Stdout = logFile
 			proc.Stderr = logFile
-			proc.Env = daemonProviderEnv(os.Environ(), opts)
+			env, err := daemonProviderEnv(os.Environ(), opts)
+			if err != nil {
+				_ = logFile.Close()
+				return err
+			}
+			proc.Env = env
 			if err := proc.Start(); err != nil {
 				_ = logFile.Close()
 				return err
@@ -851,6 +838,7 @@ func newDaemonStartCommand(opts *options) *cobra.Command {
 	cmd.Flags().StringVar(&opts.codexPath, "codex-path", "", "path to codex binary for daemon workflow runs")
 	cmd.Flags().StringVar(&opts.claudePath, "claude-path", "", "path to claude binary for daemon workflow runs")
 	cmd.Flags().StringVar(&opts.piPath, "pi-path", "", "path to pi binary for daemon workflow runs")
+	cmd.Flags().StringVar(&opts.fakeProviderPath, "fake-provider-path", "", "path to fake provider responses JSON for daemon workflow runs")
 	return cmd
 }
 
@@ -905,6 +893,7 @@ func addCommonFlags(cmd *cobra.Command, opts *options) {
 	cmd.Flags().StringVar(&opts.codexPath, "codex-path", "", "path to codex binary")
 	cmd.Flags().StringVar(&opts.claudePath, "claude-path", "", "path to claude binary")
 	cmd.Flags().StringVar(&opts.piPath, "pi-path", "", "path to pi binary")
+	cmd.Flags().StringVar(&opts.fakeProviderPath, "fake-provider-path", "", "path to fake provider responses JSON")
 	cmd.Flags().StringVar(&opts.logFormat, "log-format", "text", "text or json")
 	cmd.Flags().StringVar(&opts.eventsJSONL, "events-jsonl", "", "events JSONL path")
 	cmd.Flags().BoolVar(&opts.noColor, "no-color", false, "disable color output")
@@ -912,27 +901,39 @@ func addCommonFlags(cmd *cobra.Command, opts *options) {
 
 func buildUseCase(opts *options) (*runworkflow.RunWorkflowUseCase, error) {
 	return app.NewRunWorkflowUseCase(app.RuntimeOptions{
-		CodexPath:   opts.codexPath,
-		ClaudePath:  opts.claudePath,
-		PiPath:      opts.piPath,
-		LogFormat:   opts.logFormat,
-		EventsJSONL: opts.eventsJSONL,
-		EventWriter: os.Stdout,
+		CodexPath:        opts.codexPath,
+		ClaudePath:       opts.claudePath,
+		PiPath:           opts.piPath,
+		FakeProviderPath: opts.fakeProviderPath,
+		LogFormat:        opts.logFormat,
+		EventsJSONL:      opts.eventsJSONL,
+		EventWriter:      os.Stdout,
 	})
 }
 
-func daemonProviderEnv(base []string, opts *options) []string {
+func daemonProviderEnv(base []string, opts *options) ([]string, error) {
 	env := append([]string{}, base...)
-	if opts.codexPath != "" {
-		env = append(env, "AGENTFLOW_CODEX_PATH="+opts.codexPath)
+	if path, err := resolvePathForDaemon(opts.codexPath); err != nil {
+		return nil, err
+	} else if path != "" {
+		env = append(env, "AGENTFLOW_CODEX_PATH="+path)
 	}
-	if opts.claudePath != "" {
-		env = append(env, "AGENTFLOW_CLAUDE_PATH="+opts.claudePath)
+	if path, err := resolvePathForDaemon(opts.claudePath); err != nil {
+		return nil, err
+	} else if path != "" {
+		env = append(env, "AGENTFLOW_CLAUDE_PATH="+path)
 	}
-	if opts.piPath != "" {
-		env = append(env, "AGENTFLOW_PI_PATH="+opts.piPath)
+	if path, err := resolvePathForDaemon(opts.piPath); err != nil {
+		return nil, err
+	} else if path != "" {
+		env = append(env, "AGENTFLOW_PI_PATH="+path)
 	}
-	return env
+	if path, err := resolvePathForDaemon(opts.fakeProviderPath); err != nil {
+		return nil, err
+	} else if path != "" {
+		env = append(env, "AGENTFLOW_FAKE_PROVIDER_PATH="+path)
+	}
+	return env, nil
 }
 
 func addInteractiveFlags(cmd *cobra.Command, opts *options) {
@@ -1009,25 +1010,82 @@ func runWorkflowViaDaemon(cmd *cobra.Command, workflowRef string, opts *options)
 	if err != nil {
 		return err
 	}
+	codexPath, err := resolvePathForDaemon(opts.codexPath)
+	if err != nil {
+		return err
+	}
+	claudePath, err := resolvePathForDaemon(opts.claudePath)
+	if err != nil {
+		return err
+	}
+	piPath, err := resolvePathForDaemon(opts.piPath)
+	if err != nil {
+		return err
+	}
+	fakeProviderPath, err := resolvePathForDaemon(opts.fakeProviderPath)
+	if err != nil {
+		return err
+	}
+	eventsJSONL, err := resolvePathForDaemon(opts.eventsJSONL)
+	if err != nil {
+		return err
+	}
 	resp, err := newWorkflowRunClient("").RunWorkflow(cmd.Context(), daemon.RunWorkflowRequest{
-		WorkflowRef:    ref,
-		Inputs:         inputs,
-		Vars:           vars,
-		MaxConcurrency: opts.maxConcurrency,
-		WorkingDir:     workingDir,
-		CodexPath:      opts.codexPath,
-		ClaudePath:     opts.claudePath,
-		PiPath:         opts.piPath,
-		LogFormat:      opts.logFormat,
-		EventsJSONL:    opts.eventsJSONL,
-		DryRun:         opts.dryRun,
-		Tag:            opts.tag,
+		WorkflowRef:      ref,
+		Inputs:           inputs,
+		Vars:             vars,
+		MaxConcurrency:   opts.maxConcurrency,
+		WorkingDir:       workingDir,
+		CodexPath:        codexPath,
+		ClaudePath:       claudePath,
+		PiPath:           piPath,
+		FakeProviderPath: fakeProviderPath,
+		LogFormat:        opts.logFormat,
+		EventsJSONL:      eventsJSONL,
+		DryRun:           opts.dryRun,
+		Tag:              opts.tag,
 	})
 	if err != nil {
 		return err
 	}
 	printRun(cmd, resp.Run, isInteractiveWriter(cmd.OutOrStdout()))
 	return nil
+}
+
+func runWorkflowDryRun(cmd *cobra.Command, workflowRef string, opts *options) error {
+	uc, err := buildUseCase(opts)
+	if err != nil {
+		return err
+	}
+	inputs, vars, err := parseInputsAndVars(opts)
+	if err != nil {
+		return err
+	}
+	ref, workingDir, err := resolveWorkflowRunContext(cmd, workflowRef, opts)
+	if err != nil {
+		return err
+	}
+	plan, resolved, err := uc.DryRun(cmd.Context(), runworkflow.RunOptions{
+		WorkflowRef:    ref,
+		Inputs:         inputs,
+		Vars:           vars,
+		MaxConcurrency: opts.maxConcurrency,
+		WorkingDir:     workingDir,
+	})
+	if err != nil {
+		return err
+	}
+	return printDryRunResult(cmd.OutOrStdout(), plan, resolved)
+}
+
+func printDryRunResult(w io.Writer, plan workflow.ExecutionPlan, resolved map[string]any) error {
+	out := map[string]any{"workflow": plan.Workflow.Name, "inputs": resolved, "order": plan.Order, "nodes": plan.Nodes}
+	data, err := json.MarshalIndent(out, "", "  ")
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(w, string(data))
+	return err
 }
 
 func daemonWorkingDir(workingDir string) (string, error) {
@@ -1040,6 +1098,20 @@ func daemonWorkingDir(workingDir string) (string, error) {
 	abs, err := filepath.Abs(workingDir)
 	if err != nil {
 		return "", fmt.Errorf("resolve working dir %q: %w", workingDir, err)
+	}
+	return abs, nil
+}
+
+func resolvePathForDaemon(path string) (string, error) {
+	if path == "" {
+		return "", nil
+	}
+	if filepath.IsAbs(path) {
+		return filepath.Clean(path), nil
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve path %q: %w", path, err)
 	}
 	return abs, nil
 }

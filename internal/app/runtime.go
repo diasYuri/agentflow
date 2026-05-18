@@ -5,6 +5,7 @@ import (
 
 	claudeagent "github.com/diasYuri/agentflow/internal/adapters/agent/claude"
 	codexagent "github.com/diasYuri/agentflow/internal/adapters/agent/codex"
+	fakeagent "github.com/diasYuri/agentflow/internal/adapters/agent/fake"
 	piagent "github.com/diasYuri/agentflow/internal/adapters/agent/pi"
 	"github.com/diasYuri/agentflow/internal/adapters/events/jsonl"
 	"github.com/diasYuri/agentflow/internal/adapters/events/multi"
@@ -18,14 +19,15 @@ import (
 )
 
 type RuntimeOptions struct {
-	CodexPath   string
-	ClaudePath  string
-	PiPath      string
-	LogFormat   string
-	EventsJSONL string
-	EventWriter io.Writer
-	RunRoot     string
-	Workflows   ports.WorkflowRepository
+	CodexPath        string
+	ClaudePath       string
+	PiPath           string
+	FakeProviderPath string
+	LogFormat        string
+	EventsJSONL      string
+	EventWriter      io.Writer
+	RunRoot          string
+	Workflows        ports.WorkflowRepository
 }
 
 func NewRunWorkflowUseCase(opts RuntimeOptions) (*runworkflow.RunWorkflowUseCase, error) {
@@ -41,11 +43,19 @@ func NewRunWorkflowUseCase(opts RuntimeOptions) (*runworkflow.RunWorkflowUseCase
 		}
 		sink = multi.New(eventSink, stdout.New(opts.EventWriter, logFormat))
 	}
-	registry := ports.NewStaticAgentProviderRegistry(map[string]ports.AgentProvider{
+	providers := map[string]ports.AgentProvider{
 		"codex":  codexagent.New(opts.CodexPath),
 		"claude": claudeagent.New(opts.ClaudePath),
 		"pi":     piagent.New(opts.PiPath),
-	})
+	}
+	if opts.FakeProviderPath != "" {
+		fakeProv, err := fakeagent.NewFromPath(opts.FakeProviderPath)
+		if err != nil {
+			return nil, err
+		}
+		providers["fake"] = fakeProv
+	}
+	registry := ports.NewStaticAgentProviderRegistry(providers)
 	worktreeRegistry := ports.NewStaticWorktreeProviderRegistry(map[string]ports.WorktreeProvider{
 		"git": gitworktree.New(shell.NewRunner()),
 	})

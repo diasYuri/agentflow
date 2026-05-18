@@ -14,14 +14,15 @@ const PIDName = "agentflowd.pid"
 const LogName = "agentflowd.log"
 
 type Config struct {
-	SocketPath string
-	PIDPath    string
-	LogPath    string
-	RunRoot    string
-	DBPath     string
-	CodexPath  string
-	ClaudePath string
-	PiPath     string
+	SocketPath       string
+	PIDPath          string
+	LogPath          string
+	RunRoot          string
+	DBPath           string
+	CodexPath        string
+	ClaudePath       string
+	PiPath           string
+	FakeProviderPath string
 }
 
 func DefaultConfig() Config {
@@ -51,20 +52,21 @@ type DaemonStatus struct {
 }
 
 type RunWorkflowRequest struct {
-	WorkflowRef    string         `json:"workflow_ref"`
-	Inputs         map[string]any `json:"inputs,omitempty"`
-	Vars           map[string]any `json:"vars,omitempty"`
-	MaxConcurrency int            `json:"max_concurrency,omitempty"`
-	WorkingDir     string         `json:"working_dir,omitempty"`
-	CodexPath      string         `json:"codex_path,omitempty"`
-	ClaudePath     string         `json:"claude_path,omitempty"`
-	PiPath         string         `json:"pi_path,omitempty"`
-	LogFormat      string         `json:"log_format,omitempty"`
-	EventsJSONL    string         `json:"events_jsonl,omitempty"`
-	RunRoot        string         `json:"run_root,omitempty"`
-	OutputDir      string         `json:"output_dir,omitempty"`
-	DryRun         bool           `json:"dry_run,omitempty"`
-	Tag            string         `json:"tag,omitempty"`
+	WorkflowRef      string         `json:"workflow_ref"`
+	Inputs           map[string]any `json:"inputs,omitempty"`
+	Vars             map[string]any `json:"vars,omitempty"`
+	MaxConcurrency   int            `json:"max_concurrency,omitempty"`
+	WorkingDir       string         `json:"working_dir,omitempty"`
+	CodexPath        string         `json:"codex_path,omitempty"`
+	ClaudePath       string         `json:"claude_path,omitempty"`
+	PiPath           string         `json:"pi_path,omitempty"`
+	FakeProviderPath string         `json:"fake_provider_path,omitempty"`
+	LogFormat        string         `json:"log_format,omitempty"`
+	EventsJSONL      string         `json:"events_jsonl,omitempty"`
+	RunRoot          string         `json:"run_root,omitempty"`
+	OutputDir        string         `json:"output_dir,omitempty"`
+	DryRun           bool           `json:"dry_run,omitempty"`
+	Tag              string         `json:"tag,omitempty"`
 }
 
 type WorkflowRun struct {

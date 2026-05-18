@@ -102,13 +102,14 @@ func (m *Manager) StartWorkflow(req RunWorkflowRequest) (WorkflowRun, error) {
 		Request:   &storedReq,
 	}
 	uc, err := app.NewRunWorkflowUseCase(app.RuntimeOptions{
-		CodexPath:   firstNonEmpty(req.CodexPath, m.cfg.CodexPath, os.Getenv("AGENTFLOW_CODEX_PATH")),
-		ClaudePath:  firstNonEmpty(req.ClaudePath, m.cfg.ClaudePath, os.Getenv("AGENTFLOW_CLAUDE_PATH")),
-		PiPath:      firstNonEmpty(req.PiPath, m.cfg.PiPath, os.Getenv("AGENTFLOW_PI_PATH")),
-		LogFormat:   req.LogFormat,
-		EventsJSONL: req.EventsJSONL,
-		RunRoot:     runRoot,
-		Workflows:   m.workflowRepo,
+		CodexPath:        firstNonEmpty(req.CodexPath, m.cfg.CodexPath, os.Getenv("AGENTFLOW_CODEX_PATH")),
+		ClaudePath:       firstNonEmpty(req.ClaudePath, m.cfg.ClaudePath, os.Getenv("AGENTFLOW_CLAUDE_PATH")),
+		PiPath:           firstNonEmpty(req.PiPath, m.cfg.PiPath, os.Getenv("AGENTFLOW_PI_PATH")),
+		FakeProviderPath: firstNonEmpty(req.FakeProviderPath, m.cfg.FakeProviderPath, os.Getenv("AGENTFLOW_FAKE_PROVIDER_PATH")),
+		LogFormat:        req.LogFormat,
+		EventsJSONL:      req.EventsJSONL,
+		RunRoot:          runRoot,
+		Workflows:        m.workflowRepo,
 	})
 	if err != nil {
 		return WorkflowRun{}, err
@@ -296,13 +297,14 @@ func (m *Manager) ResumeWorkflow(runID string) (WorkflowRun, error) {
 	req := *current.Request
 	runRoot := firstNonEmpty(req.RunRoot, req.OutputDir, m.cfg.RunRoot)
 	uc, err := app.NewRunWorkflowUseCase(app.RuntimeOptions{
-		CodexPath:   firstNonEmpty(req.CodexPath, m.cfg.CodexPath, os.Getenv("AGENTFLOW_CODEX_PATH")),
-		ClaudePath:  firstNonEmpty(req.ClaudePath, m.cfg.ClaudePath, os.Getenv("AGENTFLOW_CLAUDE_PATH")),
-		PiPath:      firstNonEmpty(req.PiPath, m.cfg.PiPath, os.Getenv("AGENTFLOW_PI_PATH")),
-		LogFormat:   req.LogFormat,
-		EventsJSONL: req.EventsJSONL,
-		RunRoot:     runRoot,
-		Workflows:   m.workflowRepo,
+		CodexPath:        firstNonEmpty(req.CodexPath, m.cfg.CodexPath, os.Getenv("AGENTFLOW_CODEX_PATH")),
+		ClaudePath:       firstNonEmpty(req.ClaudePath, m.cfg.ClaudePath, os.Getenv("AGENTFLOW_CLAUDE_PATH")),
+		PiPath:           firstNonEmpty(req.PiPath, m.cfg.PiPath, os.Getenv("AGENTFLOW_PI_PATH")),
+		FakeProviderPath: firstNonEmpty(req.FakeProviderPath, m.cfg.FakeProviderPath, os.Getenv("AGENTFLOW_FAKE_PROVIDER_PATH")),
+		LogFormat:        req.LogFormat,
+		EventsJSONL:      req.EventsJSONL,
+		RunRoot:          runRoot,
+		Workflows:        m.workflowRepo,
 	})
 	if err != nil {
 		return WorkflowRun{}, err
@@ -357,13 +359,14 @@ func (m *Manager) ApproveWorkflow(runID string) (WorkflowRun, error) {
 	approval := *checkpoint.Approval
 	runRoot := firstNonEmpty(current.Request.RunRoot, current.Request.OutputDir, m.cfg.RunRoot)
 	uc, err := app.NewRunWorkflowUseCase(app.RuntimeOptions{
-		CodexPath:   firstNonEmpty(current.Request.CodexPath, m.cfg.CodexPath, os.Getenv("AGENTFLOW_CODEX_PATH")),
-		ClaudePath:  firstNonEmpty(current.Request.ClaudePath, m.cfg.ClaudePath, os.Getenv("AGENTFLOW_CLAUDE_PATH")),
-		PiPath:      firstNonEmpty(current.Request.PiPath, m.cfg.PiPath, os.Getenv("AGENTFLOW_PI_PATH")),
-		LogFormat:   current.Request.LogFormat,
-		EventsJSONL: current.Request.EventsJSONL,
-		RunRoot:     runRoot,
-		Workflows:   m.workflowRepo,
+		CodexPath:        firstNonEmpty(current.Request.CodexPath, m.cfg.CodexPath, os.Getenv("AGENTFLOW_CODEX_PATH")),
+		ClaudePath:       firstNonEmpty(current.Request.ClaudePath, m.cfg.ClaudePath, os.Getenv("AGENTFLOW_CLAUDE_PATH")),
+		PiPath:           firstNonEmpty(current.Request.PiPath, m.cfg.PiPath, os.Getenv("AGENTFLOW_PI_PATH")),
+		FakeProviderPath: firstNonEmpty(current.Request.FakeProviderPath, m.cfg.FakeProviderPath, os.Getenv("AGENTFLOW_FAKE_PROVIDER_PATH")),
+		LogFormat:        current.Request.LogFormat,
+		EventsJSONL:      current.Request.EventsJSONL,
+		RunRoot:          runRoot,
+		Workflows:        m.workflowRepo,
 	})
 	if err != nil {
 		return WorkflowRun{}, err

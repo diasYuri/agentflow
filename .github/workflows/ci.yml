@@ -44,3 +44,51 @@ jobs:
 
       - name: Run go vet
         run: go vet ./internal/... ./cmd/agentflow/... ./cmd/agentflowd/...
+
+  e2e-fast:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Checkout go-codex-sdk dependency
+        uses: actions/checkout@v4
+        with:
+          repository: diasYuri/go-codex-sdk
+          path: ${{ github.workspace }}/../go-codex-sdk
+
+      - name: Fix local replace directive
+        run: go mod edit -replace github.com/diasYuri/go-codex-sdk=${{ github.workspace }}/../go-codex-sdk
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run fast E2E tests
+        run: go test -tags=e2e -v -count=1 -timeout=10m ./test/e2e/...
+
+  e2e-slow:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Checkout go-codex-sdk dependency
+        uses: actions/checkout@v4
+        with:
+          repository: diasYuri/go-codex-sdk
+          path: ${{ github.workspace }}/../go-codex-sdk
+
+      - name: Fix local replace directive
+        run: go mod edit -replace github.com/diasYuri/go-codex-sdk=${{ github.workspace }}/../go-codex-sdk
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run slow E2E tests
+        run: go test -tags="e2e integration" -v -count=1 -timeout=10m ./test/e2e/...

@@ -1,0 +1,13 @@
+version: "1"
+name: hello
+inputs:
+  name:
+    type: string
+    default: world
+nodes:
+  - id: greet
+    kind: agent
+    provider: fake
+    model: fake
+    system: "You are a greeter."
+    prompt: "Say hello to {{ .inputs.name }}."

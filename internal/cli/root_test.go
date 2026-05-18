@@ -499,6 +499,86 @@ func TestRunCommandSendsRuntimeOptionsToDaemon(t *testing.T) {
 	}
 }
 
+func TestRunCommandNormalizesDaemonPathsRelativeToCallerCwd(t *testing.T) {
+	dir := t.TempDir()
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(oldwd)
+	})
+
+	var got daemon.RunWorkflowRequest
+	oldClient := newWorkflowRunClient
+	newWorkflowRunClient = func(socketPath string) workflowRunClient {
+		return workflowRunClientFunc(func(ctx context.Context, req daemon.RunWorkflowRequest) (daemon.RunWorkflowResponse, error) {
+			got = req
+			return daemon.RunWorkflowResponse{Run: daemon.WorkflowRun{ID: "run-1", RunDir: "/tmp/run-1", Status: "created"}}, nil
+		})
+	}
+	t.Cleanup(func() {
+		newWorkflowRunClient = oldClient
+	})
+
+	cmd := NewRootCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{
+		"run", "daemon-run",
+		"--codex-path", "bin/codex",
+		"--claude-path", "bin/claude",
+		"--pi-path", "bin/pi",
+		"--fake-provider-path", "fixtures/fake.json",
+		"--events-jsonl", "events.jsonl",
+	})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+
+	wantCodex, err := filepath.Abs("bin/codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantClaude, err := filepath.Abs("bin/claude")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPi, err := filepath.Abs("bin/pi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantFake, err := filepath.Abs("fixtures/fake.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantEvents, err := filepath.Abs("events.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got.CodexPath != wantCodex {
+		t.Fatalf("codex path mismatch: got %q want %q", got.CodexPath, wantCodex)
+	}
+	if got.ClaudePath != wantClaude {
+		t.Fatalf("claude path mismatch: got %q want %q", got.ClaudePath, wantClaude)
+	}
+	if got.PiPath != wantPi {
+		t.Fatalf("pi path mismatch: got %q want %q", got.PiPath, wantPi)
+	}
+	if got.FakeProviderPath != wantFake {
+		t.Fatalf("fake provider path mismatch: got %q want %q", got.FakeProviderPath, wantFake)
+	}
+	if got.EventsJSONL != wantEvents {
+		t.Fatalf("events jsonl mismatch: got %q want %q", got.EventsJSONL, wantEvents)
+	}
+}
+
 func TestRunCommandSendsAbsoluteDefaultWorkingDirToDaemon(t *testing.T) {
 	dir := t.TempDir()
 	oldwd, err := os.Getwd()
@@ -543,11 +623,14 @@ func TestRunCommandSendsAbsoluteDefaultWorkingDirToDaemon(t *testing.T) {
 }
 
 func TestDaemonProviderEnvIncludesPiPath(t *testing.T) {
-	env := daemonProviderEnv([]string{"PATH=/usr/bin"}, &options{
+	env, err := daemonProviderEnv([]string{"PATH=/usr/bin"}, &options{
 		codexPath:  "/tmp/codex",
 		claudePath: "/tmp/claude",
 		piPath:     "/tmp/pi",
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	joined := "\n" + strings.Join(env, "\n") + "\n"
 	for _, want := range []string{
@@ -555,6 +638,59 @@ func TestDaemonProviderEnvIncludesPiPath(t *testing.T) {
 		"\nAGENTFLOW_CODEX_PATH=/tmp/codex\n",
 		"\nAGENTFLOW_CLAUDE_PATH=/tmp/claude\n",
 		"\nAGENTFLOW_PI_PATH=/tmp/pi\n",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("expected env %q in %#v", strings.TrimSpace(want), env)
+		}
+	}
+}
+
+func TestDaemonProviderEnvNormalizesRelativePaths(t *testing.T) {
+	dir := t.TempDir()
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(oldwd)
+	})
+
+	env, err := daemonProviderEnv(nil, &options{
+		codexPath:        "bin/codex",
+		claudePath:       "bin/claude",
+		piPath:           "bin/pi",
+		fakeProviderPath: "fixtures/fake.json",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wantCodex, err := filepath.Abs("bin/codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantClaude, err := filepath.Abs("bin/claude")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPi, err := filepath.Abs("bin/pi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantFake, err := filepath.Abs("fixtures/fake.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	joined := "\n" + strings.Join(env, "\n") + "\n"
+	for _, want := range []string{
+		"\nAGENTFLOW_CODEX_PATH=" + wantCodex + "\n",
+		"\nAGENTFLOW_CLAUDE_PATH=" + wantClaude + "\n",
+		"\nAGENTFLOW_PI_PATH=" + wantPi + "\n",
+		"\nAGENTFLOW_FAKE_PROVIDER_PATH=" + wantFake + "\n",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("expected env %q in %#v", strings.TrimSpace(want), env)
