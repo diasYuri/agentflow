@@ -95,7 +95,7 @@ steps:
     nodes:
       - id: implement_plan
         kind: agent
-        provider: pi
+        provider: claude
         permission:
           write: true
         prompt: |
