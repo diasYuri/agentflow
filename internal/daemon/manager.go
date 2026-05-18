@@ -18,9 +18,12 @@ import (
 
 	"github.com/thejerf/suture/v4"
 
+	yamlrepo "github.com/diasYuri/agentflow/internal/adapters/yaml"
 	"github.com/diasYuri/agentflow/internal/app"
+	"github.com/diasYuri/agentflow/internal/core/ports"
 	corerun "github.com/diasYuri/agentflow/internal/core/run"
 	runworkflow "github.com/diasYuri/agentflow/internal/core/runtime"
+	coreworkflow "github.com/diasYuri/agentflow/internal/core/workflow"
 )
 
 type serviceAdder interface {
@@ -32,6 +35,8 @@ type Manager struct {
 	runSupervisor serviceAdder
 	logger        *slog.Logger
 	store         RunStore
+	workflowRepo  ports.WorkflowRepository
+	workflowDefs  *WorkflowDefinitionService
 
 	mu      sync.Mutex
 	records map[string]*runRecord
@@ -50,11 +55,19 @@ func NewManagerWithStore(cfg Config, runSupervisor serviceAdder, logger *slog.Lo
 	if logger == nil {
 		logger = slog.Default()
 	}
+	workflowRepo := ports.WorkflowRepository(yamlrepo.NewWorkflowRepository())
+	var workflowDefs *WorkflowDefinitionService
+	if sqliteStore, ok := store.(*SQLiteRunStore); ok {
+		workflowDefs = NewWorkflowDefinitionService(sqliteStore, defaultWorkflowDefinitionRoot())
+		workflowRepo = newCompositeWorkflowRepository(workflowDefs.repository(), workflowRepo)
+	}
 	manager := &Manager{
 		cfg:           cfg,
 		runSupervisor: runSupervisor,
 		logger:        logger,
 		store:         store,
+		workflowRepo:  workflowRepo,
+		workflowDefs:  workflowDefs,
 		records:       map[string]*runRecord{},
 	}
 	manager.loadPersistedRuns(context.Background())
@@ -95,6 +108,7 @@ func (m *Manager) StartWorkflow(req RunWorkflowRequest) (WorkflowRun, error) {
 		LogFormat:   req.LogFormat,
 		EventsJSONL: req.EventsJSONL,
 		RunRoot:     runRoot,
+		Workflows:   m.workflowRepo,
 	})
 	if err != nil {
 		return WorkflowRun{}, err
@@ -106,6 +120,41 @@ func (m *Manager) StartWorkflow(req RunWorkflowRequest) (WorkflowRun, error) {
 	m.persist(run)
 	m.runSupervisor.Add(service)
 	return run, nil
+}
+
+func (m *Manager) ListWorkflowDefinitions(ctx context.Context) ([]WorkflowDefinitionSummary, error) {
+	if m.workflowDefs == nil {
+		return nil, fmt.Errorf("workflow definitions are not configured")
+	}
+	return m.workflowDefs.List(ctx)
+}
+
+func (m *Manager) GetWorkflowDefinition(ctx context.Context, id string) (WorkflowDefinition, error) {
+	if m.workflowDefs == nil {
+		return WorkflowDefinition{}, fmt.Errorf("workflow definitions are not configured")
+	}
+	return m.workflowDefs.Get(ctx, id)
+}
+
+func (m *Manager) CreateWorkflowDefinition(ctx context.Context, spec coreworkflow.WorkflowSpec) (WorkflowDefinition, error) {
+	if m.workflowDefs == nil {
+		return WorkflowDefinition{}, fmt.Errorf("workflow definitions are not configured")
+	}
+	return m.workflowDefs.Create(ctx, spec)
+}
+
+func (m *Manager) UpdateWorkflowDefinition(ctx context.Context, id string, spec coreworkflow.WorkflowSpec) (WorkflowDefinition, error) {
+	if m.workflowDefs == nil {
+		return WorkflowDefinition{}, fmt.Errorf("workflow definitions are not configured")
+	}
+	return m.workflowDefs.Update(ctx, id, spec)
+}
+
+func (m *Manager) DeleteWorkflowDefinition(ctx context.Context, id string) error {
+	if m.workflowDefs == nil {
+		return fmt.Errorf("workflow definitions are not configured")
+	}
+	return m.workflowDefs.Delete(ctx, id)
 }
 
 func firstNonEmpty(values ...string) string {
@@ -253,6 +302,7 @@ func (m *Manager) ResumeWorkflow(runID string) (WorkflowRun, error) {
 		LogFormat:   req.LogFormat,
 		EventsJSONL: req.EventsJSONL,
 		RunRoot:     runRoot,
+		Workflows:   m.workflowRepo,
 	})
 	if err != nil {
 		return WorkflowRun{}, err
@@ -313,6 +363,7 @@ func (m *Manager) ApproveWorkflow(runID string) (WorkflowRun, error) {
 		LogFormat:   current.Request.LogFormat,
 		EventsJSONL: current.Request.EventsJSONL,
 		RunRoot:     runRoot,
+		Workflows:   m.workflowRepo,
 	})
 	if err != nil {
 		return WorkflowRun{}, err

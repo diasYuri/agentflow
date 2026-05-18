@@ -134,6 +134,27 @@ func TestWorkflowRepositoryLoadAcceptsDirectWorkflowPath(t *testing.T) {
 	}
 }
 
+func TestWorkflowRepositoryLoadAcceptsDirectJSONWorkflowPath(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "direct.json")
+	content := []byte(`{"version":"1","name":"json-workflow","nodes":[{"id":"ok","kind":"noop"}]}`)
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	repo := NewWorkflowRepository(filepath.Join(root, "missing-local"), filepath.Join(root, "missing-global"))
+	spec, sourcePath, err := repo.Load(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.Name != "json-workflow" {
+		t.Fatalf("expected json workflow, got %q", spec.Name)
+	}
+	if sourcePath != filepath.Clean(path) {
+		t.Fatalf("expected direct json source path, got %q", sourcePath)
+	}
+}
+
 func TestClaudeSampleWorkflowValidates(t *testing.T) {
 	_, file, _, ok := runtime.Caller(0)
 	if !ok {

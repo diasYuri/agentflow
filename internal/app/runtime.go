@@ -25,6 +25,7 @@ type RuntimeOptions struct {
 	EventsJSONL string
 	EventWriter io.Writer
 	RunRoot     string
+	Workflows   ports.WorkflowRepository
 }
 
 func NewRunWorkflowUseCase(opts RuntimeOptions) (*runworkflow.RunWorkflowUseCase, error) {
@@ -48,8 +49,12 @@ func NewRunWorkflowUseCase(opts RuntimeOptions) (*runworkflow.RunWorkflowUseCase
 	worktreeRegistry := ports.NewStaticWorktreeProviderRegistry(map[string]ports.WorktreeProvider{
 		"git": gitworktree.New(shell.NewRunner()),
 	})
+	workflows := opts.Workflows
+	if workflows == nil {
+		workflows = yamlrepo.NewWorkflowRepository()
+	}
 	return &runworkflow.RunWorkflowUseCase{
-		Workflows: yamlrepo.NewWorkflowRepository(),
+		Workflows: workflows,
 		Runs:      runrepo.New(opts.RunRoot),
 		Events:    sink,
 		Agents:    registry,

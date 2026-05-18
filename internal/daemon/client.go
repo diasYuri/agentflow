@@ -12,6 +12,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	coreworkflow "github.com/diasYuri/agentflow/internal/core/workflow"
 )
 
 type Client struct {
@@ -57,6 +59,34 @@ func (c *Client) ListWorkflows(ctx context.Context) (ListWorkflowsResponse, erro
 	var out ListWorkflowsResponse
 	err := c.do(ctx, http.MethodGet, "/v1/workflows", nil, &out)
 	return out, err
+}
+
+func (c *Client) ListWorkflowDefinitions(ctx context.Context) (WorkflowDefinitionsResponse, error) {
+	var out WorkflowDefinitionsResponse
+	err := c.do(ctx, http.MethodGet, "/v1/workflow-definitions", nil, &out)
+	return out, err
+}
+
+func (c *Client) CreateWorkflowDefinition(ctx context.Context, spec coreworkflow.WorkflowSpec) (WorkflowDefinitionResponse, error) {
+	var out WorkflowDefinitionResponse
+	err := c.do(ctx, http.MethodPost, "/v1/workflow-definitions", spec, &out)
+	return out, err
+}
+
+func (c *Client) WorkflowDefinition(ctx context.Context, id string) (WorkflowDefinitionResponse, error) {
+	var out WorkflowDefinitionResponse
+	err := c.do(ctx, http.MethodGet, "/v1/workflow-definitions/"+url.PathEscape(id), nil, &out)
+	return out, err
+}
+
+func (c *Client) UpdateWorkflowDefinition(ctx context.Context, id string, spec coreworkflow.WorkflowSpec) (WorkflowDefinitionResponse, error) {
+	var out WorkflowDefinitionResponse
+	err := c.do(ctx, http.MethodPut, "/v1/workflow-definitions/"+url.PathEscape(id), spec, &out)
+	return out, err
+}
+
+func (c *Client) DeleteWorkflowDefinition(ctx context.Context, id string) error {
+	return c.do(ctx, http.MethodDelete, "/v1/workflow-definitions/"+url.PathEscape(id), nil, nil)
 }
 
 func (c *Client) WorkflowStatus(ctx context.Context, runID string) (RunWorkflowResponse, error) {

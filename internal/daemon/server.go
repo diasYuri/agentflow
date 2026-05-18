@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/thejerf/suture/v4"
+
+	coreworkflow "github.com/diasYuri/agentflow/internal/core/workflow"
 )
 
 type Server struct {
@@ -74,6 +76,8 @@ func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/daemon/status", s.handleDaemonStatus)
 	mux.HandleFunc("/v1/daemon/stop", s.handleDaemonStop)
+	mux.HandleFunc("/v1/workflow-definitions", s.handleWorkflowDefinitions)
+	mux.HandleFunc("/v1/workflow-definitions/", s.handleWorkflowDefinition)
 	mux.HandleFunc("/v1/workflows", s.handleWorkflows)
 	mux.HandleFunc("/v1/workflows/", s.handleWorkflow)
 	registerDebugRoutes(mux)
@@ -119,6 +123,71 @@ func (s *Server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusAccepted, RunWorkflowResponse{Run: run})
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+func (s *Server) handleWorkflowDefinitions(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		definitions, err := s.manager.ListWorkflowDefinitions(r.Context())
+		if err != nil {
+			writeError(w, statusForWorkflowDefinitionError(err), err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, WorkflowDefinitionsResponse{Definitions: definitions})
+	case http.MethodPost:
+		spec, err := decodeWorkflowSpecRequest(r)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		definition, err := s.manager.CreateWorkflowDefinition(r.Context(), spec)
+		if err != nil {
+			writeError(w, statusForWorkflowDefinitionError(err), err.Error())
+			return
+		}
+		w.Header().Set("Location", "/v1/workflow-definitions/"+definition.ID)
+		writeJSON(w, http.StatusCreated, WorkflowDefinitionResponse{WorkflowDefinition: definition})
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+func (s *Server) handleWorkflowDefinition(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/workflow-definitions/"))
+	id = strings.Trim(id, "/")
+	if id == "" {
+		writeError(w, http.StatusNotFound, "workflow definition not found")
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		definition, err := s.manager.GetWorkflowDefinition(r.Context(), id)
+		if err != nil {
+			writeError(w, statusForWorkflowDefinitionError(err), err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, WorkflowDefinitionResponse{WorkflowDefinition: definition})
+	case http.MethodPut:
+		spec, err := decodeWorkflowSpecRequest(r)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		definition, err := s.manager.UpdateWorkflowDefinition(r.Context(), id, spec)
+		if err != nil {
+			writeError(w, statusForWorkflowDefinitionError(err), err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, WorkflowDefinitionResponse{WorkflowDefinition: definition})
+	case http.MethodDelete:
+		if err := s.manager.DeleteWorkflowDefinition(r.Context(), id); err != nil {
+			writeError(w, statusForWorkflowDefinitionError(err), err.Error())
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
@@ -317,6 +386,35 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
+}
+
+func decodeWorkflowSpecRequest(r *http.Request) (coreworkflow.WorkflowSpec, error) {
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	var spec coreworkflow.WorkflowSpec
+	if err := decoder.Decode(&spec); err != nil {
+		return coreworkflow.WorkflowSpec{}, err
+	}
+	return spec, nil
+}
+
+func statusForWorkflowDefinitionError(err error) int {
+	if errors.Is(err, os.ErrNotExist) {
+		return http.StatusNotFound
+	}
+	if errors.Is(err, ErrWorkflowDefinitionConflict) {
+		return http.StatusConflict
+	}
+	if errors.Is(err, ErrWorkflowDefinitionInvalid) {
+		return http.StatusBadRequest
+	}
+	if err != nil {
+		msg := strings.ToLower(err.Error())
+		if strings.Contains(msg, "not configured") {
+			return http.StatusServiceUnavailable
+		}
+	}
+	return http.StatusInternalServerError
 }
 
 func statusForError(err error) int {

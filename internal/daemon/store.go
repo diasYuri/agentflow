@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,6 +13,10 @@ import (
 
 	_ "modernc.org/sqlite"
 )
+
+type rowScanner interface {
+	Scan(dest ...any) error
+}
 
 type RunStore interface {
 	LoadRuns(ctx context.Context) ([]WorkflowRun, error)
@@ -74,6 +79,15 @@ CREATE TABLE IF NOT EXISTS workflow_runs (
 );
 CREATE INDEX IF NOT EXISTS idx_workflow_runs_started_at ON workflow_runs(started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_workflow_runs_status ON workflow_runs(status);
+CREATE TABLE IF NOT EXISTS workflow_definitions (
+	id TEXT PRIMARY KEY,
+	name TEXT NOT NULL,
+	spec_json TEXT NOT NULL,
+	created_at TEXT NOT NULL,
+	updated_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_workflow_definitions_name ON workflow_definitions(name);
+CREATE INDEX IF NOT EXISTS idx_workflow_definitions_updated_at ON workflow_definitions(updated_at DESC);
 `)
 	if err != nil {
 		return err
@@ -103,6 +117,120 @@ CREATE INDEX IF NOT EXISTS idx_workflow_runs_status ON workflow_runs(status);
 		}
 	}
 	return nil
+}
+
+func (s *SQLiteRunStore) LoadWorkflowDefinitions(ctx context.Context) ([]WorkflowDefinitionRecord, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT id, name, spec_json, created_at, updated_at
+FROM workflow_definitions
+ORDER BY updated_at DESC, created_at DESC, name ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var records []WorkflowDefinitionRecord
+	for rows.Next() {
+		var record WorkflowDefinitionRecord
+		var createdAt, updatedAt string
+		if err := rows.Scan(&record.ID, &record.Name, &record.SpecJSON, &createdAt, &updatedAt); err != nil {
+			return nil, err
+		}
+		parsedCreatedAt, err := time.Parse(time.RFC3339Nano, createdAt)
+		if err != nil {
+			return nil, fmt.Errorf("parse created_at for workflow definition %q: %w", record.ID, err)
+		}
+		parsedUpdatedAt, err := time.Parse(time.RFC3339Nano, updatedAt)
+		if err != nil {
+			return nil, fmt.Errorf("parse updated_at for workflow definition %q: %w", record.ID, err)
+		}
+		record.CreatedAt = parsedCreatedAt
+		record.UpdatedAt = parsedUpdatedAt
+		records = append(records, record)
+	}
+	return records, rows.Err()
+}
+
+func (s *SQLiteRunStore) GetWorkflowDefinition(ctx context.Context, id string) (WorkflowDefinitionRecord, error) {
+	row := s.db.QueryRowContext(ctx, `
+SELECT id, name, spec_json, created_at, updated_at
+FROM workflow_definitions
+WHERE id = ?`, strings.TrimSpace(id))
+	return scanWorkflowDefinitionRecord(row)
+}
+
+func (s *SQLiteRunStore) GetWorkflowDefinitionByName(ctx context.Context, name string) (WorkflowDefinitionRecord, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT id, name, spec_json, created_at, updated_at
+FROM workflow_definitions
+WHERE name = ?
+ORDER BY updated_at DESC, created_at DESC
+LIMIT 2`, strings.TrimSpace(name))
+	if err != nil {
+		return WorkflowDefinitionRecord{}, err
+	}
+	defer rows.Close()
+
+	var records []WorkflowDefinitionRecord
+	for rows.Next() {
+		record, err := scanWorkflowDefinitionRows(rows)
+		if err != nil {
+			return WorkflowDefinitionRecord{}, err
+		}
+		records = append(records, record)
+	}
+	if err := rows.Err(); err != nil {
+		return WorkflowDefinitionRecord{}, err
+	}
+	switch len(records) {
+	case 0:
+		return WorkflowDefinitionRecord{}, os.ErrNotExist
+	case 1:
+		return records[0], nil
+	default:
+		return WorkflowDefinitionRecord{}, fmt.Errorf("duplicate workflow definition name %q", name)
+	}
+}
+
+func scanWorkflowDefinitionRecord(row rowScanner) (WorkflowDefinitionRecord, error) {
+	var record WorkflowDefinitionRecord
+	var createdAt, updatedAt string
+	if err := row.Scan(&record.ID, &record.Name, &record.SpecJSON, &createdAt, &updatedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return WorkflowDefinitionRecord{}, os.ErrNotExist
+		}
+		return WorkflowDefinitionRecord{}, err
+	}
+	parsedCreatedAt, err := time.Parse(time.RFC3339Nano, createdAt)
+	if err != nil {
+		return WorkflowDefinitionRecord{}, fmt.Errorf("parse created_at for workflow definition %q: %w", record.ID, err)
+	}
+	parsedUpdatedAt, err := time.Parse(time.RFC3339Nano, updatedAt)
+	if err != nil {
+		return WorkflowDefinitionRecord{}, fmt.Errorf("parse updated_at for workflow definition %q: %w", record.ID, err)
+	}
+	record.CreatedAt = parsedCreatedAt
+	record.UpdatedAt = parsedUpdatedAt
+	return record, nil
+}
+
+func scanWorkflowDefinitionRows(rows *sql.Rows) (WorkflowDefinitionRecord, error) {
+	var record WorkflowDefinitionRecord
+	var createdAt, updatedAt string
+	if err := rows.Scan(&record.ID, &record.Name, &record.SpecJSON, &createdAt, &updatedAt); err != nil {
+		return WorkflowDefinitionRecord{}, err
+	}
+	parsedCreatedAt, err := time.Parse(time.RFC3339Nano, createdAt)
+	if err != nil {
+		return WorkflowDefinitionRecord{}, fmt.Errorf("parse created_at for workflow definition %q: %w", record.ID, err)
+	}
+	parsedUpdatedAt, err := time.Parse(time.RFC3339Nano, updatedAt)
+	if err != nil {
+		return WorkflowDefinitionRecord{}, fmt.Errorf("parse updated_at for workflow definition %q: %w", record.ID, err)
+	}
+	record.CreatedAt = parsedCreatedAt
+	record.UpdatedAt = parsedUpdatedAt
+	return record, nil
 }
 
 func (s *SQLiteRunStore) LoadRuns(ctx context.Context) ([]WorkflowRun, error) {

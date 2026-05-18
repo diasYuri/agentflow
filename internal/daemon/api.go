@@ -100,6 +100,18 @@ type ListWorkflowsResponse struct {
 	Runs []WorkflowRun `json:"runs"`
 }
 
+type WorkflowDefinitionsResponse struct {
+	Definitions []WorkflowDefinitionSummary `json:"workflow_definitions"`
+}
+
+type WorkflowDefinitionResponse struct {
+	WorkflowDefinition WorkflowDefinition `json:"workflow_definition"`
+}
+
+type DeleteWorkflowDefinitionResponse struct {
+	Deleted string `json:"deleted"`
+}
+
 type LogsResponse struct {
 	RunID string   `json:"run_id"`
 	Lines []string `json:"lines"`

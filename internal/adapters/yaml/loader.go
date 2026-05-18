@@ -113,7 +113,7 @@ func (r *WorkflowRepository) findInScope(ctx context.Context, root string, name 
 		}
 		path := filepath.Join(root, entry.Name())
 		switch strings.ToLower(filepath.Ext(entry.Name())) {
-		case ".yaml", ".yml":
+		case ".yaml", ".yml", ".json":
 		default:
 			continue
 		}
@@ -148,7 +148,7 @@ type scopeMatch struct {
 
 func isWorkflowPath(ref string) bool {
 	ext := strings.ToLower(filepath.Ext(ref))
-	if ext != ".yaml" && ext != ".yml" {
+	if ext != ".yaml" && ext != ".yml" && ext != ".json" {
 		return false
 	}
 	if strings.Contains(ref, string(filepath.Separator)) || filepath.IsAbs(ref) {
