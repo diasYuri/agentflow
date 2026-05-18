@@ -1,5 +1,5 @@
 version: "1"
-name: features-docs
+name: docs
 description: "Mapeia as features do projeto e gera documentação em docs/ para cada feature."
 
 defaults:
@@ -15,7 +15,7 @@ execution:
 nodes:
   - id: map_features
     kind: agent
-    provider: pi
+    provider: claude
     prompt: |
       Você é um analista técnico sênior.
 
