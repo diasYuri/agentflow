@@ -37,6 +37,7 @@ Em [`internal/cli/root.go`](/Users/yuri/git/diasYuri/agentflow/internal/cli/root
 - `workflow schedule remove <id>`: remove um agendamento e desinstala o dispatcher quando não restarem schedules.
 - `daemon start|stop|status`: controla o processo `agentflowd`.
 - `tui`: lança a interface terminal interativa (TUI). Aceita `--workflow`, `--run`, `--daemon`, `--no-mouse` e `--theme`. Veja [`docs/tui.md`](docs/tui.md) para detalhes completos.
+- `web`: sobe o servidor local AgentFlow Web em `127.0.0.1`. Aceita `--host`, `--port`, `--no-open`, `--dev-assets`, `--daemon`, `--root` e `--token`. Veja [`docs/web.md`](docs/web.md).
 
 O alias legado `run <workflow>` chama `workflow run <workflow>`. Para execução local foreground, use `run -it <workflow>` ou `workflow run -it <workflow>`.
 

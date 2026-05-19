@@ -1,0 +1,45 @@
+{
+	"name": "agentflow-web",
+	"private": true,
+	"version": "0.1.0",
+	"type": "module",
+	"scripts": {
+		"dev": "vite",
+		"build": "tsc -b && vite build && cp ../internal/web/assets/index.html ../internal/web/assets/shell.html",
+		"preview": "vite preview",
+		"check": "biome check .",
+		"check:fix": "biome check --write .",
+		"format": "biome format --write .",
+		"test": "vitest run",
+		"test:watch": "vitest"
+	},
+	"dependencies": {
+		"@codemirror/lang-yaml": "^6.1.2",
+		"@radix-ui/react-slot": "^1.2.4",
+		"@tanstack/react-query": "^5.74.4",
+		"@uiw/codemirror-theme-github": "^4.23.12",
+		"@uiw/react-codemirror": "^4.23.12",
+		"@xyflow/react": "^12.6.0",
+		"class-variance-authority": "^0.7.1",
+		"clsx": "^2.1.1",
+		"lucide-react": "^1.16.0",
+		"react": "^19.1.0",
+		"react-dom": "^19.1.0",
+		"react-router-dom": "^7.5.1",
+		"tailwind-merge": "^3.2.0",
+		"zustand": "^5.0.3"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^1.9.4",
+		"@tailwindcss/postcss": "^4.1.4",
+		"@tailwindcss/vite": "^4.3.0",
+		"@types/react": "^19.1.2",
+		"@types/react-dom": "^19.1.2",
+		"@vitejs/plugin-react": "^4.4.1",
+		"globals": "^16.0.0",
+		"tailwindcss": "^4.1.4",
+		"typescript": "~5.8.3",
+		"vite": "^6.3.2",
+		"vitest": "^3.1.2"
+	}
+}

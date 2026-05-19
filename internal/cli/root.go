@@ -93,6 +93,7 @@ func NewRootCommand() *cobra.Command {
 		newDaemonCommand(opts),
 		newWorkflowCommand(opts),
 		newTUICommand(),
+		newWebCommand(),
 		newVersionCommand(),
 		newCompletionCommand(cmd),
 		newDoctorCommand(),

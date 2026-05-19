@@ -13,3 +13,4 @@ frontend/desktop/node_modules
 node_modules/
 */dist/
 dist/
+.playwright-mcp/

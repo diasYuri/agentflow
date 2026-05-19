@@ -31,7 +31,7 @@ It is designed to be one of the most complete platforms for local agent workflow
 - Orchestrates local commands with `kind: bash` and data transformations with `kind: transform`.
 - Fans out work with `kind: map` and joins branches with `kind: noop`.
 - Supports human approval, pause-on-failure, and run resume.
-- Controls workflows and runs through the CLI, local daemon, and TUI.
+- Controls workflows and runs through the CLI, local daemon, TUI, and web conversation studio.
 
 ## Requirements
 
@@ -64,6 +64,7 @@ After installing, run `agentflow doctor` to validate your environment.
 - `agentflow project remove <name>`: remove a project.
 - `agentflow daemon start|stop|status`: control the local daemon.
 - `agentflow tui`: open the interactive terminal UI.
+- `agentflow web`: start the local AgentFlow web server (see [docs/web.md](docs/web.md)).
 
 ### `workflow` Namespace
 
