@@ -1,0 +1,7 @@
+{
+  "name": "agentflow-extension-echo",
+  "type": "module",
+  "dependencies": {
+    "@agentflow/extensions": "latest"
+  }
+}

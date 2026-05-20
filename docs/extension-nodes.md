@@ -1,8 +1,8 @@
 # Extension Nodes
 
-`kind: extension` runs a local Python extension script through `uv`. This is the
-escape hatch for integrations that do not belong in the core runtime, such as
-Jira, GitHub, search APIs, internal tools, or project-specific automation.
+`kind: extension` runs local JavaScript or TypeScript extension code through the
+official AgentFlow Bun RPC adapter. The adapter owns the RPC protocol; extension
+authors export regular functions with the `@agentflow/extensions` SDK.
 
 ## Directory Layout
 
@@ -12,23 +12,17 @@ and then the user extension:
 1. `<working_dir>/.agentflow/extensions/<extension-name>/`
 2. `~/.agentflow/extensions/<extension-name>/`
 
-Each extension should be a uv-managed Python project:
+Each extension should be a Bun-managed project:
 
 ```text
 .agentflow/extensions/jira/
-  pyproject.toml
-  uv.lock
-  main.py
+  package.json
+  bun.lock
+  src/main.ts
 ```
 
-The runtime invokes:
-
-```bash
-uv run --project <extension-dir> python <script-path>
-```
-
-`uv` is required. AgentFlow does not silently fall back to global `python3`,
-because the extension contract relies on per-extension dependency isolation.
+The `agentflow-extension-rpc` binary must be available in `PATH`, or its path
+must be set with `AGENTFLOW_EXTENSION_RPC`.
 
 ## Workflow Usage
 
@@ -37,19 +31,47 @@ nodes:
   - id: jira_lookup
     kind: extension
     extension: jira
-    script: main.py
+    runtime: bun
+    mode: oneshot
+    script: src/main.ts
+    operation: lookupIssue
     with:
       issue_key: "${inputs.issue_key}"
     env:
       JIRA_BASE_URL: "${vars.jira_base_url}"
 ```
 
-`extension` must be a simple directory name. `script` must be relative to the
-extension directory and cannot escape it with `..`.
+`runtime` defaults to `bun`. `mode` defaults to `oneshot`; use `server` to keep
+one adapter process alive per extension for the duration of a run. `extension`
+must be a simple directory name. `script` must be relative to the extension
+directory and cannot escape it with `..`.
 
 ## Script Contract
 
-AgentFlow writes a single JSON object to stdin. The payload includes:
+Use the SDK so extension code does not need to know about RPC:
+
+```ts
+import { defineExtension } from "@agentflow/extensions";
+
+export default defineExtension({
+  async run(ctx) {
+    return {
+      issue_key: ctx.with.issue_key,
+      status: "ok",
+    };
+  },
+  operations: {
+    async lookupIssue(ctx) {
+      return {
+        issue_key: ctx.with.issue_key,
+        status: "ok",
+      };
+    },
+  },
+});
+```
+
+The `ctx` object includes:
 
 - `version`: `agentflow.extension.v1`
 - `run`: run id and workflow name
@@ -58,21 +80,10 @@ AgentFlow writes a single JSON object to stdin. The payload includes:
 - `with`: rendered node inputs
 - `extension`: extension name, directory, and script path
 - `working_dir`: resolved workflow working directory
+- `logger`: stderr-backed logger
 
-The script must write valid JSON to stdout. Any JSON value is accepted and
-becomes `nodes.<id>.output`. Write logs to stderr.
+Return values become `nodes.<id>.output`. Logs should use `ctx.logger` or
+`console.*`; the adapter redirects them to stderr so stdout remains reserved for
+RPC.
 
-Example script:
-
-```python
-import json
-import sys
-
-payload = json.load(sys.stdin)
-issue_key = payload["with"]["issue_key"]
-print(json.dumps({"issue_key": issue_key, "status": "ok"}))
-```
-
-Non-zero exit codes, invalid JSON stdout, missing scripts, and missing `uv`
-fail the node.
-
+Python extensions through `uv` are no longer supported.

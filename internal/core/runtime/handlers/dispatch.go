@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -103,6 +102,9 @@ func dispatchBashNode(ctx context.Context, e *Executor, state *ExecutionState, n
 }
 
 func dispatchExtensionNode(ctx context.Context, e *Executor, state *ExecutionState, node coreworkflow.NodeSpec, evalCtx coreworkflow.EvalContext, instanceID string, index *int, total *int, item any, attempt int) (dispatchOutput, corerun.NodeStatus, error) {
+	if e.svc.Extensions == nil {
+		return dispatchOutput{}, corerun.NodeFailed, fmt.Errorf("extension runner is not configured")
+	}
 	extensionDir, err := resolveExtensionDir(state.baseWorkingDir, node.Extension)
 	if err != nil {
 		return dispatchOutput{}, corerun.NodeFailed, err
@@ -148,48 +150,41 @@ func dispatchExtensionNode(ctx context.Context, e *Executor, state *ExecutionSta
 		},
 		"working_dir": workingDir,
 	}
-	stdin, err := json.Marshal(payload)
-	if err != nil {
-		return dispatchOutput{}, corerun.NodeFailed, fmt.Errorf("marshal extension payload: %w", err)
+	runtime := node.Runtime
+	if runtime == "" {
+		runtime = "bun"
 	}
-	args := []string{"uv", "run", "--project", extensionDir, "python", scriptPath}
+	mode := node.Mode
+	if mode == "" {
+		mode = "oneshot"
+	}
 	_ = e.emitState(ctx, state, corerun.Event{
 		Type:       "node.extension.warning",
 		NodeID:     node.ID,
 		InstanceID: instanceID,
 		Attempt:    attempt,
 		Data: map[string]any{
-			"warning":       "executing extension script with uv; workflow authors can run arbitrary local code",
+			"warning":       "executing extension script with Bun RPC adapter; workflow authors can run arbitrary local code",
 			"extension":     node.Extension,
 			"extension_dir": extensionDir,
 			"script":        scriptPath,
-			"runner":        "uv",
+			"runtime":       runtime,
+			"mode":          mode,
+			"runner":        "agentflow-extension-rpc",
 			"working_dir":   workingDir,
 		},
 	})
-	result, err := e.svc.Shell.Run(ctx, coreports.ShellRequest{
-		Args: args, Stdin: string(stdin), WorkingDir: workingDir,
-		Env: env, MaxOutputBytes: maxOutputBytes(state.plan.Workflow),
+	result, err := e.svc.Extensions.Run(ctx, coreports.ExtensionRequest{
+		RunID: state.runID, NodeID: node.ID, InstanceID: instanceID, Attempt: attempt,
+		Extension: node.Extension, ExtensionDir: extensionDir, Script: scriptPath,
+		Operation: node.Operation, Runtime: runtime, Mode: mode, WorkingDir: workingDir,
+		Env: env, Payload: payload, MaxOutputBytes: maxOutputBytes(state.plan.Workflow),
 	})
 	exitCode := result.ExitCode
-	out := dispatchOutput{Stdout: result.Stdout, Stderr: result.Stderr, ExitCode: &exitCode}
-	if err != nil || result.ExitCode != 0 {
-		if err == nil {
-			err = fmt.Errorf("extension exited with code %d", result.ExitCode)
-		} else if result.ExitCode == -1 {
-			err = fmt.Errorf("failed to start extension runner uv: %w", err)
-		}
+	out := dispatchOutput{Output: result.Output, Stdout: result.Stdout, Stderr: result.Stderr, ExitCode: &exitCode}
+	if err != nil {
 		return out, corerun.NodeFailed, err
 	}
-	if strings.TrimSpace(result.Stdout) == "" {
-		out.Output = nil
-		return out, corerun.NodeSuccess, nil
-	}
-	var parsed any
-	if err := json.Unmarshal([]byte(result.Stdout), &parsed); err != nil {
-		return out, corerun.NodeFailed, fmt.Errorf("extension stdout must be valid JSON: %w", err)
-	}
-	out.Output = parsed
 	return out, corerun.NodeSuccess, nil
 }
 

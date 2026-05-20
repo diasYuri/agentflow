@@ -73,6 +73,36 @@ type ShellResult struct {
 	Duration time.Duration
 }
 
+type ExtensionRunner interface {
+	Run(ctx context.Context, req ExtensionRequest) (ExtensionResult, error)
+	CloseRun(ctx context.Context, runID string) error
+}
+
+type ExtensionRequest struct {
+	RunID          string
+	NodeID         string
+	InstanceID     string
+	Attempt        int
+	Extension      string
+	ExtensionDir   string
+	Script         string
+	Operation      string
+	Runtime        string
+	Mode           string
+	WorkingDir     string
+	Env            map[string]string
+	Payload        map[string]any
+	MaxOutputBytes int64
+}
+
+type ExtensionResult struct {
+	Output   any
+	Stdout   string
+	Stderr   string
+	ExitCode int
+	Duration time.Duration
+}
+
 type EventSink interface {
 	Emit(ctx context.Context, event run.Event) error
 	Close(ctx context.Context) error

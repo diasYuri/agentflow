@@ -10,6 +10,7 @@ import (
 	"github.com/diasYuri/agentflow/internal/adapters/events/jsonl"
 	"github.com/diasYuri/agentflow/internal/adapters/events/multi"
 	"github.com/diasYuri/agentflow/internal/adapters/events/stdout"
+	extensionrpc "github.com/diasYuri/agentflow/internal/adapters/extension/rpc"
 	runrepo "github.com/diasYuri/agentflow/internal/adapters/runrepo/local"
 	"github.com/diasYuri/agentflow/internal/adapters/shell"
 	gitworktree "github.com/diasYuri/agentflow/internal/adapters/worktree/git"
@@ -64,11 +65,12 @@ func NewRunWorkflowUseCase(opts RuntimeOptions) (*runworkflow.RunWorkflowUseCase
 		workflows = yamlrepo.NewWorkflowRepository()
 	}
 	return &runworkflow.RunWorkflowUseCase{
-		Workflows: workflows,
-		Runs:      runrepo.New(opts.RunRoot),
-		Events:    sink,
-		Agents:    registry,
-		Shell:     shell.NewRunner(),
-		Worktrees: worktreeRegistry,
+		Workflows:  workflows,
+		Runs:       runrepo.New(opts.RunRoot),
+		Events:     sink,
+		Agents:     registry,
+		Shell:      shell.NewRunner(),
+		Extensions: extensionrpc.New(""),
+		Worktrees:  worktreeRegistry,
 	}, nil
 }

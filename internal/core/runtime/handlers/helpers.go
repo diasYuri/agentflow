@@ -17,13 +17,14 @@ import (
 )
 
 type Services struct {
-	Workflows coreports.WorkflowRepository
-	Runs      coreports.RunRepository
-	Events    coreports.EventSink
-	Agents    coreports.AgentProviderRegistry
-	Shell     coreports.ShellRunner
-	Worktrees coreports.WorktreeProviderRegistry
-	Now       func() time.Time
+	Workflows  coreports.WorkflowRepository
+	Runs       coreports.RunRepository
+	Events     coreports.EventSink
+	Agents     coreports.AgentProviderRegistry
+	Shell      coreports.ShellRunner
+	Extensions coreports.ExtensionRunner
+	Worktrees  coreports.WorktreeProviderRegistry
+	Now        func() time.Time
 }
 
 type Options struct {

@@ -92,7 +92,7 @@ func TestValidateRejectsExtensionWithUnknownNodeReference(t *testing.T) {
 				ID:        "jira",
 				Kind:      NodeKindExtension,
 				Extension: "jira",
-				Script:    "main.py",
+				Script:    "main.ts",
 				With: map[string]any{
 					"issue": "${nodes.missing.output}",
 				},
@@ -114,7 +114,7 @@ func TestValidateAllowsExtensionNode(t *testing.T) {
 		Version: "1",
 		Name:    "extension",
 		Nodes: []NodeSpec{
-			{ID: "jira", Kind: NodeKindExtension, Extension: "jira", Script: "main.py"},
+			{ID: "jira", Kind: NodeKindExtension, Extension: "jira", Runtime: "bun", Mode: "server", Script: "main.ts"},
 		},
 	}
 
@@ -131,17 +131,17 @@ func TestValidateRejectsUnsafeExtensionNode(t *testing.T) {
 	}{
 		{
 			name: "missing extension",
-			node: NodeSpec{ID: "ext", Kind: NodeKindExtension, Script: "main.py"},
+			node: NodeSpec{ID: "ext", Kind: NodeKindExtension, Script: "main.ts"},
 			want: "extension is required",
 		},
 		{
 			name: "unsafe extension",
-			node: NodeSpec{ID: "ext", Kind: NodeKindExtension, Extension: "../jira", Script: "main.py"},
+			node: NodeSpec{ID: "ext", Kind: NodeKindExtension, Extension: "../jira", Script: "main.ts"},
 			want: "extension must be a simple name",
 		},
 		{
 			name: "extension with whitespace",
-			node: NodeSpec{ID: "ext", Kind: NodeKindExtension, Extension: "jira ", Script: "main.py"},
+			node: NodeSpec{ID: "ext", Kind: NodeKindExtension, Extension: "jira ", Script: "main.ts"},
 			want: "extension must not contain leading or trailing whitespace",
 		},
 		{
@@ -151,18 +151,33 @@ func TestValidateRejectsUnsafeExtensionNode(t *testing.T) {
 		},
 		{
 			name: "script with whitespace",
-			node: NodeSpec{ID: "ext", Kind: NodeKindExtension, Extension: "jira", Script: " main.py"},
+			node: NodeSpec{ID: "ext", Kind: NodeKindExtension, Extension: "jira", Script: " main.ts"},
 			want: "extension script must not contain leading or trailing whitespace",
 		},
 		{
 			name: "absolute script",
-			node: NodeSpec{ID: "ext", Kind: NodeKindExtension, Extension: "jira", Script: "/tmp/main.py"},
+			node: NodeSpec{ID: "ext", Kind: NodeKindExtension, Extension: "jira", Script: "/tmp/main.ts"},
 			want: "extension script must be relative",
 		},
 		{
 			name: "escaping script",
-			node: NodeSpec{ID: "ext", Kind: NodeKindExtension, Extension: "jira", Script: "../main.py"},
+			node: NodeSpec{ID: "ext", Kind: NodeKindExtension, Extension: "jira", Script: "../main.ts"},
 			want: "extension script must not escape",
+		},
+		{
+			name: "python script",
+			node: NodeSpec{ID: "ext", Kind: NodeKindExtension, Extension: "jira", Script: "main.py"},
+			want: "python extensions are no longer supported",
+		},
+		{
+			name: "unsupported runtime",
+			node: NodeSpec{ID: "ext", Kind: NodeKindExtension, Extension: "jira", Runtime: "python", Script: "main.ts"},
+			want: "extension runtime",
+		},
+		{
+			name: "unsupported mode",
+			node: NodeSpec{ID: "ext", Kind: NodeKindExtension, Extension: "jira", Mode: "daemon", Script: "main.ts"},
+			want: "extension mode must be oneshot or server",
 		},
 	}
 	for _, tt := range tests {

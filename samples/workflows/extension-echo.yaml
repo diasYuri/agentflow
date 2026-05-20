@@ -1,6 +1,6 @@
 version: "1"
 name: extension-echo
-description: Run a Python extension through uv.
+description: Run a TypeScript extension through the AgentFlow Bun RPC adapter.
 
 inputs:
   message:
@@ -11,7 +11,7 @@ nodes:
   - id: echo
     kind: extension
     extension: echo
-    script: main.py
+    runtime: bun
+    script: src/main.ts
     with:
       message: "${inputs.message}"
-

@@ -464,6 +464,26 @@ func validateNode(spec *WorkflowSpec, node NodeSpec, providers ProviderLookup) e
 }
 
 func validateExtensionNode(node NodeSpec) error {
+	runtime := strings.TrimSpace(node.Runtime)
+	if runtime == "" {
+		runtime = "bun"
+	}
+	if runtime != node.Runtime && node.Runtime != "" {
+		return fmt.Errorf("extension runtime must not contain leading or trailing whitespace")
+	}
+	if runtime != "bun" {
+		return fmt.Errorf("extension runtime %q is not supported; use bun", runtime)
+	}
+	mode := strings.TrimSpace(node.Mode)
+	if mode == "" {
+		mode = "oneshot"
+	}
+	if mode != node.Mode && node.Mode != "" {
+		return fmt.Errorf("extension mode must not contain leading or trailing whitespace")
+	}
+	if mode != "oneshot" && mode != "server" {
+		return fmt.Errorf("extension mode must be oneshot or server")
+	}
 	name := strings.TrimSpace(node.Extension)
 	if name == "" {
 		return fmt.Errorf("extension is required")
@@ -487,6 +507,13 @@ func validateExtensionNode(node NodeSpec) error {
 	clean := filepath.Clean(script)
 	if clean == "." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) || clean == ".." {
 		return fmt.Errorf("extension script must not escape the extension directory")
+	}
+	ext := strings.ToLower(filepath.Ext(clean))
+	if ext == ".py" {
+		return fmt.Errorf("python extensions are no longer supported; use runtime: bun with a .js or .ts script")
+	}
+	if ext != ".js" && ext != ".ts" && ext != ".mjs" && ext != ".mts" {
+		return fmt.Errorf("extension script must be a JavaScript or TypeScript file")
 	}
 	return nil
 }

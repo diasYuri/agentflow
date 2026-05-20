@@ -191,6 +191,8 @@ type NodeSpec struct {
 	Capture    CaptureSpec       `json:"capture,omitempty" yaml:"capture"`
 	Extension  string            `json:"extension,omitempty" yaml:"extension"`
 	Script     string            `json:"script,omitempty" yaml:"script"`
+	Runtime    string            `json:"runtime,omitempty" yaml:"runtime"`
+	Mode       string            `json:"mode,omitempty" yaml:"mode"`
 
 	Operation string         `json:"operation,omitempty" yaml:"operation"`
 	Input     string         `json:"input,omitempty" yaml:"input"`

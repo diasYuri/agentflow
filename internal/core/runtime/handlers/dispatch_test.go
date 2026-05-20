@@ -31,6 +31,19 @@ func (m *mockShellRunner) Run(_ context.Context, _ coreports.ShellRequest) (core
 	return m.result, m.err
 }
 
+type mockExtensionRunner struct {
+	req    coreports.ExtensionRequest
+	result coreports.ExtensionResult
+	err    error
+}
+
+func (m *mockExtensionRunner) Run(_ context.Context, req coreports.ExtensionRequest) (coreports.ExtensionResult, error) {
+	m.req = req
+	return m.result, m.err
+}
+
+func (m *mockExtensionRunner) CloseRun(_ context.Context, _ string) error { return nil }
+
 func TestDispatchAgentNodeUsesOnlyTextJSONAndUsage(t *testing.T) {
 	// This test pins the runtime contract: dispatchAgentNode must consume
 	// only Text, JSON and Usage from the provider result. RawEvents must not
@@ -95,18 +108,22 @@ func TestDispatchAgentNodeUsesOnlyTextJSONAndUsage(t *testing.T) {
 	}
 }
 
-func TestDispatchExtensionNodeFailsOnInvalidJSONStdout(t *testing.T) {
+func TestDispatchExtensionNodeUsesBunRPCContract(t *testing.T) {
 	dir := t.TempDir()
-	extensionDir := filepath.Join(dir, ".agentflow", "extensions", "badjson")
+	extensionDir := filepath.Join(dir, ".agentflow", "extensions", "jira")
 	if err := os.MkdirAll(extensionDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(extensionDir, "main.py"), []byte(""), 0o644); err != nil {
+	scriptPath := filepath.Join(extensionDir, "main.ts")
+	if err := os.WriteFile(scriptPath, []byte("export default {}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	e := &Executor{svc: Services{Shell: &mockShellRunner{
-		result: coreports.ShellResult{Stdout: "not-json", ExitCode: 0},
-	}}}
+	extensions := &mockExtensionRunner{result: coreports.ExtensionResult{
+		Output:   map[string]any{"status": "ok"},
+		Stderr:   "log\n",
+		ExitCode: 0,
+	}}
+	e := &Executor{svc: Services{Extensions: extensions}}
 	state := newExecutionState("run-1", coreworkflow.ExecutionPlan{
 		Workflow: coreworkflow.WorkflowSpec{Version: "1", Name: "test"},
 	}, map[string]any{}, map[string]any{}, corerun.NewSecretMasker(map[string]any{}), e.now())
@@ -115,36 +132,49 @@ func TestDispatchExtensionNodeFailsOnInvalidJSONStdout(t *testing.T) {
 	node := coreworkflow.NodeSpec{
 		ID:        "n1",
 		Kind:      coreworkflow.NodeKindExtension,
-		Extension: "badjson",
-		Script:    "main.py",
+		Extension: "jira",
+		Runtime:   "bun",
+		Mode:      "server",
+		Script:    "main.ts",
+		Operation: "lookup",
+		With: map[string]any{
+			"issue": "AF-123",
+		},
 	}
 	out, status, err := dispatchExtensionNode(context.Background(), e, state, node, coreworkflow.EvalContext{}, "", nil, nil, nil, 1)
-	if err == nil {
-		t.Fatal("expected invalid JSON error")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if status != corerun.NodeFailed {
-		t.Fatalf("expected failed status, got %s", status)
+	if status != corerun.NodeSuccess {
+		t.Fatalf("expected success, got %s", status)
 	}
-	if !strings.Contains(err.Error(), "valid JSON") {
-		t.Fatalf("expected JSON error, got %v", err)
+	if out.Stderr != "log\n" {
+		t.Fatalf("expected stderr to be preserved, got %q", out.Stderr)
 	}
-	if out.Stdout != "not-json" {
-		t.Fatalf("expected stdout to be preserved, got %q", out.Stdout)
+	if extensions.req.Runtime != "bun" || extensions.req.Mode != "server" || extensions.req.Operation != "lookup" {
+		t.Fatalf("unexpected extension request: %#v", extensions.req)
+	}
+	if extensions.req.Script != scriptPath {
+		t.Fatalf("expected script %q, got %q", scriptPath, extensions.req.Script)
+	}
+	withValues := extensions.req.Payload["with"].(map[string]any)
+	if withValues["issue"] != "AF-123" {
+		t.Fatalf("unexpected with values: %#v", withValues)
 	}
 }
 
-func TestDispatchExtensionNodeReportsMissingUV(t *testing.T) {
+func TestDispatchExtensionNodeReportsRunnerError(t *testing.T) {
 	dir := t.TempDir()
-	extensionDir := filepath.Join(dir, ".agentflow", "extensions", "missinguv")
+	extensionDir := filepath.Join(dir, ".agentflow", "extensions", "missingrpc")
 	if err := os.MkdirAll(extensionDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(extensionDir, "main.py"), []byte(""), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(extensionDir, "main.ts"), []byte("export default {}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	e := &Executor{svc: Services{Shell: &mockShellRunner{
-		result: coreports.ShellResult{ExitCode: -1},
-		err:    errors.New("executable file not found"),
+	e := &Executor{svc: Services{Extensions: &mockExtensionRunner{
+		result: coreports.ExtensionResult{ExitCode: -1},
+		err:    errors.New("failed to start extension rpc adapter: executable file not found"),
 	}}}
 	state := newExecutionState("run-1", coreworkflow.ExecutionPlan{
 		Workflow: coreworkflow.WorkflowSpec{Version: "1", Name: "test"},
@@ -154,18 +184,18 @@ func TestDispatchExtensionNodeReportsMissingUV(t *testing.T) {
 	node := coreworkflow.NodeSpec{
 		ID:        "n1",
 		Kind:      coreworkflow.NodeKindExtension,
-		Extension: "missinguv",
-		Script:    "main.py",
+		Extension: "missingrpc",
+		Script:    "main.ts",
 	}
 	_, status, err := dispatchExtensionNode(context.Background(), e, state, node, coreworkflow.EvalContext{}, "", nil, nil, nil, 1)
 	if err == nil {
-		t.Fatal("expected missing uv error")
+		t.Fatal("expected missing rpc adapter error")
 	}
 	if status != corerun.NodeFailed {
 		t.Fatalf("expected failed status, got %s", status)
 	}
-	if !strings.Contains(err.Error(), "failed to start extension runner uv") {
-		t.Fatalf("expected uv startup error, got %v", err)
+	if !strings.Contains(err.Error(), "failed to start extension rpc adapter") {
+		t.Fatalf("expected rpc adapter startup error, got %v", err)
 	}
 }
 

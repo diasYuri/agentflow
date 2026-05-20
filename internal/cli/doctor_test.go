@@ -188,6 +188,7 @@ func TestDoctorCheckEnvironmentNotWritable(t *testing.T) {
 
 func TestDoctorCheckBinaries(t *testing.T) {
 	deps := doctorDeps{
+		getenv: func(string) string { return "" },
 		lookPath: func(name string) (string, error) {
 			if name == "go" {
 				return "/usr/local/go/bin/go", nil
@@ -196,8 +197,8 @@ func TestDoctorCheckBinaries(t *testing.T) {
 		},
 	}
 	group := checkBinaries(deps)
-	if len(group.Checks) != 4 {
-		t.Fatalf("expected 4 checks, got %d", len(group.Checks))
+	if len(group.Checks) != 5 {
+		t.Fatalf("expected 5 checks, got %d", len(group.Checks))
 	}
 	if group.Checks[0].Name != "codex" || group.Checks[0].Status != "warn" {
 		t.Fatalf("expected codex warn, got %q %q", group.Checks[0].Name, group.Checks[0].Status)
@@ -205,11 +206,14 @@ func TestDoctorCheckBinaries(t *testing.T) {
 	if group.Checks[1].Name != "claude" || group.Checks[1].Status != "warn" {
 		t.Fatalf("expected claude warn, got %q %q", group.Checks[1].Name, group.Checks[1].Status)
 	}
-	if group.Checks[2].Name != "uv" || group.Checks[2].Status != "warn" {
-		t.Fatalf("expected uv warn, got %q %q", group.Checks[2].Name, group.Checks[2].Status)
+	if group.Checks[2].Name != "bun" || group.Checks[2].Status != "warn" {
+		t.Fatalf("expected bun warn, got %q %q", group.Checks[2].Name, group.Checks[2].Status)
 	}
-	if group.Checks[3].Name != "go" || group.Checks[3].Status != "ok" {
-		t.Fatalf("expected go ok, got %q %q", group.Checks[3].Name, group.Checks[3].Status)
+	if group.Checks[3].Name != "agentflow-extension-rpc" || group.Checks[3].Status != "warn" {
+		t.Fatalf("expected agentflow-extension-rpc warn, got %q %q", group.Checks[3].Name, group.Checks[3].Status)
+	}
+	if group.Checks[4].Name != "go" || group.Checks[4].Status != "ok" {
+		t.Fatalf("expected go ok, got %q %q", group.Checks[4].Name, group.Checks[4].Status)
 	}
 }
 
@@ -219,18 +223,46 @@ func TestDoctorCheckBinariesSkipsGoOutsideDevelopmentBuild(t *testing.T) {
 	t.Cleanup(func() { version.Version = oldVersion })
 
 	deps := doctorDeps{
+		getenv: func(string) string { return "" },
 		lookPath: func(name string) (string, error) {
 			return "/usr/local/bin/" + name, nil
 		},
 	}
 	group := checkBinaries(deps)
-	if len(group.Checks) != 3 {
-		t.Fatalf("expected 3 checks when not in development mode, got %d", len(group.Checks))
+	if len(group.Checks) != 4 {
+		t.Fatalf("expected 4 checks when not in development mode, got %d", len(group.Checks))
 	}
 	for _, check := range group.Checks {
 		if check.Name == "go" {
 			t.Fatalf("did not expect go check outside development builds")
 		}
+	}
+}
+
+func TestDoctorCheckBinariesUsesExtensionRPCEnvOverride(t *testing.T) {
+	deps := doctorDeps{
+		getenv: func(name string) string {
+			if name == "AGENTFLOW_EXTENSION_RPC" {
+				return "/opt/agentflow-extension-rpc"
+			}
+			return ""
+		},
+		lookPath: func(name string) (string, error) {
+			return "", errors.New("not found")
+		},
+	}
+	group := checkBinaries(deps)
+	var found bool
+	for _, check := range group.Checks {
+		if check.Name == "agentflow-extension-rpc" {
+			found = true
+			if check.Status != "ok" || check.Message != "/opt/agentflow-extension-rpc" {
+				t.Fatalf("unexpected adapter check: %+v", check)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected agentflow-extension-rpc check")
 	}
 }
 

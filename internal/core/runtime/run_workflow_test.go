@@ -1410,14 +1410,14 @@ nodes:
 	}
 }
 
-func TestRunWorkflowExtensionNodeUsesUVAndJSONContract(t *testing.T) {
+func TestRunWorkflowExtensionNodeUsesBunRPCContract(t *testing.T) {
 	dir := t.TempDir()
 	extensionDir := filepath.Join(dir, ".agentflow", "extensions", "jira")
 	if err := os.MkdirAll(extensionDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	scriptPath := filepath.Join(extensionDir, "main.py")
-	if err := os.WriteFile(scriptPath, []byte("print('{}')\n"), 0o644); err != nil {
+	scriptPath := filepath.Join(extensionDir, "main.ts")
+	if err := os.WriteFile(scriptPath, []byte("export default {}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	workflowPath := writeWorkflow(t, dir, `
@@ -1435,7 +1435,10 @@ nodes:
   - id: jira
     kind: extension
     extension: jira
-    script: main.py
+    runtime: bun
+    mode: server
+    script: main.ts
+    operation: lookup
     with:
       issue_key: "${inputs.issue}"
       nested:
@@ -1444,29 +1447,25 @@ nodes:
       TOKEN: "${vars.token}"
 `)
 	events := eventmemory.New()
-	shell := &scriptedShell{
-		run: func(ctx context.Context, req ports.ShellRequest, call int) (ports.ShellResult, error) {
+	extensions := &scriptedExtension{
+		run: func(ctx context.Context, req ports.ExtensionRequest, call int) (ports.ExtensionResult, error) {
 			_ = ctx
 			if call != 1 {
 				t.Fatalf("expected one call, got %d", call)
 			}
-			wantArgs := []string{"uv", "run", "--project", extensionDir, "python", scriptPath}
-			if !reflect.DeepEqual(req.Args, wantArgs) {
-				t.Fatalf("unexpected args:\nwant %#v\ngot  %#v", wantArgs, req.Args)
-			}
-			if req.Command != "" {
-				t.Fatalf("expected argv execution, got command %q", req.Command)
-			}
 			if req.WorkingDir != dir {
 				t.Fatalf("expected working dir %q, got %q", dir, req.WorkingDir)
+			}
+			if req.ExtensionDir != extensionDir || req.Script != scriptPath {
+				t.Fatalf("unexpected extension paths: %#v", req)
+			}
+			if req.Runtime != "bun" || req.Mode != "server" || req.Operation != "lookup" {
+				t.Fatalf("unexpected extension runtime fields: %#v", req)
 			}
 			if req.Env["TOKEN"] != "secret-token" {
 				t.Fatalf("expected rendered env, got %#v", req.Env)
 			}
-			var payload map[string]any
-			if err := json.Unmarshal([]byte(req.Stdin), &payload); err != nil {
-				t.Fatalf("stdin is not JSON: %v", err)
-			}
+			payload := req.Payload
 			if payload["version"] != "agentflow.extension.v1" {
 				t.Fatalf("unexpected version: %#v", payload["version"])
 			}
@@ -1478,10 +1477,11 @@ nodes:
 			if nested["run"] != "extension-contract" {
 				t.Fatalf("unexpected nested with payload: %#v", nested)
 			}
-			return ports.ShellResult{Stdout: `{"ok":true,"issue":"AF-123"}`, Stderr: "log line\n", ExitCode: 0}, nil
+			return ports.ExtensionResult{Output: map[string]any{"ok": true, "issue": "AF-123"}, Stderr: "log line\n", ExitCode: 0}, nil
 		},
 	}
-	uc := newTestRunWorkflowUseCase(dir, shell, events)
+	uc := newTestRunWorkflowUseCase(dir, &scriptedShell{}, events)
+	uc.Extensions = extensions
 
 	result, err := uc.Run(context.Background(), RunOptions{
 		WorkflowRef: workflowPath,
@@ -1504,6 +1504,9 @@ nodes:
 	if findEvent(events.Events, "node.extension.warning", "jira") == nil {
 		t.Fatalf("expected extension warning event, got %#v", events.Events)
 	}
+	if extensions.closeRunID != result.RunID {
+		t.Fatalf("expected extension server to close for run %q, got %q", result.RunID, extensions.closeRunID)
+	}
 }
 
 type scriptedShell struct {
@@ -1523,6 +1526,31 @@ func (s *scriptedShell) Run(ctx context.Context, req ports.ShellRequest) (ports.
 		return ports.ShellResult{ExitCode: 0}, nil
 	}
 	return s.run(ctx, req, call)
+}
+
+type scriptedExtension struct {
+	mu         sync.Mutex
+	calls      int
+	closeRunID string
+	run        func(context.Context, ports.ExtensionRequest, int) (ports.ExtensionResult, error)
+}
+
+func (s *scriptedExtension) Run(ctx context.Context, req ports.ExtensionRequest) (ports.ExtensionResult, error) {
+	s.mu.Lock()
+	s.calls++
+	call := s.calls
+	s.mu.Unlock()
+	if s.run == nil {
+		return ports.ExtensionResult{ExitCode: 0}, nil
+	}
+	return s.run(ctx, req, call)
+}
+
+func (s *scriptedExtension) CloseRun(_ context.Context, runID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.closeRunID = runID
+	return nil
 }
 
 func (s *scriptedShell) commands() []string {

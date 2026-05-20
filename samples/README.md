@@ -55,7 +55,7 @@ Os workflows são resolvidos primeiro em `./.agentflow/workflows` e depois em `~
 - `release-notes.yaml`: gera release notes a partir de commits/PRs fornecidos por input.
 - `product-spec-to-implementation.yaml`: lê uma spec `.md` e demonstra `kind: map` aninhado para iterar por spec técnica e por plano, implementando cada plano no workspace.
 - `local-health-check.yaml`: exemplo executável sem Codex; roda comandos locais e resume outputs.
-- `extension-echo.yaml`: exemplo de `kind: extension` executando Python por `uv`; copie `samples/extensions/echo` para `.agentflow/extensions/echo` antes de rodar.
+- `extension-echo.yaml`: exemplo de `kind: extension` executando TypeScript por Bun RPC; copie `samples/extensions/echo` para `.agentflow/extensions/echo` antes de rodar.
 - `claude-code-review.yaml`: exemplo mínimo com `provider: claude`, permissão somente leitura e resposta estruturada.
 - `pi-code-review.yaml`: exemplo mínimo com `provider: pi`, permissão somente leitura e resposta estruturada via RPC.
 - `pause-on-failure.yaml`: demonstra `execution.pause_when_fail`; o run pausa quando o node `gate` falha (arquivo de flag ausente) e pode ser retomado com `workflow resume <id>` depois de criar o arquivo.

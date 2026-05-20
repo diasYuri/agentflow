@@ -12,13 +12,14 @@ import (
 )
 
 type RunWorkflowUseCase struct {
-	Workflows coreports.WorkflowRepository
-	Runs      coreports.RunRepository
-	Events    coreports.EventSink
-	Agents    coreports.AgentProviderRegistry
-	Shell     coreports.ShellRunner
-	Worktrees coreports.WorktreeProviderRegistry
-	Now       func() time.Time
+	Workflows  coreports.WorkflowRepository
+	Runs       coreports.RunRepository
+	Events     coreports.EventSink
+	Agents     coreports.AgentProviderRegistry
+	Shell      coreports.ShellRunner
+	Extensions coreports.ExtensionRunner
+	Worktrees  coreports.WorktreeProviderRegistry
+	Now        func() time.Time
 }
 
 type RunOptions = handlers.Options
@@ -109,12 +110,13 @@ func (uc *RunWorkflowUseCase) prepareRunWorkflow(ctx context.Context, opts RunOp
 
 func (uc *RunWorkflowUseCase) services() handlers.Services {
 	return handlers.Services{
-		Workflows: uc.Workflows,
-		Runs:      uc.Runs,
-		Events:    uc.Events,
-		Agents:    uc.Agents,
-		Shell:     uc.Shell,
-		Worktrees: uc.Worktrees,
-		Now:       uc.Now,
+		Workflows:  uc.Workflows,
+		Runs:       uc.Runs,
+		Events:     uc.Events,
+		Agents:     uc.Agents,
+		Shell:      uc.Shell,
+		Extensions: uc.Extensions,
+		Worktrees:  uc.Worktrees,
+		Now:        uc.Now,
 	}
 }

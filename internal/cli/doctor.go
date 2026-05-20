@@ -19,6 +19,7 @@ import (
 // doctorDeps abstracts external dependencies so checks stay testable.
 type doctorDeps struct {
 	lookPath         func(string) (string, error)
+	getenv           func(string) string
 	stat             func(string) (os.FileInfo, error)
 	mkdirAll         func(string, os.FileMode) error
 	writeFile        func(string, []byte, os.FileMode) error
@@ -33,6 +34,7 @@ type doctorDeps struct {
 func defaultDoctorDeps() doctorDeps {
 	return doctorDeps{
 		lookPath:       exec.LookPath,
+		getenv:         os.Getenv,
 		stat:           os.Stat,
 		mkdirAll:       os.MkdirAll,
 		writeFile:      os.WriteFile,
@@ -237,8 +239,22 @@ func checkEnvironment(_ context.Context, deps doctorDeps) doctorGroup {
 
 func checkBinaries(deps doctorDeps) doctorGroup {
 	var checks []doctorCheck
+	getenv := deps.getenv
+	if getenv == nil {
+		getenv = os.Getenv
+	}
 
-	for _, name := range []string{"codex", "claude", "uv"} {
+	for _, name := range []string{"codex", "claude", "bun", "agentflow-extension-rpc"} {
+		if name == "agentflow-extension-rpc" {
+			if path := getenv("AGENTFLOW_EXTENSION_RPC"); path != "" {
+				checks = append(checks, doctorCheck{
+					Name:    name,
+					Status:  "ok",
+					Message: path,
+				})
+				continue
+			}
+		}
 		if path, err := deps.lookPath(name); err != nil {
 			checks = append(checks, doctorCheck{
 				Name:    name,

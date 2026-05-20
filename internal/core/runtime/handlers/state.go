@@ -487,6 +487,9 @@ func (e *Executor) evaluateAndPersistWorkflowOutputs(ctx context.Context, state 
 
 func (e *Executor) finish(ctx context.Context, plan coreworkflow.ExecutionPlan, state *ExecutionState, status corerun.RunStatus, finalErr error) (Result, error) {
 	persistCtx := context.WithoutCancel(ctx)
+	if e.svc.Extensions != nil {
+		_ = e.svc.Extensions.CloseRun(persistCtx, state.runID)
+	}
 	var wtMeta corerun.WorktreeMetadata
 	var pauseReason corerun.PauseReason
 	if state.worktreeEnabled && e.svc.Worktrees != nil && state.worktree.Path != "" {
