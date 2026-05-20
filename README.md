@@ -181,6 +181,7 @@ Supported node types:
 - `agent`: delegate work to an agent.
 - `approval`: pause for human decision.
 - `bash`: run local commands and capture output.
+- `extension`: run Python extensions through uv.
 - `transform`: transform data between stages.
 - `map`: expand a list into parallel executions.
 - `noop`: create milestones, joins, and conditional stages without external side effects.

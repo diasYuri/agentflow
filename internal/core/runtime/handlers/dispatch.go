@@ -2,7 +2,11 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 
 	coreports "github.com/diasYuri/agentflow/internal/core/ports"
 	corerun "github.com/diasYuri/agentflow/internal/core/run"
@@ -33,6 +37,7 @@ var nodeDispatchers = map[coreworkflow.NodeKind]nodeDispatcher{
 	coreworkflow.NodeKindNoop:      dispatchNoopNode,
 	coreworkflow.NodeKindTransform: dispatchTransformNode,
 	coreworkflow.NodeKindBash:      dispatchBashNode,
+	coreworkflow.NodeKindExtension: dispatchExtensionNode,
 	coreworkflow.NodeKindAgent:     dispatchAgentNode,
 }
 
@@ -97,6 +102,97 @@ func dispatchBashNode(ctx context.Context, e *Executor, state *ExecutionState, n
 	return dispatchOutput{Output: out, Stdout: result.Stdout, Stderr: result.Stderr, ExitCode: &exitCode}, status, err
 }
 
+func dispatchExtensionNode(ctx context.Context, e *Executor, state *ExecutionState, node coreworkflow.NodeSpec, evalCtx coreworkflow.EvalContext, instanceID string, index *int, total *int, item any, attempt int) (dispatchOutput, corerun.NodeStatus, error) {
+	extensionDir, err := resolveExtensionDir(state.baseWorkingDir, node.Extension)
+	if err != nil {
+		return dispatchOutput{}, corerun.NodeFailed, err
+	}
+	scriptPath, err := resolveExtensionScript(extensionDir, node.Script)
+	if err != nil {
+		return dispatchOutput{}, corerun.NodeFailed, err
+	}
+	withValues, err := evalTemplateMap(node.With, evalCtx)
+	if err != nil {
+		return dispatchOutput{}, corerun.NodeFailed, fmt.Errorf("with: %w", err)
+	}
+	env, err := renderEnv(node.Env, evalCtx)
+	if err != nil {
+		return dispatchOutput{}, corerun.NodeFailed, fmt.Errorf("env: %w", err)
+	}
+	workingDir := resolvePath(state.baseWorkingDir, effectiveWorkingDir(state.plan.Workflow, node))
+	payload := map[string]any{
+		"version": "agentflow.extension.v1",
+		"run": map[string]any{
+			"id":       state.runID,
+			"workflow": state.plan.Workflow.Name,
+		},
+		"node": map[string]any{
+			"id":          node.ID,
+			"attempt":     attempt,
+			"instance_id": instanceID,
+			"index":       index,
+			"total":       total,
+		},
+		"context": map[string]any{
+			"inputs":  evalCtx.Inputs,
+			"vars":    evalCtx.Vars,
+			"secrets": evalCtx.Secrets,
+			"nodes":   evalCtx.Nodes,
+			"item":    item,
+		},
+		"with": withValues,
+		"extension": map[string]any{
+			"name":   node.Extension,
+			"dir":    extensionDir,
+			"script": scriptPath,
+		},
+		"working_dir": workingDir,
+	}
+	stdin, err := json.Marshal(payload)
+	if err != nil {
+		return dispatchOutput{}, corerun.NodeFailed, fmt.Errorf("marshal extension payload: %w", err)
+	}
+	args := []string{"uv", "run", "--project", extensionDir, "python", scriptPath}
+	_ = e.emitState(ctx, state, corerun.Event{
+		Type:       "node.extension.warning",
+		NodeID:     node.ID,
+		InstanceID: instanceID,
+		Attempt:    attempt,
+		Data: map[string]any{
+			"warning":       "executing extension script with uv; workflow authors can run arbitrary local code",
+			"extension":     node.Extension,
+			"extension_dir": extensionDir,
+			"script":        scriptPath,
+			"runner":        "uv",
+			"working_dir":   workingDir,
+		},
+	})
+	result, err := e.svc.Shell.Run(ctx, coreports.ShellRequest{
+		Args: args, Stdin: string(stdin), WorkingDir: workingDir,
+		Env: env, MaxOutputBytes: maxOutputBytes(state.plan.Workflow),
+	})
+	exitCode := result.ExitCode
+	out := dispatchOutput{Stdout: result.Stdout, Stderr: result.Stderr, ExitCode: &exitCode}
+	if err != nil || result.ExitCode != 0 {
+		if err == nil {
+			err = fmt.Errorf("extension exited with code %d", result.ExitCode)
+		} else if result.ExitCode == -1 {
+			err = fmt.Errorf("failed to start extension runner uv: %w", err)
+		}
+		return out, corerun.NodeFailed, err
+	}
+	if strings.TrimSpace(result.Stdout) == "" {
+		out.Output = nil
+		return out, corerun.NodeSuccess, nil
+	}
+	var parsed any
+	if err := json.Unmarshal([]byte(result.Stdout), &parsed); err != nil {
+		return out, corerun.NodeFailed, fmt.Errorf("extension stdout must be valid JSON: %w", err)
+	}
+	out.Output = parsed
+	return out, corerun.NodeSuccess, nil
+}
+
 func dispatchAgentNode(ctx context.Context, e *Executor, state *ExecutionState, node coreworkflow.NodeSpec, evalCtx coreworkflow.EvalContext, instanceID string, _ *int, _ *int, _ any, attempt int) (dispatchOutput, corerun.NodeStatus, error) {
 	prompt, err := coreworkflow.RenderTemplate(node.Prompt, evalCtx)
 	if err != nil {
@@ -143,4 +239,83 @@ func dispatchAgentNode(ctx context.Context, e *Executor, state *ExecutionState, 
 		return dispatchOutput{Output: result.JSON}, corerun.NodeSuccess, nil
 	}
 	return dispatchOutput{Output: result.Text}, corerun.NodeSuccess, nil
+}
+
+func resolveExtensionDir(baseWorkingDir string, name string) (string, error) {
+	candidates := []string{filepath.Join(baseWorkingDir, ".agentflow", "extensions", name)}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		candidates = append(candidates, filepath.Join(home, ".agentflow", "extensions", name))
+	}
+	for _, candidate := range candidates {
+		info, err := os.Stat(candidate)
+		if err == nil && info.IsDir() {
+			return filepath.Clean(candidate), nil
+		}
+	}
+	return "", fmt.Errorf("extension %q not found in .agentflow/extensions or ~/.agentflow/extensions", name)
+}
+
+func resolveExtensionScript(extensionDir string, script string) (string, error) {
+	clean := filepath.Clean(script)
+	path := filepath.Join(extensionDir, clean)
+	rel, err := filepath.Rel(extensionDir, path)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("extension script must not escape the extension directory")
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", fmt.Errorf("extension script %q not found: %w", script, err)
+	}
+	if info.IsDir() {
+		return "", fmt.Errorf("extension script %q is a directory", script)
+	}
+	return filepath.Clean(path), nil
+}
+
+func evalTemplateMap(input map[string]any, ctx coreworkflow.EvalContext) (map[string]any, error) {
+	out := make(map[string]any, len(input))
+	for key, value := range input {
+		evaluated, err := evalTemplateAny(value, ctx)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", key, err)
+		}
+		out[key] = evaluated
+	}
+	return out, nil
+}
+
+func evalTemplateAny(value any, ctx coreworkflow.EvalContext) (any, error) {
+	switch typed := value.(type) {
+	case string:
+		return coreworkflow.EvalTemplateValue(typed, ctx)
+	case []any:
+		out := make([]any, len(typed))
+		for i, item := range typed {
+			evaluated, err := evalTemplateAny(item, ctx)
+			if err != nil {
+				return nil, fmt.Errorf("[%d]: %w", i, err)
+			}
+			out[i] = evaluated
+		}
+		return out, nil
+	case map[string]any:
+		return evalTemplateMap(typed, ctx)
+	default:
+		return value, nil
+	}
+}
+
+func renderEnv(env map[string]string, ctx coreworkflow.EvalContext) (map[string]string, error) {
+	if len(env) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]string, len(env))
+	for key, value := range env {
+		rendered, err := coreworkflow.RenderTemplate(value, ctx)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", key, err)
+		}
+		out[key] = rendered
+	}
+	return out, nil
 }

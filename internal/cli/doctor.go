@@ -238,7 +238,7 @@ func checkEnvironment(_ context.Context, deps doctorDeps) doctorGroup {
 func checkBinaries(deps doctorDeps) doctorGroup {
 	var checks []doctorCheck
 
-	for _, name := range []string{"codex", "claude"} {
+	for _, name := range []string{"codex", "claude", "uv"} {
 		if path, err := deps.lookPath(name); err != nil {
 			checks = append(checks, doctorCheck{
 				Name:    name,

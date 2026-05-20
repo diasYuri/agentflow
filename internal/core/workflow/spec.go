@@ -154,6 +154,7 @@ const (
 	NodeKindAgent     NodeKind = "agent"
 	NodeKindApproval  NodeKind = "approval"
 	NodeKindBash      NodeKind = "bash"
+	NodeKindExtension NodeKind = "extension"
 	NodeKindTransform NodeKind = "transform"
 	NodeKindNoop      NodeKind = "noop"
 	NodeKindMap       NodeKind = "map"
@@ -188,6 +189,8 @@ type NodeSpec struct {
 	WorkingDir string            `json:"working_dir,omitempty" yaml:"working_dir"`
 	Env        map[string]string `json:"env,omitempty" yaml:"env"`
 	Capture    CaptureSpec       `json:"capture,omitempty" yaml:"capture"`
+	Extension  string            `json:"extension,omitempty" yaml:"extension"`
+	Script     string            `json:"script,omitempty" yaml:"script"`
 
 	Operation string         `json:"operation,omitempty" yaml:"operation"`
 	Input     string         `json:"input,omitempty" yaml:"input"`

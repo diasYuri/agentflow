@@ -194,6 +194,7 @@ comportamento.
 
 - `provider` é validado para nodes `agent`; `codex`, `claude` e `pi` são aceitos pelo conjunto padrão, e quando o campo não é informado o domínio usa `codex` como fallback.
 - `permission` só é aceito em nodes `agent`, e `permission.write` precisa estar definido quando o bloco existe.
+- `extension` executa scripts Python por `uv` a partir de `.agentflow/extensions`; veja [`docs/extension-nodes.md`](extension-nodes.md).
 - `map` cria um escopo aninhado, mas mantém visíveis os nodes do escopo externo para referências controladas.
 - `ValidateInputValues` é útil para checar payloads recebidos sem repetir a lógica de tipos do spec.
 - A validação ocorre antes da execução, então erros de schema, referência e ciclo aparecem cedo e com contexto do node afetado.

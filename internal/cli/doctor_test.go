@@ -196,8 +196,8 @@ func TestDoctorCheckBinaries(t *testing.T) {
 		},
 	}
 	group := checkBinaries(deps)
-	if len(group.Checks) != 3 {
-		t.Fatalf("expected 3 checks, got %d", len(group.Checks))
+	if len(group.Checks) != 4 {
+		t.Fatalf("expected 4 checks, got %d", len(group.Checks))
 	}
 	if group.Checks[0].Name != "codex" || group.Checks[0].Status != "warn" {
 		t.Fatalf("expected codex warn, got %q %q", group.Checks[0].Name, group.Checks[0].Status)
@@ -205,8 +205,11 @@ func TestDoctorCheckBinaries(t *testing.T) {
 	if group.Checks[1].Name != "claude" || group.Checks[1].Status != "warn" {
 		t.Fatalf("expected claude warn, got %q %q", group.Checks[1].Name, group.Checks[1].Status)
 	}
-	if group.Checks[2].Name != "go" || group.Checks[2].Status != "ok" {
-		t.Fatalf("expected go ok, got %q %q", group.Checks[2].Name, group.Checks[2].Status)
+	if group.Checks[2].Name != "uv" || group.Checks[2].Status != "warn" {
+		t.Fatalf("expected uv warn, got %q %q", group.Checks[2].Name, group.Checks[2].Status)
+	}
+	if group.Checks[3].Name != "go" || group.Checks[3].Status != "ok" {
+		t.Fatalf("expected go ok, got %q %q", group.Checks[3].Name, group.Checks[3].Status)
 	}
 }
 
@@ -221,8 +224,8 @@ func TestDoctorCheckBinariesSkipsGoOutsideDevelopmentBuild(t *testing.T) {
 		},
 	}
 	group := checkBinaries(deps)
-	if len(group.Checks) != 2 {
-		t.Fatalf("expected 2 checks when not in development mode, got %d", len(group.Checks))
+	if len(group.Checks) != 3 {
+		t.Fatalf("expected 3 checks when not in development mode, got %d", len(group.Checks))
 	}
 	for _, check := range group.Checks {
 		if check.Name == "go" {

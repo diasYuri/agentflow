@@ -83,6 +83,107 @@ func TestValidateRejectsNonExpandedNodeOutputsReference(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsExtensionWithUnknownNodeReference(t *testing.T) {
+	spec := &WorkflowSpec{
+		Version: "1",
+		Name:    "extension",
+		Nodes: []NodeSpec{
+			{
+				ID:        "jira",
+				Kind:      NodeKindExtension,
+				Extension: "jira",
+				Script:    "main.py",
+				With: map[string]any{
+					"issue": "${nodes.missing.output}",
+				},
+			},
+		},
+	}
+
+	err := Validate(spec, DefaultProviders(), nil)
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+	if !strings.Contains(err.Error(), `with.issue: unknown node reference "missing"`) {
+		t.Fatalf("expected with node reference error, got %v", err)
+	}
+}
+
+func TestValidateAllowsExtensionNode(t *testing.T) {
+	spec := &WorkflowSpec{
+		Version: "1",
+		Name:    "extension",
+		Nodes: []NodeSpec{
+			{ID: "jira", Kind: NodeKindExtension, Extension: "jira", Script: "main.py"},
+		},
+	}
+
+	if err := Validate(spec, DefaultProviders(), nil); err != nil {
+		t.Fatalf("expected extension node to validate, got %v", err)
+	}
+}
+
+func TestValidateRejectsUnsafeExtensionNode(t *testing.T) {
+	tests := []struct {
+		name string
+		node NodeSpec
+		want string
+	}{
+		{
+			name: "missing extension",
+			node: NodeSpec{ID: "ext", Kind: NodeKindExtension, Script: "main.py"},
+			want: "extension is required",
+		},
+		{
+			name: "unsafe extension",
+			node: NodeSpec{ID: "ext", Kind: NodeKindExtension, Extension: "../jira", Script: "main.py"},
+			want: "extension must be a simple name",
+		},
+		{
+			name: "extension with whitespace",
+			node: NodeSpec{ID: "ext", Kind: NodeKindExtension, Extension: "jira ", Script: "main.py"},
+			want: "extension must not contain leading or trailing whitespace",
+		},
+		{
+			name: "missing script",
+			node: NodeSpec{ID: "ext", Kind: NodeKindExtension, Extension: "jira"},
+			want: "extension script is required",
+		},
+		{
+			name: "script with whitespace",
+			node: NodeSpec{ID: "ext", Kind: NodeKindExtension, Extension: "jira", Script: " main.py"},
+			want: "extension script must not contain leading or trailing whitespace",
+		},
+		{
+			name: "absolute script",
+			node: NodeSpec{ID: "ext", Kind: NodeKindExtension, Extension: "jira", Script: "/tmp/main.py"},
+			want: "extension script must be relative",
+		},
+		{
+			name: "escaping script",
+			node: NodeSpec{ID: "ext", Kind: NodeKindExtension, Extension: "jira", Script: "../main.py"},
+			want: "extension script must not escape",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			spec := &WorkflowSpec{
+				Version: "1",
+				Name:    "extension",
+				Nodes:   []NodeSpec{tt.node},
+			}
+
+			err := Validate(spec, DefaultProviders(), nil)
+			if err == nil {
+				t.Fatal("expected validation error")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("expected %q, got %v", tt.want, err)
+			}
+		})
+	}
+}
+
 func TestValidateAllowsAgentPermissionWrite(t *testing.T) {
 	write := true
 	spec := &WorkflowSpec{

@@ -18,6 +18,7 @@ type ProviderLookup interface {
 var nodeOutputReference = regexp.MustCompile(`\bnodes\.([A-Za-z_][A-Za-z0-9_-]*)\.(outputs|output)\b`)
 var scopeReference = regexp.MustCompile(`(^|[^A-Za-z0-9_.-])([A-Za-z_][A-Za-z0-9_-]*)\.`)
 var stringLiteral = regexp.MustCompile(`'[^']*'|"[^"]*"`)
+var extensionName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
 
 func Validate(spec *WorkflowSpec, agentProviders ProviderLookup, worktreeProviders ProviderLookup) error {
 	if spec == nil {
@@ -422,6 +423,10 @@ func validateNode(spec *WorkflowSpec, node NodeSpec, providers ProviderLookup) e
 		if strings.TrimSpace(node.Command) == "" {
 			return fmt.Errorf("bash command is required")
 		}
+	case NodeKindExtension:
+		if err := validateExtensionNode(node); err != nil {
+			return err
+		}
 	case NodeKindTransform:
 		if strings.TrimSpace(node.Operation) == "" {
 			return fmt.Errorf("transform operation is required")
@@ -454,6 +459,34 @@ func validateNode(spec *WorkflowSpec, node NodeSpec, providers ProviderLookup) e
 	}
 	if node.Timeout < 0 {
 		return fmt.Errorf("timeout must be >= 0")
+	}
+	return nil
+}
+
+func validateExtensionNode(node NodeSpec) error {
+	name := strings.TrimSpace(node.Extension)
+	if name == "" {
+		return fmt.Errorf("extension is required")
+	}
+	if name != node.Extension {
+		return fmt.Errorf("extension must not contain leading or trailing whitespace")
+	}
+	if !extensionName.MatchString(name) {
+		return fmt.Errorf("extension must be a simple name containing only letters, numbers, underscores, and hyphens")
+	}
+	script := strings.TrimSpace(node.Script)
+	if script == "" {
+		return fmt.Errorf("extension script is required")
+	}
+	if script != node.Script {
+		return fmt.Errorf("extension script must not contain leading or trailing whitespace")
+	}
+	if filepath.IsAbs(script) {
+		return fmt.Errorf("extension script must be relative")
+	}
+	clean := filepath.Clean(script)
+	if clean == "." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) || clean == ".." {
+		return fmt.Errorf("extension script must not escape the extension directory")
 	}
 	return nil
 }
@@ -553,6 +586,12 @@ func validateNodeReferences(node NodeSpec, nodes map[string]NodeSpec) error {
 	if err := check("command", node.Command); err != nil {
 		return err
 	}
+	if err := check("extension", node.Extension); err != nil {
+		return err
+	}
+	if err := check("script", node.Script); err != nil {
+		return err
+	}
 	if err := check("working_dir", node.WorkingDir); err != nil {
 		return err
 	}
@@ -562,6 +601,29 @@ func validateNodeReferences(node NodeSpec, nodes map[string]NodeSpec) error {
 	for key, value := range node.Env {
 		if err := check("env."+key, value); err != nil {
 			return err
+		}
+	}
+	if err := validateNodeReferencesInValue("with", node.With, nodes); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateNodeReferencesInValue(field string, value any, nodes map[string]NodeSpec) error {
+	switch typed := value.(type) {
+	case string:
+		return validateStaticNodeOutputReferences(field, typed, nodes)
+	case []any:
+		for i, item := range typed {
+			if err := validateNodeReferencesInValue(fmt.Sprintf("%s[%d]", field, i), item, nodes); err != nil {
+				return err
+			}
+		}
+	case map[string]any:
+		for key, item := range typed {
+			if err := validateNodeReferencesInValue(field+"."+key, item, nodes); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -760,9 +822,32 @@ func validateExpressionsInNode(node NodeSpec, checkTemplate func(string, string)
 			return err
 		}
 	}
+	if err := validateExpressionsInValue(prefix+".with", node.With, checkTemplate); err != nil {
+		return err
+	}
 	for _, child := range node.Nodes {
 		if err := validateExpressionsInNode(child, checkTemplate, checkRaw); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func validateExpressionsInValue(field string, value any, checkTemplate func(string, string) error) error {
+	switch typed := value.(type) {
+	case string:
+		return checkTemplate(field, typed)
+	case []any:
+		for i, item := range typed {
+			if err := validateExpressionsInValue(fmt.Sprintf("%s[%d]", field, i), item, checkTemplate); err != nil {
+				return err
+			}
+		}
+	case map[string]any:
+		for key, item := range typed {
+			if err := validateExpressionsInValue(field+"."+key, item, checkTemplate); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

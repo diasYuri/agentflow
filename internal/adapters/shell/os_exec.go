@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/diasYuri/agentflow/internal/core/ports"
@@ -17,13 +18,12 @@ func NewRunner() *Runner { return &Runner{} }
 
 func (r *Runner) Run(ctx context.Context, req ports.ShellRequest) (ports.ShellResult, error) {
 	start := time.Now()
-	shell := req.Shell
-	if shell == "" {
-		shell = "bash"
-	}
-	cmd := exec.CommandContext(ctx, shell, "-lc", req.Command)
+	cmd := command(ctx, req)
 	if req.WorkingDir != "" {
 		cmd.Dir = req.WorkingDir
+	}
+	if req.Stdin != "" {
+		cmd.Stdin = strings.NewReader(req.Stdin)
 	}
 	cmd.Env = os.Environ()
 	for key, value := range req.Env {
@@ -45,6 +45,17 @@ func (r *Runner) Run(ctx context.Context, req ports.ShellRequest) (ports.ShellRe
 		}
 	}
 	return ports.ShellResult{Stdout: stdout.String(), Stderr: stderr.String(), ExitCode: exitCode, Duration: time.Since(start)}, err
+}
+
+func command(ctx context.Context, req ports.ShellRequest) *exec.Cmd {
+	if len(req.Args) > 0 {
+		return exec.CommandContext(ctx, req.Args[0], req.Args[1:]...)
+	}
+	shell := req.Shell
+	if shell == "" {
+		shell = "bash"
+	}
+	return exec.CommandContext(ctx, shell, "-lc", req.Command)
 }
 
 type limitedBuffer struct {

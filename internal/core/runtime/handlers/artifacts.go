@@ -27,8 +27,8 @@ func (e *Executor) saveNodeArtifacts(
 		return id + "/" + kind
 	}
 
-	// Index stdout.txt when present or when bash node produced output.
-	if result.Stdout != "" || node.Kind == coreworkflow.NodeKindBash {
+	// Index stdout.txt when present or when a process-backed node produced output.
+	if result.Stdout != "" || node.Kind == coreworkflow.NodeKindBash || node.Kind == coreworkflow.NodeKindExtension {
 		art := corerun.Artifact{
 			ID:           artifactID("stdout.txt"),
 			NodeID:       node.ID,
@@ -46,8 +46,8 @@ func (e *Executor) saveNodeArtifacts(
 		}
 	}
 
-	// Index stderr.txt when present or when bash node produced output.
-	if result.Stderr != "" || node.Kind == coreworkflow.NodeKindBash {
+	// Index stderr.txt when present or when a process-backed node produced output.
+	if result.Stderr != "" || node.Kind == coreworkflow.NodeKindBash || node.Kind == coreworkflow.NodeKindExtension {
 		art := corerun.Artifact{
 			ID:           artifactID("stderr.txt"),
 			NodeID:       node.ID,
@@ -65,8 +65,8 @@ func (e *Executor) saveNodeArtifacts(
 		}
 	}
 
-	// For bash nodes, copy declared artifacts from working dir.
-	if node.Kind == coreworkflow.NodeKindBash && len(node.Artifacts) > 0 {
+	// For process-backed nodes, copy declared artifacts from working dir.
+	if (node.Kind == coreworkflow.NodeKindBash || node.Kind == coreworkflow.NodeKindExtension) && len(node.Artifacts) > 0 {
 		workingDir := resolvePath(state.baseWorkingDir, effectiveWorkingDir(state.plan.Workflow, node))
 		for _, spec := range node.Artifacts {
 			ref := e.copyDeclaredArtifact(ctx, state, node, result, workingDir, spec)

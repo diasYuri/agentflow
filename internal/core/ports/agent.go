@@ -58,6 +58,8 @@ type ShellRunner interface {
 
 type ShellRequest struct {
 	Command        string
+	Args           []string
+	Stdin          string
 	Shell          string
 	WorkingDir     string
 	Env            map[string]string

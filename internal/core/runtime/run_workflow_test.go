@@ -1410,6 +1410,102 @@ nodes:
 	}
 }
 
+func TestRunWorkflowExtensionNodeUsesUVAndJSONContract(t *testing.T) {
+	dir := t.TempDir()
+	extensionDir := filepath.Join(dir, ".agentflow", "extensions", "jira")
+	if err := os.MkdirAll(extensionDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	scriptPath := filepath.Join(extensionDir, "main.py")
+	if err := os.WriteFile(scriptPath, []byte("print('{}')\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	workflowPath := writeWorkflow(t, dir, `
+version: "1"
+name: extension-contract
+inputs:
+  issue:
+    type: string
+    required: true
+vars:
+  token: secret-token
+execution:
+  output_dir: "`+filepath.ToSlash(filepath.Join(dir, "runs"))+`"
+nodes:
+  - id: jira
+    kind: extension
+    extension: jira
+    script: main.py
+    with:
+      issue_key: "${inputs.issue}"
+      nested:
+        run: "${run.workflow}"
+    env:
+      TOKEN: "${vars.token}"
+`)
+	events := eventmemory.New()
+	shell := &scriptedShell{
+		run: func(ctx context.Context, req ports.ShellRequest, call int) (ports.ShellResult, error) {
+			_ = ctx
+			if call != 1 {
+				t.Fatalf("expected one call, got %d", call)
+			}
+			wantArgs := []string{"uv", "run", "--project", extensionDir, "python", scriptPath}
+			if !reflect.DeepEqual(req.Args, wantArgs) {
+				t.Fatalf("unexpected args:\nwant %#v\ngot  %#v", wantArgs, req.Args)
+			}
+			if req.Command != "" {
+				t.Fatalf("expected argv execution, got command %q", req.Command)
+			}
+			if req.WorkingDir != dir {
+				t.Fatalf("expected working dir %q, got %q", dir, req.WorkingDir)
+			}
+			if req.Env["TOKEN"] != "secret-token" {
+				t.Fatalf("expected rendered env, got %#v", req.Env)
+			}
+			var payload map[string]any
+			if err := json.Unmarshal([]byte(req.Stdin), &payload); err != nil {
+				t.Fatalf("stdin is not JSON: %v", err)
+			}
+			if payload["version"] != "agentflow.extension.v1" {
+				t.Fatalf("unexpected version: %#v", payload["version"])
+			}
+			withValues := payload["with"].(map[string]any)
+			if withValues["issue_key"] != "AF-123" {
+				t.Fatalf("unexpected with payload: %#v", withValues)
+			}
+			nested := withValues["nested"].(map[string]any)
+			if nested["run"] != "extension-contract" {
+				t.Fatalf("unexpected nested with payload: %#v", nested)
+			}
+			return ports.ShellResult{Stdout: `{"ok":true,"issue":"AF-123"}`, Stderr: "log line\n", ExitCode: 0}, nil
+		},
+	}
+	uc := newTestRunWorkflowUseCase(dir, shell, events)
+
+	result, err := uc.Run(context.Background(), RunOptions{
+		WorkflowRef: workflowPath,
+		Inputs:      map[string]any{"issue": "AF-123"},
+		WorkingDir:  dir,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != run.RunSuccess {
+		t.Fatalf("expected success, got %s", result.Status)
+	}
+	output, ok := result.Summary.Nodes["jira"].Output.(map[string]any)
+	if !ok || output["ok"] != true || output["issue"] != "AF-123" {
+		t.Fatalf("unexpected output: %#v", result.Summary.Nodes["jira"].Output)
+	}
+	if result.Summary.Nodes["jira"].Stderr != "log line\n" {
+		t.Fatalf("expected stderr to be preserved, got %q", result.Summary.Nodes["jira"].Stderr)
+	}
+	if findEvent(events.Events, "node.extension.warning", "jira") == nil {
+		t.Fatalf("expected extension warning event, got %#v", events.Events)
+	}
+}
+
 type scriptedShell struct {
 	mu       sync.Mutex
 	calls    int

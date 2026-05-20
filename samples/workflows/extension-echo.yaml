@@ -1,0 +1,17 @@
+version: "1"
+name: extension-echo
+description: Run a Python extension through uv.
+
+inputs:
+  message:
+    type: string
+    required: true
+
+nodes:
+  - id: echo
+    kind: extension
+    extension: echo
+    script: main.py
+    with:
+      message: "${inputs.message}"
+
