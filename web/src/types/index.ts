@@ -3,6 +3,11 @@ export interface Project {
 	path: string;
 }
 
+export interface PickFolderResponse {
+	name: string;
+	path: string;
+}
+
 export interface Session {
 	id: string;
 	project_name: string;
@@ -86,6 +91,40 @@ export interface SettingsResponse {
 		root: string;
 		daemon_socket?: string;
 	};
+}
+
+export interface WorkflowDefinitionSummary {
+	id: string;
+	name: string;
+	version: string;
+	description?: string;
+	created_at: string;
+	updated_at: string;
+}
+
+export interface WorkflowDefinition {
+	id: string;
+	name: string;
+	spec: WorkflowSpec;
+	created_at: string;
+	updated_at: string;
+}
+
+export interface WorkflowSpec {
+	version?: string;
+	name: string;
+	description?: string;
+	inputs?: Record<string, unknown>;
+	vars?: Record<string, unknown>;
+	secrets?: Record<string, unknown>;
+	defaults?: Record<string, unknown>;
+	execution?: Record<string, unknown>;
+	nodes: Array<Record<string, unknown>>;
+	worktree?: Record<string, unknown>;
+	imports?: Array<Record<string, unknown> | string>;
+	outputs?: Record<string, unknown>;
+	hooks?: Array<Record<string, unknown>>;
+	steps?: Record<string, unknown>;
 }
 
 export interface SSEEvent {

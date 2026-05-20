@@ -5,6 +5,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -12,6 +13,8 @@ import (
 	"strings"
 
 	"github.com/diasYuri/agentflow/internal/app"
+	"github.com/diasYuri/agentflow/internal/core/workflow"
+	"github.com/diasYuri/agentflow/internal/daemon"
 	"github.com/diasYuri/agentflow/internal/web/diagnostics"
 	"github.com/diasYuri/agentflow/internal/web/events"
 	"github.com/diasYuri/agentflow/internal/web/persistence"
@@ -21,20 +24,40 @@ import (
 // Service exposes session, message, tool-call, approval, diagnostic,
 // SSE, and debug bundle endpoints under /api/v1.
 type Service struct {
-	Sessions    *session.Sessions
-	Diagnostics *diagnostics.Recorder
-	Broker      *events.Broker
-	Projects    session.ProjectResolver
-	DB          *persistence.DB
-	Bundler     *diagnostics.BundleExporter
+	Sessions            *session.Sessions
+	Diagnostics         *diagnostics.Recorder
+	Broker              *events.Broker
+	Projects            session.ProjectResolver
+	FolderPicker        FolderPicker
+	WorkflowDefinitions WorkflowDefinitionClient
+	DB                  *persistence.DB
+	Bundler             *diagnostics.BundleExporter
 }
 
 // Options bundles dependencies for NewService.
 type Options struct {
-	DB       *persistence.DB
-	Projects session.ProjectResolver
-	Broker   *events.Broker
-	Policy   diagnostics.RedactionPolicy
+	DB                  *persistence.DB
+	Projects            session.ProjectResolver
+	Broker              *events.Broker
+	Policy              diagnostics.RedactionPolicy
+	FolderPicker        FolderPicker
+	WorkflowDefinitions WorkflowDefinitionClient
+}
+
+type projectAdder interface {
+	Add(name, path string) error
+}
+
+type FolderPicker interface {
+	PickFolder(r *http.Request) (string, error)
+}
+
+type WorkflowDefinitionClient interface {
+	ListWorkflowDefinitions(ctx context.Context) (daemon.WorkflowDefinitionsResponse, error)
+	CreateWorkflowDefinition(ctx context.Context, spec workflow.WorkflowSpec) (daemon.WorkflowDefinitionResponse, error)
+	WorkflowDefinition(ctx context.Context, id string) (daemon.WorkflowDefinitionResponse, error)
+	UpdateWorkflowDefinition(ctx context.Context, id string, spec workflow.WorkflowSpec) (daemon.WorkflowDefinitionResponse, error)
+	DeleteWorkflowDefinition(ctx context.Context, id string) error
 }
 
 // NewService wires the service, building any optional dependencies
@@ -48,6 +71,9 @@ func NewService(opts Options) (*Service, error) {
 	}
 	if opts.Broker == nil {
 		opts.Broker = events.NewBroker(64)
+	}
+	if opts.FolderPicker == nil {
+		opts.FolderPicker = NativeFolderPicker{}
 	}
 	policy := opts.Policy
 	if policy.MaxValueBytes == 0 && len(policy.SecretKeySubstrings) == 0 && len(policy.SecretValuePatterns) == 0 {
@@ -77,19 +103,24 @@ func NewService(opts Options) (*Service, error) {
 		Payloads:    persistence.NewPayloadStore(opts.DB),
 	}, policy)
 	return &Service{
-		Sessions:    sessions,
-		Diagnostics: rec,
-		Broker:      opts.Broker,
-		Projects:    opts.Projects,
-		DB:          opts.DB,
-		Bundler:     bundler,
+		Sessions:            sessions,
+		Diagnostics:         rec,
+		Broker:              opts.Broker,
+		Projects:            opts.Projects,
+		FolderPicker:        opts.FolderPicker,
+		WorkflowDefinitions: opts.WorkflowDefinitions,
+		DB:                  opts.DB,
+		Bundler:             bundler,
 	}, nil
 }
 
 // Register attaches every API route onto mux under /api/v1.
 func (s *Service) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/projects", s.handleProjects)
+	mux.HandleFunc("/api/v1/projects/pick-folder", s.handlePickProjectFolder)
 	mux.HandleFunc("/api/v1/projects/", s.handleProjectChild)
+	mux.HandleFunc("/api/v1/workflow-definitions", s.handleWorkflowDefinitions)
+	mux.HandleFunc("/api/v1/workflow-definitions/", s.handleWorkflowDefinition)
 	mux.HandleFunc("/api/v1/sessions", s.handleSessions)
 	mux.HandleFunc("/api/v1/sessions/", s.handleSessionChild)
 	mux.HandleFunc("/api/v1/approvals/", s.handleApprovalChild)

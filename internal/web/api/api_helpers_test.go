@@ -43,6 +43,14 @@ func (s *stubProjects) List() ([]app.Project, error) {
 	return out, nil
 }
 
+func (s *stubProjects) Add(name, path string) error {
+	if _, ok := s.byName[name]; ok {
+		return fmt.Errorf("project %q already exists", name)
+	}
+	s.byName[name] = app.Project{Name: name, Path: path}
+	return nil
+}
+
 func newTestService(t *testing.T) (*api.Service, *http.ServeMux, *events.Broker) {
 	t.Helper()
 	dir := t.TempDir()

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "vitest";
+import { groupSessionsByProject, uniqueProjectName } from "../lib/project-tree";
 
 function parseWorkflowNodes(yaml) {
 	const nodes = [];
@@ -66,5 +67,46 @@ describe("parseWorkflowNodes", () => {
 
 	test("returns no nodes when yaml has no nodes section", () => {
 		expect(parseWorkflowNodes("name:test")).toHaveLength(0);
+	});
+});
+
+describe("project rail helpers", () => {
+	test("groups chat sessions under their projects", () => {
+		const projects = [
+			{ name: "alpha", path: "/alpha" },
+			{ name: "beta", path: "/beta" },
+		];
+		const sessions = [
+			{
+				id: "s1",
+				project_name: "alpha",
+				updated_at: "2026-05-19T10:00:00Z",
+			},
+			{
+				id: "s2",
+				project_name: "beta",
+				updated_at: "2026-05-19T11:00:00Z",
+			},
+			{
+				id: "s3",
+				project_name: "alpha",
+				updated_at: "2026-05-19T12:00:00Z",
+			},
+		];
+
+		const grouped = groupSessionsByProject(projects, sessions);
+
+		expect(grouped.alpha.map((s) => s.id)).toEqual(["s3", "s1"]);
+		expect(grouped.beta.map((s) => s.id)).toEqual(["s2"]);
+	});
+
+	test("derives a conflict-free project name", () => {
+		const projects = [
+			{ name: "agentflow", path: "/repo/agentflow" },
+			{ name: "agentflow-2", path: "/repo/agentflow-2" },
+		];
+
+		expect(uniqueProjectName("agentflow", projects)).toBe("agentflow-3");
+		expect(uniqueProjectName("new", projects)).toBe("new");
 	});
 });

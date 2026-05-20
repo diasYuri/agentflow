@@ -3,10 +3,13 @@ import type {
 	Diagnostic,
 	HealthResponse,
 	Message,
+	PickFolderResponse,
 	Project,
 	Session,
 	SettingsResponse,
 	ToolCall,
+	WorkflowDefinition,
+	WorkflowDefinitionSummary,
 } from "@/types";
 import { getToken } from "./utils";
 
@@ -47,6 +50,15 @@ export const api = {
 			fetchJSON<{ projects: Project[] | null }>("/api/v1/projects").then((r) =>
 				arrayOrEmpty(r.projects),
 			),
+		create: (body: { name: string; path: string }) =>
+			fetchJSON<Project>("/api/v1/projects", {
+				method: "POST",
+				body: JSON.stringify(body),
+			}),
+		pickFolder: () =>
+			fetchJSON<PickFolderResponse>("/api/v1/projects/pick-folder", {
+				method: "POST",
+			}),
 		get: (name: string) =>
 			fetchJSON<Project>(`/api/v1/projects/${encodeURIComponent(name)}`),
 		sessions: (name: string) =>
@@ -153,5 +165,37 @@ export const api = {
 			fetchJSON<{ diagnostics: Diagnostic[] | null }>(
 				`/api/v1/diagnostics?limit=${limit}`,
 			).then((r) => arrayOrEmpty(r.diagnostics)),
+	},
+
+	workflows: {
+		list: () =>
+			fetchJSON<{ workflow_definitions: WorkflowDefinitionSummary[] | null }>(
+				"/api/v1/workflow-definitions",
+			).then((r) => arrayOrEmpty(r.workflow_definitions)),
+		get: (id: string) =>
+			fetchJSON<{ workflow_definition: WorkflowDefinition }>(
+				`/api/v1/workflow-definitions/${encodeURIComponent(id)}`,
+			).then((r) => r.workflow_definition),
+		createFromYaml: (yaml: string) =>
+			fetchJSON<{ workflow_definition: WorkflowDefinition }>(
+				"/api/v1/workflow-definitions",
+				{
+					method: "POST",
+					body: JSON.stringify({ yaml }),
+				},
+			).then((r) => r.workflow_definition),
+		updateFromYaml: (id: string, yaml: string) =>
+			fetchJSON<{ workflow_definition: WorkflowDefinition }>(
+				`/api/v1/workflow-definitions/${encodeURIComponent(id)}`,
+				{
+					method: "PUT",
+					body: JSON.stringify({ yaml }),
+				},
+			).then((r) => r.workflow_definition),
+		delete: (id: string) =>
+			fetchJSON<void>(
+				`/api/v1/workflow-definitions/${encodeURIComponent(id)}`,
+				{ method: "DELETE" },
+			),
 	},
 };

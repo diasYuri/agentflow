@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/diasYuri/agentflow/internal/core/workflow"
+	"github.com/diasYuri/agentflow/internal/daemon"
 	"github.com/diasYuri/agentflow/internal/web/api"
 	"github.com/diasYuri/agentflow/internal/web/events"
 	"github.com/diasYuri/agentflow/internal/web/persistence"
@@ -29,6 +31,68 @@ func TestProjectsListEndpoint(t *testing.T) {
 	}
 	if len(payload.Projects) != 1 || payload.Projects[0].Name != "demo" {
 		t.Fatalf("unexpected projects: %+v", payload.Projects)
+	}
+}
+
+func TestCreateProjectEndpoint(t *testing.T) {
+	_, mux, _ := newTestService(t)
+	rec := doReq(t, mux, http.MethodPost, "/api/v1/projects", map[string]any{
+		"name": "new-project",
+		"path": "/tmp/new-project",
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	rec = doReq(t, mux, http.MethodGet, "/api/v1/projects/new-project", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get project: %d body=%s", rec.Code, rec.Body.String())
+	}
+	var got api.ProjectResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.Name != "new-project" || got.Path != "/tmp/new-project" {
+		t.Fatalf("unexpected project: %+v", got)
+	}
+}
+
+func TestPickProjectFolderEndpoint(t *testing.T) {
+	svc, mux, _ := newTestService(t)
+	svc.FolderPicker = staticFolderPicker("/tmp/picked-project")
+	rec := doReq(t, mux, http.MethodPost, "/api/v1/projects/pick-folder", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var got struct {
+		Path string `json:"path"`
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.Path != "/tmp/picked-project" || got.Name != "picked-project" {
+		t.Fatalf("unexpected picker response: %+v", got)
+	}
+}
+
+func TestWorkflowDefinitionProxyCreatesFromYAML(t *testing.T) {
+	svc, mux, _ := newTestService(t)
+	client := &fakeWorkflowDefinitions{}
+	svc.WorkflowDefinitions = client
+
+	rec := doReq(t, mux, http.MethodPost, "/api/v1/workflow-definitions", map[string]any{
+		"yaml": "name: demo-workflow\nnodes:\n  - id: start\n    kind: agent\n",
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if client.created.Name != "demo-workflow" || len(client.created.Nodes) != 1 {
+		t.Fatalf("unexpected spec: %+v", client.created)
+	}
+
+	rec = doReq(t, mux, http.MethodGet, "/api/v1/workflow-definitions", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -186,6 +250,45 @@ type capturingWriter struct {
 	status int
 }
 
+type staticFolderPicker string
+
+func (s staticFolderPicker) PickFolder(*http.Request) (string, error) {
+	return string(s), nil
+}
+
+type fakeWorkflowDefinitions struct {
+	created workflow.WorkflowSpec
+}
+
+func (f *fakeWorkflowDefinitions) ListWorkflowDefinitions(context.Context) (daemon.WorkflowDefinitionsResponse, error) {
+	return daemon.WorkflowDefinitionsResponse{Definitions: []daemon.WorkflowDefinitionSummary{
+		{ID: "wf-1", Name: "demo-workflow", Version: "1"},
+	}}, nil
+}
+
+func (f *fakeWorkflowDefinitions) CreateWorkflowDefinition(_ context.Context, spec workflow.WorkflowSpec) (daemon.WorkflowDefinitionResponse, error) {
+	f.created = spec
+	return daemon.WorkflowDefinitionResponse{
+		WorkflowDefinition: daemon.WorkflowDefinition{
+			ID:   "wf-1",
+			Name: spec.Name,
+			Spec: spec,
+		},
+	}, nil
+}
+
+func (f *fakeWorkflowDefinitions) WorkflowDefinition(context.Context, string) (daemon.WorkflowDefinitionResponse, error) {
+	return daemon.WorkflowDefinitionResponse{}, nil
+}
+
+func (f *fakeWorkflowDefinitions) UpdateWorkflowDefinition(_ context.Context, _ string, spec workflow.WorkflowSpec) (daemon.WorkflowDefinitionResponse, error) {
+	return daemon.WorkflowDefinitionResponse{WorkflowDefinition: daemon.WorkflowDefinition{ID: "wf-1", Name: spec.Name, Spec: spec}}, nil
+}
+
+func (f *fakeWorkflowDefinitions) DeleteWorkflowDefinition(context.Context, string) error {
+	return nil
+}
+
 func newCapturingWriter() *capturingWriter {
 	return &capturingWriter{header: make(http.Header)}
 }
@@ -210,8 +313,6 @@ func (c *capturingWriter) Bytes() []byte {
 	return out
 }
 
-
-
 func TestDebugBundleEndpointReturnsZip(t *testing.T) {
 	_, mux, _ := newTestService(t)
 	rec := doReq(t, mux, http.MethodPost, "/api/v1/projects/demo/sessions", nil)
@@ -230,39 +331,39 @@ func TestDebugBundleEndpointReturnsZip(t *testing.T) {
 		t.Fatalf("bundle too small: %d bytes", rec.Body.Len())
 	}
 }
-func TestToolCallLifecycleEndpoints(t *testing.T) {
+func TestToolCallLifecycleEndpointRoundTrip(t *testing.T) {
 	_, mux, _ := newTestService(t)
 	rec := doReq(t, mux, http.MethodPost, "/api/v1/projects/demo/sessions", nil)
-	if rec.Code \!= http.StatusCreated {
+	if rec.Code != http.StatusCreated {
 		t.Fatalf("create session: %d", rec.Code)
 	}
 	session := decodeSession(t, rec)
 	rec = doReq(t, mux, http.MethodPost, "/api/v1/sessions/"+session.ID+"/tool-calls", map[string]any{"name": "shell.exec"})
-	if rec.Code \!= http.StatusCreated {
+	if rec.Code != http.StatusCreated {
 		t.Fatalf("create tool call: %d body=%s", rec.Code, rec.Body.String())
 	}
 	var call persistence.ToolCall
-	if err := json.Unmarshal(rec.Body.Bytes(), &call); err \!= nil {
+	if err := json.Unmarshal(rec.Body.Bytes(), &call); err != nil {
 		t.Fatalf("decode tool call: %v", err)
 	}
-	if call.Name \!= "shell.exec" || call.Status \!= persistence.ToolCallStatusPending {
+	if call.Name != "shell.exec" || call.Status != persistence.ToolCallStatusPending {
 		t.Fatalf("unexpected tool call: %+v", call)
 	}
 	rec = doReq(t, mux, http.MethodGet, "/api/v1/sessions/"+session.ID+"/tool-calls", nil)
-	if rec.Code \!= http.StatusOK {
+	if rec.Code != http.StatusOK {
 		t.Fatalf("list tool calls: %d", rec.Code)
 	}
 	var listPayload struct {
-		ToolCalls []persistence.ToolCall 
+		ToolCalls []persistence.ToolCall `json:"tool_calls"`
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &listPayload); err \!= nil {
+	if err := json.Unmarshal(rec.Body.Bytes(), &listPayload); err != nil {
 		t.Fatalf("decode list: %v", err)
 	}
-	if len(listPayload.ToolCalls) \!= 1 {
+	if len(listPayload.ToolCalls) != 1 {
 		t.Fatalf("expected 1 tool call, got %d", len(listPayload.ToolCalls))
 	}
 	rec = doReq(t, mux, http.MethodPatch, "/api/v1/tool-calls/"+call.ID, map[string]any{"status": "succeeded"})
-	if rec.Code \!= http.StatusNoContent {
+	if rec.Code != http.StatusNoContent {
 		t.Fatalf("patch tool call: %d body=%s", rec.Code, rec.Body.String())
 	}
 }

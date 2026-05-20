@@ -1,6 +1,7 @@
 import { api } from "@/lib/api";
 import { useStore } from "@/lib/store";
 import { useQuery } from "@tanstack/react-query";
+import { Settings } from "lucide-react";
 
 export function SettingsView() {
 	const { data: settings } = useQuery({
@@ -10,96 +11,104 @@ export function SettingsView() {
 	const { theme, reducedMotion, setTheme, setReducedMotion } = useStore();
 
 	return (
-		<div className="p-6 max-w-2xl">
-			<h2 className="text-lg font-semibold">Settings</h2>
-
-			<section className="mt-6">
-				<h3 className="text-sm font-semibold text-neutral-500 uppercase tracking-wider">
-					Appearance
-				</h3>
-				<div className="mt-3 space-y-3">
-					<div className="flex items-center justify-between">
-						<label className="text-sm" htmlFor="theme-select">
-							Theme
-						</label>
-						<select
-							id="theme-select"
-							value={theme}
-							onChange={(e) =>
-								setTheme(e.target.value as "light" | "dark" | "system")
-							}
-							className="text-sm px-2 py-1 rounded border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800"
-						>
-							<option value="system">System</option>
-							<option value="light">Light</option>
-							<option value="dark">Dark</option>
-						</select>
+		<div className="flex h-full flex-col overflow-auto px-6 pb-10 pt-20">
+			<div className="mx-auto w-full max-w-3xl">
+				<header className="mb-6 flex items-center gap-3">
+					<div className="flex size-10 items-center justify-center rounded-2xl border border-border bg-background/70 shadow-xl shadow-black/10">
+						<Settings className="size-5" />
 					</div>
-					<div className="flex items-center justify-between">
-						<span className="text-sm">Reduced Motion</span>
-						<button
-							type="button"
-							onClick={() => setReducedMotion(!reducedMotion)}
-							className={`w-10 h-5 rounded-full relative transition-colors ${
-								reducedMotion
-									? "bg-neutral-900 dark:bg-neutral-100"
-									: "bg-neutral-300 dark:bg-neutral-700"
-							}`}
-							aria-pressed={reducedMotion}
-							aria-label="Toggle reduced motion"
-						>
-							<span
-								className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
-									reducedMotion ? "translate-x-5" : ""
+					<div>
+						<h1 className="text-xl font-medium tracking-tight">Settings</h1>
+						<p className="text-sm text-muted-foreground">
+							Local web server and interface preferences.
+						</p>
+					</div>
+				</header>
+
+				<section className="rounded-[24px] border border-border/80 bg-card/80 p-5 shadow-2xl shadow-black/10 backdrop-blur-xl">
+					<h2 className="text-sm font-medium text-muted-foreground">
+						Appearance
+					</h2>
+					<div className="mt-4 space-y-4">
+						<div className="flex items-center justify-between">
+							<label className="text-sm" htmlFor="theme-select">
+								Theme
+							</label>
+							<select
+								id="theme-select"
+								value={theme}
+								onChange={(e) =>
+									setTheme(e.target.value as "light" | "dark" | "system")
+								}
+								className="h-9 rounded-xl border border-border bg-background/55 px-3 text-sm outline-none"
+							>
+								<option value="system">System</option>
+								<option value="light">Light</option>
+								<option value="dark">Dark</option>
+							</select>
+						</div>
+						<div className="flex items-center justify-between">
+							<span className="text-sm">Reduced Motion</span>
+							<button
+								type="button"
+								onClick={() => setReducedMotion(!reducedMotion)}
+								className={`relative h-5 w-10 rounded-full transition-colors ${
+									reducedMotion ? "bg-primary" : "bg-muted-foreground/35"
 								}`}
-							/>
-						</button>
+								aria-pressed={reducedMotion}
+								aria-label="Toggle reduced motion"
+							>
+								<span
+									className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-background transition-transform ${
+										reducedMotion ? "translate-x-5" : ""
+									}`}
+								/>
+							</button>
+						</div>
 					</div>
-				</div>
-			</section>
+				</section>
 
-			<section className="mt-8">
-				<h3 className="text-sm font-semibold text-neutral-500 uppercase tracking-wider">
-					Server
-				</h3>
-				<dl className="mt-3 grid grid-cols-[120px_1fr] gap-y-2 text-sm">
-					<dt className="text-neutral-400">Host</dt>
-					<dd>{settings?.web.host}</dd>
-					<dt className="text-neutral-400">Port</dt>
-					<dd>{settings?.web.port}</dd>
-					<dt className="text-neutral-400">Daemon</dt>
-					<dd className="capitalize">{settings?.web.daemon}</dd>
-					<dt className="text-neutral-400">Root</dt>
-					<dd className="font-mono text-xs">{settings?.paths.root}</dd>
-					{settings?.paths.daemon_socket && (
-						<>
-							<dt className="text-neutral-400">Socket</dt>
-							<dd className="font-mono text-xs">
-								{settings.paths.daemon_socket}
-							</dd>
-						</>
-					)}
-				</dl>
-			</section>
+				<section className="mt-4 rounded-[24px] border border-border/80 bg-card/80 p-5 shadow-2xl shadow-black/10 backdrop-blur-xl">
+					<h2 className="text-sm font-medium text-muted-foreground">Server</h2>
+					<dl className="mt-3 grid grid-cols-[120px_1fr] gap-y-2 text-sm">
+						<dt className="text-muted-foreground">Host</dt>
+						<dd>{settings?.web.host}</dd>
+						<dt className="text-muted-foreground">Port</dt>
+						<dd>{settings?.web.port}</dd>
+						<dt className="text-muted-foreground">Daemon</dt>
+						<dd className="capitalize">{settings?.web.daemon}</dd>
+						<dt className="text-muted-foreground">Root</dt>
+						<dd className="font-mono text-xs">{settings?.paths.root}</dd>
+						{settings?.paths.daemon_socket && (
+							<>
+								<dt className="text-muted-foreground">Socket</dt>
+								<dd className="font-mono text-xs">
+									{settings.paths.daemon_socket}
+								</dd>
+							</>
+						)}
+					</dl>
+				</section>
 
-			<section className="mt-8">
-				<h3 className="text-sm font-semibold text-neutral-500 uppercase tracking-wider">
-					Session Token
-				</h3>
-				<p className="mt-2 text-xs text-neutral-400">
-					The token is stored in localStorage and sent with every request.
-				</p>
-				<button
-					type="button"
-					onClick={() => {
-						localStorage.removeItem("agentflow_token");
-						window.location.reload();
-					}}
-					className="mt-2 text-xs px-3 py-1.5 rounded border border-red-200 dark:border-red-900 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950"
-				>
-					Clear Token & Reload
-				</button>
-			</section>
+				<section className="mt-4 rounded-[24px] border border-border/80 bg-card/80 p-5 shadow-2xl shadow-black/10 backdrop-blur-xl">
+					<h2 className="text-sm font-medium text-muted-foreground">
+						Session Token
+					</h2>
+					<p className="mt-2 text-xs text-muted-foreground">
+						The token is stored in localStorage and sent with every request.
+					</p>
+					<button
+						type="button"
+						onClick={() => {
+							localStorage.removeItem("agentflow_token");
+							window.location.reload();
+						}}
+						className="mt-3 rounded-xl border border-red-500/30 px-3 py-1.5 text-xs text-red-600 transition-colors hover:bg-red-500/10 dark:text-red-400"
+					>
+						Clear Token & Reload
+					</button>
+				</section>
+			</div>
 		</div>
 	);
 }
