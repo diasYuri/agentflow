@@ -127,6 +127,140 @@ export interface WorkflowSpec {
 	steps?: Record<string, unknown>;
 }
 
+export type WorkflowRunStatus =
+	| "created"
+	| "validating"
+	| "planned"
+	| "running"
+	| "paused"
+	| "wait_approval"
+	| "success"
+	| "failed"
+	| "cancelled";
+
+export interface WorkflowRun {
+	id: string;
+	workflow: string;
+	run_dir: string;
+	status: WorkflowRunStatus;
+	started_at: string;
+	finished_at?: string;
+	paused_at?: string;
+	approval_at?: string;
+	pause_reason?: string;
+	approval_node_id?: string;
+	approval_message?: string;
+	resume_count?: number;
+	current_step?: string;
+	completed_steps?: string[];
+	pending_steps?: string[];
+	total_steps?: number;
+	error?: string;
+	terminal_error?: string;
+	failure_reason?: string;
+	recent_events?: string[];
+	tag?: string;
+}
+
+export interface WorkflowInspect {
+	run_id: string;
+	workflow: string;
+	status: WorkflowRunStatus;
+	started_at: string;
+	finished_at?: string;
+	approval_at?: string;
+	duration_ms: number;
+	current_step?: string;
+	completed_steps?: string[];
+	pending_steps?: string[];
+	total_steps: number;
+	failed_nodes: number;
+	retries: number;
+	agent_calls: number;
+	bash_calls: number;
+	first_error?: string;
+	error?: string;
+	terminal_error?: string;
+	failure_reason?: string;
+	approval_node_id?: string;
+	approval_message?: string;
+	tag?: string;
+	artifact_count: number;
+	node_count: number;
+	slowest_nodes?: SlowestNode[];
+	agent_usage?: AgentUsage[];
+}
+
+export interface WorkflowNodeResult {
+	node_id: string;
+	instance_id?: string;
+	path?: string[];
+	index?: number;
+	status: string;
+	output?: unknown;
+	outputs?: unknown[];
+	stdout?: string;
+	stderr?: string;
+	error?: string;
+	exit_code?: number;
+	duration_ms?: number;
+	attempts?: number;
+}
+
+export interface WorkflowTimelineEntry {
+	ts: string;
+	type: string;
+	node_id?: string;
+	instance_id?: string;
+	attempt?: number;
+	duration_ms?: number;
+}
+
+export interface WorkflowEvent {
+	cursor: number;
+	timestamp: string;
+	run_id: string;
+	type: string;
+	node_id?: string;
+	instance_id?: string;
+	path?: string[];
+	attempt?: number;
+	data?: Record<string, unknown>;
+	error?: string;
+}
+
+export interface WorkflowArtifact {
+	id: string;
+	name: string;
+	path: string;
+	size: number;
+	content_type?: string;
+	modified_at?: string;
+	run_id?: string;
+	node_id?: string;
+	instance_id?: string;
+	relative_path?: string;
+	media_type?: string;
+	size_bytes?: number;
+	created_at?: string;
+	kind?: string;
+	description?: string;
+}
+
+export interface SlowestNode {
+	node_id: string;
+	duration_ms: number;
+}
+
+export interface AgentUsage {
+	provider: string;
+	model?: string;
+	input_tokens?: number;
+	output_tokens?: number;
+	total_tokens?: number;
+	cost_usd?: number;
+}
+
 export interface SSEEvent {
 	id: number;
 	session_id?: string;

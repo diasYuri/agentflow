@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	corerun "github.com/diasYuri/agentflow/internal/core/run"
 	"github.com/diasYuri/agentflow/internal/core/workflow"
 	"github.com/diasYuri/agentflow/internal/daemon"
 	"github.com/diasYuri/agentflow/internal/web/api"
@@ -93,6 +94,66 @@ func TestWorkflowDefinitionProxyCreatesFromYAML(t *testing.T) {
 	rec = doReq(t, mux, http.MethodGet, "/api/v1/workflow-definitions", nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("list status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestWorkflowRunProxyListsAndInspectsRuns(t *testing.T) {
+	svc, mux, _ := newTestService(t)
+	client := newFakeWorkflowRuns()
+	svc.WorkflowRuns = client
+
+	rec := doReq(t, mux, http.MethodGet, "/api/v1/workflows", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var list daemon.ListWorkflowsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	if len(list.Runs) != 1 || list.Runs[0].ID != "run-1" {
+		t.Fatalf("unexpected runs: %+v", list.Runs)
+	}
+
+	rec = doReq(t, mux, http.MethodGet, "/api/v1/workflows/run-1/inspect", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("inspect status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var inspect daemon.WorkflowInspectResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &inspect); err != nil {
+		t.Fatalf("decode inspect: %v", err)
+	}
+	if inspect.RunID != "run-1" || inspect.AgentCalls != 2 {
+		t.Fatalf("unexpected inspect: %+v", inspect)
+	}
+}
+
+func TestWorkflowRunProxyActions(t *testing.T) {
+	svc, mux, _ := newTestService(t)
+	client := newFakeWorkflowRuns()
+	svc.WorkflowRuns = client
+
+	rec := doReq(t, mux, http.MethodPost, "/api/v1/workflows/run-1/pause", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("pause status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if client.lastAction != "pause:run-1" {
+		t.Fatalf("unexpected action %q", client.lastAction)
+	}
+
+	rec = doReq(t, mux, http.MethodPost, "/api/v1/workflows/run-1/approve", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("approve status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if client.lastAction != "approve:run-1" {
+		t.Fatalf("unexpected action %q", client.lastAction)
+	}
+}
+
+func TestWorkflowRunProxyRequiresDaemonClient(t *testing.T) {
+	_, mux, _ := newTestService(t)
+	rec := doReq(t, mux, http.MethodGet, "/api/v1/workflows", nil)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d body=%s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -287,6 +348,129 @@ func (f *fakeWorkflowDefinitions) UpdateWorkflowDefinition(_ context.Context, _ 
 
 func (f *fakeWorkflowDefinitions) DeleteWorkflowDefinition(context.Context, string) error {
 	return nil
+}
+
+type fakeWorkflowRuns struct {
+	run        daemon.WorkflowRun
+	lastAction string
+}
+
+func newFakeWorkflowRuns() *fakeWorkflowRuns {
+	startedAt := time.Date(2026, 5, 20, 12, 0, 0, 0, time.UTC)
+	return &fakeWorkflowRuns{
+		run: daemon.WorkflowRun{
+			ID:             "run-1",
+			Workflow:       "demo-workflow",
+			Status:         corerun.RunRunning,
+			StartedAt:      startedAt,
+			CurrentStep:    "build",
+			CompletedSteps: []string{"plan"},
+			PendingSteps:   []string{"test"},
+			TotalSteps:     3,
+			Tag:            "release",
+		},
+	}
+}
+
+func (f *fakeWorkflowRuns) ListWorkflows(context.Context) (daemon.ListWorkflowsResponse, error) {
+	return daemon.ListWorkflowsResponse{Runs: []daemon.WorkflowRun{f.run}}, nil
+}
+
+func (f *fakeWorkflowRuns) WorkflowStatus(context.Context, string) (daemon.RunWorkflowResponse, error) {
+	return daemon.RunWorkflowResponse{Run: f.run}, nil
+}
+
+func (f *fakeWorkflowRuns) WorkflowEvents(context.Context, string, int, int) (daemon.WorkflowEventsResponse, error) {
+	return daemon.WorkflowEventsResponse{RunID: f.run.ID}, nil
+}
+
+func (f *fakeWorkflowRuns) CancelWorkflow(_ context.Context, runID string) (daemon.CancelWorkflowResponse, error) {
+	f.lastAction = "cancel:" + runID
+	f.run.Status = corerun.RunCancelled
+	return daemon.CancelWorkflowResponse{Run: f.run}, nil
+}
+
+func (f *fakeWorkflowRuns) PauseWorkflow(_ context.Context, runID string) (daemon.PauseWorkflowResponse, error) {
+	f.lastAction = "pause:" + runID
+	f.run.Status = corerun.RunPaused
+	return daemon.PauseWorkflowResponse{Run: f.run}, nil
+}
+
+func (f *fakeWorkflowRuns) ResumeWorkflow(_ context.Context, runID string) (daemon.ResumeWorkflowResponse, error) {
+	f.lastAction = "resume:" + runID
+	f.run.Status = corerun.RunRunning
+	return daemon.ResumeWorkflowResponse{Run: f.run}, nil
+}
+
+func (f *fakeWorkflowRuns) ApproveWorkflow(_ context.Context, runID string) (daemon.ApproveWorkflowResponse, error) {
+	f.lastAction = "approve:" + runID
+	f.run.Status = corerun.RunRunning
+	return daemon.ApproveWorkflowResponse{Run: f.run}, nil
+}
+
+func (f *fakeWorkflowRuns) RejectWorkflow(_ context.Context, runID string) (daemon.RejectWorkflowResponse, error) {
+	f.lastAction = "reject:" + runID
+	f.run.Status = corerun.RunCancelled
+	return daemon.RejectWorkflowResponse{Run: f.run}, nil
+}
+
+func (f *fakeWorkflowRuns) WorkflowArtifacts(context.Context, string) (daemon.WorkflowArtifactsResponse, error) {
+	return daemon.WorkflowArtifactsResponse{
+		RunID: f.run.ID,
+		Artifacts: []daemon.WorkflowArtifactDTO{
+			{ID: "summary", Name: "summary.json", SizeBytes: 128, Kind: corerun.ArtifactKindSummary},
+		},
+	}, nil
+}
+
+func (f *fakeWorkflowRuns) WorkflowNodes(context.Context, string) (daemon.WorkflowNodesResponse, error) {
+	return daemon.WorkflowNodesResponse{
+		RunID: f.run.ID,
+		Nodes: []daemon.WorkflowNodeResultDTO{
+			{NodeID: "plan", Status: string(corerun.NodeSuccess), Duration: 1200, Attempts: 1},
+			{NodeID: "build", Status: string(corerun.NodeRunning), Attempts: 1},
+		},
+	}, nil
+}
+
+func (f *fakeWorkflowRuns) WorkflowSummary(context.Context, string) (daemon.WorkflowSummaryResponse, error) {
+	return daemon.WorkflowSummaryResponse{
+		RunID: f.run.ID,
+		Summary: corerun.Summary{
+			RunID:      f.run.ID,
+			Workflow:   f.run.Workflow,
+			Status:     f.run.Status,
+			StartedAt:  f.run.StartedAt,
+			AgentCalls: 2,
+		},
+	}, nil
+}
+
+func (f *fakeWorkflowRuns) WorkflowTimeline(context.Context, string, int, int) (daemon.WorkflowTimelineResponse, error) {
+	return daemon.WorkflowTimelineResponse{
+		RunID: f.run.ID,
+		Entries: []corerun.TimelineEntry{
+			{Timestamp: f.run.StartedAt, Type: "run.started"},
+		},
+	}, nil
+}
+
+func (f *fakeWorkflowRuns) WorkflowInspect(context.Context, string) (daemon.WorkflowInspectResponse, error) {
+	return daemon.WorkflowInspectResponse{
+		RunID:          f.run.ID,
+		Workflow:       f.run.Workflow,
+		Status:         f.run.Status,
+		StartedAt:      f.run.StartedAt,
+		DurationMS:     2400,
+		CurrentStep:    f.run.CurrentStep,
+		CompletedSteps: f.run.CompletedSteps,
+		PendingSteps:   f.run.PendingSteps,
+		TotalSteps:     f.run.TotalSteps,
+		AgentCalls:     2,
+		BashCalls:      1,
+		ArtifactCount:  1,
+		NodeCount:      2,
+	}, nil
 }
 
 func newCapturingWriter() *capturingWriter {

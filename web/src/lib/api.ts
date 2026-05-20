@@ -8,8 +8,14 @@ import type {
 	Session,
 	SettingsResponse,
 	ToolCall,
+	WorkflowArtifact,
 	WorkflowDefinition,
 	WorkflowDefinitionSummary,
+	WorkflowEvent,
+	WorkflowInspect,
+	WorkflowNodeResult,
+	WorkflowRun,
+	WorkflowTimelineEntry,
 } from "@/types";
 import { getToken } from "./utils";
 
@@ -197,5 +203,58 @@ export const api = {
 				`/api/v1/workflow-definitions/${encodeURIComponent(id)}`,
 				{ method: "DELETE" },
 			),
+	},
+
+	workflowRuns: {
+		list: () =>
+			fetchJSON<{ runs: WorkflowRun[] | null }>("/api/v1/workflows").then((r) =>
+				arrayOrEmpty(r.runs),
+			),
+		get: (runId: string) =>
+			fetchJSON<{ run: WorkflowRun }>(
+				`/api/v1/workflows/${encodeURIComponent(runId)}`,
+			).then((r) => r.run),
+		inspect: (runId: string) =>
+			fetchJSON<WorkflowInspect>(
+				`/api/v1/workflows/${encodeURIComponent(runId)}/inspect`,
+			),
+		nodes: (runId: string) =>
+			fetchJSON<{ nodes: WorkflowNodeResult[] | null }>(
+				`/api/v1/workflows/${encodeURIComponent(runId)}/nodes`,
+			).then((r) => arrayOrEmpty(r.nodes)),
+		timeline: (runId: string, cursor = 0, limit = 100) =>
+			fetchJSON<{
+				entries: WorkflowTimelineEntry[] | null;
+				next_cursor: number;
+				has_more: boolean;
+			}>(
+				`/api/v1/workflows/${encodeURIComponent(runId)}/timeline?cursor=${cursor}&limit=${limit}`,
+			).then((r) => ({
+				...r,
+				entries: arrayOrEmpty(r.entries),
+			})),
+		events: (runId: string, cursor = 0, limit = 100) =>
+			fetchJSON<{
+				events: WorkflowEvent[] | null;
+				next_cursor: number;
+				has_more: boolean;
+			}>(
+				`/api/v1/workflows/${encodeURIComponent(runId)}/events?cursor=${cursor}&limit=${limit}`,
+			).then((r) => ({
+				...r,
+				events: arrayOrEmpty(r.events),
+			})),
+		artifacts: (runId: string) =>
+			fetchJSON<{ artifacts: WorkflowArtifact[] | null }>(
+				`/api/v1/workflows/${encodeURIComponent(runId)}/artifacts`,
+			).then((r) => arrayOrEmpty(r.artifacts)),
+		action: (
+			runId: string,
+			action: "cancel" | "pause" | "resume" | "approve" | "reject",
+		) =>
+			fetchJSON<{ run: WorkflowRun }>(
+				`/api/v1/workflows/${encodeURIComponent(runId)}/${action}`,
+				{ method: "POST" },
+			).then((r) => r.run),
 	},
 };

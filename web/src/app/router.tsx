@@ -1,3 +1,4 @@
+import { DashboardView } from "@/features/dashboard/dashboard-view";
 import { DiagnosticsView } from "@/features/diagnostics/diagnostics-view";
 import { ProjectView } from "@/features/project/project-view";
 import { SessionView } from "@/features/session/session-view";
@@ -14,6 +15,7 @@ export function Router() {
 					<Route index element={<ProjectView />} />
 					<Route path="projects/:name" element={<ProjectView />} />
 					<Route path="sessions/:id" element={<SessionView />} />
+					<Route path="dashboard" element={<DashboardView />} />
 					<Route path="workflow" element={<WorkflowView />} />
 					<Route path="diagnostics" element={<DiagnosticsView />} />
 					<Route path="settings" element={<SettingsView />} />

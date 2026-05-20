@@ -7,6 +7,7 @@ import { cn, formatDate } from "@/lib/utils";
 import type { PickFolderResponse, Project, Session } from "@/types";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+	BarChart3,
 	Bot,
 	ChevronDown,
 	ChevronRight,
@@ -99,6 +100,13 @@ export function ProjectRail() {
 					<Search className="size-4" />
 					Search
 				</button>
+				<Link
+					to="/dashboard"
+					className="flex items-center gap-3 rounded-xl px-3 py-2 text-[15px] transition-colors hover:bg-white/7"
+				>
+					<BarChart3 className="size-4" />
+					Dashboard
+				</Link>
 				<Link
 					to="/workflow"
 					className="flex items-center gap-3 rounded-xl px-3 py-2 text-[15px] transition-colors hover:bg-white/7"

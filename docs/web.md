@@ -2,7 +2,7 @@
 
 ## Goal
 
-`agentflow web` starts a local-first HTTP server that hosts the conversation studio. The web UI provides a project rail, session rail, conversation timeline with streaming updates, tool-call and approval cards, workflow YAML/graph editors, diagnostics panels, and settings -- all backed by the local API and SSE stream.
+`agentflow web` starts a local-first HTTP server that hosts the conversation studio. The web UI provides a project rail, session rail, workflow execution dashboard, conversation timeline with streaming updates, tool-call and approval cards, workflow YAML/graph editors, diagnostics panels, and settings -- all backed by the local API and SSE stream.
 
 ## Quick start
 
@@ -92,6 +92,18 @@ daemon_socket = ""          # override the agentflowd unix socket
 | GET    | `/api/v1/sessions/{id}/stream`      | yes  | SSE stream for session events                       |
 | GET    | `/api/v1/stream`                    | yes  | SSE stream for all events                           |
 | GET    | `/api/v1/diagnostics`               | yes  | Recent diagnostics across all sessions              |
+| GET    | `/api/v1/workflows`                 | yes  | List workflow runs from `agentflowd`                |
+| GET    | `/api/v1/workflows/{run_id}`        | yes  | Get workflow run status                             |
+| GET    | `/api/v1/workflows/{run_id}/inspect` | yes | Get executive run metrics                           |
+| GET    | `/api/v1/workflows/{run_id}/nodes`  | yes  | List node results for a run                         |
+| GET    | `/api/v1/workflows/{run_id}/timeline` | yes | List run timeline entries                           |
+| GET    | `/api/v1/workflows/{run_id}/events` | yes  | List run events                                     |
+| GET    | `/api/v1/workflows/{run_id}/artifacts` | yes | List run artifacts                                  |
+| POST   | `/api/v1/workflows/{run_id}/pause`  | yes  | Pause an active run                                 |
+| POST   | `/api/v1/workflows/{run_id}/resume` | yes  | Resume a paused run                                 |
+| POST   | `/api/v1/workflows/{run_id}/approve` | yes | Approve a run waiting for approval                  |
+| POST   | `/api/v1/workflows/{run_id}/reject` | yes  | Reject a run waiting for approval                   |
+| POST   | `/api/v1/workflows/{run_id}/cancel` | yes  | Cancel a run                                        |
 
 Authenticated routes accept the session token via:
 
@@ -108,6 +120,13 @@ Requests from non-loopback peers are rejected with HTTP 403.
 - **Project rail** -- left sidebar showing registered projects; selecting a project filters sessions.
 - **Session rail** -- second sidebar showing sessions for the selected project with search/filter.
 - **Status bar** -- top bar with version, health indicator, daemon mode, theme selector, and nav links.
+
+### Workflow dashboard
+- Executive KPIs for active runs, success rate, failures, approvals, duration, and artifacts.
+- Recharts widgets for run trend, status mix, and top workflows.
+- TanStack Table history with text and status filters.
+- Detail panel for the selected run with safe actions: pause, resume, approve, reject, and cancel.
+- Polls `agentflowd` through `/api/v1/workflows` every few seconds; start the daemon first for live data.
 
 ### Conversation studio
 - **Timeline** -- scrollable message history with user/assistant/system/tool role badges.

@@ -5,6 +5,7 @@ import { cn, formatTime } from "@/lib/utils";
 import { useQuery } from "@tanstack/react-query";
 import {
 	Activity,
+	BarChart3,
 	Circle,
 	PanelLeftClose,
 	PanelLeftOpen,
@@ -38,6 +39,13 @@ export function StatusBar() {
 				)}
 			</Button>
 			<div className="pointer-events-auto flex items-center gap-1 rounded-xl border border-border/60 bg-background/55 p-1 text-muted-foreground shadow-lg shadow-black/10 backdrop-blur-xl">
+				<Link
+					to="/dashboard"
+					className="inline-flex size-7 items-center justify-center rounded-lg hover:bg-accent hover:text-accent-foreground"
+					title="Dashboard"
+				>
+					<BarChart3 className="size-3.5" />
+				</Link>
 				<Link
 					to="/workflow"
 					className="inline-flex size-7 items-center justify-center rounded-lg hover:bg-accent hover:text-accent-foreground"

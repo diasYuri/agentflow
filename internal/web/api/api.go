@@ -30,6 +30,7 @@ type Service struct {
 	Projects            session.ProjectResolver
 	FolderPicker        FolderPicker
 	WorkflowDefinitions WorkflowDefinitionClient
+	WorkflowRuns        WorkflowRunClient
 	DB                  *persistence.DB
 	Bundler             *diagnostics.BundleExporter
 }
@@ -42,6 +43,7 @@ type Options struct {
 	Policy              diagnostics.RedactionPolicy
 	FolderPicker        FolderPicker
 	WorkflowDefinitions WorkflowDefinitionClient
+	WorkflowRuns        WorkflowRunClient
 }
 
 type projectAdder interface {
@@ -58,6 +60,22 @@ type WorkflowDefinitionClient interface {
 	WorkflowDefinition(ctx context.Context, id string) (daemon.WorkflowDefinitionResponse, error)
 	UpdateWorkflowDefinition(ctx context.Context, id string, spec workflow.WorkflowSpec) (daemon.WorkflowDefinitionResponse, error)
 	DeleteWorkflowDefinition(ctx context.Context, id string) error
+}
+
+type WorkflowRunClient interface {
+	ListWorkflows(ctx context.Context) (daemon.ListWorkflowsResponse, error)
+	WorkflowStatus(ctx context.Context, runID string) (daemon.RunWorkflowResponse, error)
+	WorkflowEvents(ctx context.Context, runID string, cursor int, limit int) (daemon.WorkflowEventsResponse, error)
+	CancelWorkflow(ctx context.Context, runID string) (daemon.CancelWorkflowResponse, error)
+	PauseWorkflow(ctx context.Context, runID string) (daemon.PauseWorkflowResponse, error)
+	ResumeWorkflow(ctx context.Context, runID string) (daemon.ResumeWorkflowResponse, error)
+	ApproveWorkflow(ctx context.Context, runID string) (daemon.ApproveWorkflowResponse, error)
+	RejectWorkflow(ctx context.Context, runID string) (daemon.RejectWorkflowResponse, error)
+	WorkflowArtifacts(ctx context.Context, runID string) (daemon.WorkflowArtifactsResponse, error)
+	WorkflowNodes(ctx context.Context, runID string) (daemon.WorkflowNodesResponse, error)
+	WorkflowSummary(ctx context.Context, runID string) (daemon.WorkflowSummaryResponse, error)
+	WorkflowTimeline(ctx context.Context, runID string, cursor int, limit int) (daemon.WorkflowTimelineResponse, error)
+	WorkflowInspect(ctx context.Context, runID string) (daemon.WorkflowInspectResponse, error)
 }
 
 // NewService wires the service, building any optional dependencies
@@ -109,6 +127,7 @@ func NewService(opts Options) (*Service, error) {
 		Projects:            opts.Projects,
 		FolderPicker:        opts.FolderPicker,
 		WorkflowDefinitions: opts.WorkflowDefinitions,
+		WorkflowRuns:        opts.WorkflowRuns,
 		DB:                  opts.DB,
 		Bundler:             bundler,
 	}, nil
@@ -121,6 +140,8 @@ func (s *Service) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/projects/", s.handleProjectChild)
 	mux.HandleFunc("/api/v1/workflow-definitions", s.handleWorkflowDefinitions)
 	mux.HandleFunc("/api/v1/workflow-definitions/", s.handleWorkflowDefinition)
+	mux.HandleFunc("/api/v1/workflows", s.handleWorkflowRuns)
+	mux.HandleFunc("/api/v1/workflows/", s.handleWorkflowRun)
 	mux.HandleFunc("/api/v1/sessions", s.handleSessions)
 	mux.HandleFunc("/api/v1/sessions/", s.handleSessionChild)
 	mux.HandleFunc("/api/v1/approvals/", s.handleApprovalChild)

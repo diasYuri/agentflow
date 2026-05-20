@@ -150,11 +150,13 @@ func (c *Command) openAPI(ctx context.Context) error {
 		projects = app.NewProjectRegistry(nil)
 	}
 	broker := events.NewBroker(64)
+	daemonClient := daemon.NewClient(c.Settings.Paths.DaemonSocket)
 	svc, err := api.NewService(api.Options{
 		DB:                  db,
 		Projects:            projects,
 		Broker:              broker,
-		WorkflowDefinitions: daemon.NewClient(c.Settings.Paths.DaemonSocket),
+		WorkflowDefinitions: daemonClient,
+		WorkflowRuns:        daemonClient,
 	})
 	if err != nil {
 		_ = db.Close()
