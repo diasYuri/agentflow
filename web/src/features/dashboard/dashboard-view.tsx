@@ -23,6 +23,8 @@ import {
 	Activity,
 	AlertTriangle,
 	BarChart3,
+	ChevronLeft,
+	ChevronRight,
 	Clock,
 	FileArchive,
 	Loader2,
@@ -377,6 +379,8 @@ export function DashboardView() {
 
 					<RunDetail
 						run={selectedRun}
+						runs={runs}
+						onSelectRun={setSelectedRunId}
 						onAction={(action) => {
 							if (selectedRun)
 								runAction.mutate({ runId: selectedRun.id, action });
@@ -391,10 +395,14 @@ export function DashboardView() {
 
 function RunDetail({
 	run,
+	runs,
+	onSelectRun,
 	onAction,
 	isActing,
 }: {
 	run: WorkflowRun | null;
+	runs: WorkflowRun[];
+	onSelectRun: (runId: string) => void;
 	onAction: (action: WorkflowRunAction) => void;
 	isActing: boolean;
 }) {
@@ -433,6 +441,12 @@ function RunDetail({
 	}
 
 	const actions = availableRunActions(run.status);
+	const selectedIndex = runs.findIndex((item) => item.id === run.id);
+	const previousRun = selectedIndex > 0 ? runs[selectedIndex - 1] : null;
+	const nextRun =
+		selectedIndex >= 0 && selectedIndex < runs.length - 1
+			? runs[selectedIndex + 1]
+			: null;
 
 	return (
 		<aside className="flex min-h-0 flex-col overflow-hidden rounded-[24px] border border-border/80 bg-card/80 shadow-2xl shadow-black/10 backdrop-blur-xl">
@@ -450,6 +464,42 @@ function RunDetail({
 							</span>
 						</div>
 					</div>
+				</div>
+				<div className="mt-4 flex items-center gap-2">
+					<Button
+						onClick={() => previousRun && onSelectRun(previousRun.id)}
+						disabled={!previousRun}
+						variant="ghost"
+						size="icon"
+						className="size-9 shrink-0 rounded-xl"
+						aria-label="Previous run"
+						title="Previous run"
+					>
+						<ChevronLeft className="size-4" />
+					</Button>
+					<select
+						value={run.id}
+						onChange={(event) => onSelectRun(event.target.value)}
+						className="h-9 min-w-0 flex-1 rounded-xl border border-border/70 bg-background/70 px-3 text-sm outline-none focus:border-ring"
+						aria-label="Select workflow run"
+					>
+						{runs.map((item, index) => (
+							<option key={item.id} value={item.id}>
+								{`${index + 1}. ${item.workflow} · ${item.status} · ${shortRunID(item.id)}`}
+							</option>
+						))}
+					</select>
+					<Button
+						onClick={() => nextRun && onSelectRun(nextRun.id)}
+						disabled={!nextRun}
+						variant="ghost"
+						size="icon"
+						className="size-9 shrink-0 rounded-xl"
+						aria-label="Next run"
+						title="Next run"
+					>
+						<ChevronRight className="size-4" />
+					</Button>
 				</div>
 				{actions.length > 0 && (
 					<div className="mt-4 flex flex-wrap gap-2">
@@ -758,6 +808,11 @@ function actionLabel(action: WorkflowRunAction): string {
 		reject: "Reject",
 	};
 	return labels[action];
+}
+
+function shortRunID(id: string): string {
+	if (id.length <= 8) return id;
+	return id.slice(-6);
 }
 
 function EmptyLine({ text }: { text: string }) {
