@@ -38,8 +38,10 @@ type Manager struct {
 	workflowRepo  ports.WorkflowRepository
 	workflowDefs  *WorkflowDefinitionService
 
-	mu      sync.Mutex
-	records map[string]*runRecord
+	mu              sync.Mutex
+	records         map[string]*runRecord
+	queue           []string
+	runningCount    int
 }
 
 type runRecord struct {
@@ -69,6 +71,7 @@ func NewManagerWithStore(cfg Config, runSupervisor serviceAdder, logger *slog.Lo
 		workflowRepo:  workflowRepo,
 		workflowDefs:  workflowDefs,
 		records:       map[string]*runRecord{},
+		queue:         []string{},
 	}
 	manager.loadPersistedRuns(context.Background())
 	return manager
@@ -79,7 +82,6 @@ func (m *Manager) Serve(ctx context.Context) error {
 	m.cancelAll()
 	return suture.ErrDoNotRestart
 }
-
 func (m *Manager) StartWorkflow(req RunWorkflowRequest) (WorkflowRun, error) {
 	if req.WorkflowRef == "" {
 		return WorkflowRun{}, fmt.Errorf("workflow ref is required")
@@ -96,11 +98,90 @@ func (m *Manager) StartWorkflow(req RunWorkflowRequest) (WorkflowRun, error) {
 		ID:        runID,
 		Workflow:  req.WorkflowRef,
 		RunDir:    filepath.Join(runRoot, runID),
-		Status:    corerun.RunCreated,
+		Status:    corerun.RunQueued,
 		StartedAt: now,
 		Tag:       req.Tag,
+		Priority:  req.Priority,
+		QueuedAt:  now,
 		Request:   &storedReq,
 	}
+	m.mu.Lock()
+	m.records[runID] = &runRecord{run: run}
+	m.enqueueLocked(runID)
+	m.mu.Unlock()
+	m.persist(run)
+	m.promoteQueue()
+	return run, nil
+}
+
+
+// enqueueLocked adds runID to the queue. Caller must hold m.mu.
+func (m *Manager) enqueueLocked(runID string) {
+	m.queue = append(m.queue, runID)
+	m.sortQueueLocked()
+}
+
+// sortQueueLocked sorts the queue by priority desc, then by queued_at asc.
+// Caller must hold m.mu.
+func (m *Manager) sortQueueLocked() {
+	sort.SliceStable(m.queue, func(i, j int) bool {
+		recI := m.records[m.queue[i]]
+		recJ := m.records[m.queue[j]]
+		if recI == nil || recJ == nil {
+			return i < j
+		}
+		if recI.run.Priority != recJ.run.Priority {
+			return recI.run.Priority > recJ.run.Priority
+		}
+		if !recI.run.QueuedAt.Equal(recJ.run.QueuedAt) {
+			return recI.run.QueuedAt.Before(recJ.run.QueuedAt)
+		}
+		return recI.run.StartedAt.Before(recJ.run.StartedAt)
+	})
+}
+
+// removeFromQueueLocked removes runID from the queue. Caller must hold m.mu.
+func (m *Manager) removeFromQueueLocked(runID string) {
+	for i, id := range m.queue {
+		if id == runID {
+			m.queue = append(m.queue[:i], m.queue[i+1:]...)
+			break
+		}
+	}
+}
+
+
+// promoteQueue promotes queued runs to running while there is capacity.
+func (m *Manager) promoteQueue() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	maxConcurrency := m.cfg.MaxConcurrentRuns
+	if maxConcurrency < 0 {
+		maxConcurrency = 1
+	}
+	for len(m.queue) > 0 && m.runningCount < maxConcurrency {
+		runID := m.queue[0]
+		m.queue = m.queue[1:]
+		record, ok := m.records[runID]
+		if !ok {
+			continue
+		}
+		if record.run.Status != corerun.RunQueued {
+			continue
+		}
+		m.startRunLocked(runID)
+	}
+}
+
+// startRunLocked transitions a run from queued to running and starts its service.
+// Caller must hold m.mu.
+func (m *Manager) startRunLocked(runID string) {
+	record, ok := m.records[runID]
+	if !ok || record.run.Status != corerun.RunQueued {
+		return
+	}
+	req := *record.run.Request
+	runRoot := firstNonEmpty(req.RunRoot, req.OutputDir, m.cfg.RunRoot)
 	uc, err := app.NewRunWorkflowUseCase(app.RuntimeOptions{
 		CodexPath:        firstNonEmpty(req.CodexPath, m.cfg.CodexPath, os.Getenv("AGENTFLOW_CODEX_PATH")),
 		ClaudePath:       firstNonEmpty(req.ClaudePath, m.cfg.ClaudePath, os.Getenv("AGENTFLOW_CLAUDE_PATH")),
@@ -112,15 +193,24 @@ func (m *Manager) StartWorkflow(req RunWorkflowRequest) (WorkflowRun, error) {
 		Workflows:        m.workflowRepo,
 	})
 	if err != nil {
-		return WorkflowRun{}, err
+		m.logger.Error("failed to create use case for run", "run_id", runID, "error", err)
+		record.run.Status = corerun.RunFailed
+		record.run.FinishedAt = time.Now()
+		record.run.Error = err.Error()
+		record.run.TerminalError = err.Error()
+		m.persistLocked(record.run)
+		return
 	}
-	service := NewWorkflowRunService(m, uc, effectiveReq, runID, false)
-	m.mu.Lock()
-	m.records[runID] = &runRecord{run: run, service: service}
+	service := NewWorkflowRunService(m, uc, req, runID, false)
+	record.service = service
+	record.run.Status = corerun.RunRunning
+	record.run.QueuedAt = time.Time{}
+	m.runningCount++
+	m.persistLocked(record.run)
+	// Add to supervisor outside the lock to avoid deadlock with suture callbacks.
 	m.mu.Unlock()
-	m.persist(run)
-	m.runSupervisor.Add(service)
-	return run, nil
+	m.promoteQueue()
+	m.mu.Lock()
 }
 
 func (m *Manager) ListWorkflowDefinitions(ctx context.Context) ([]WorkflowDefinitionSummary, error) {
@@ -205,6 +295,15 @@ func (m *Manager) workflowRunSnapshot(runID string) (WorkflowRun, bool) {
 func (m *Manager) CancelWorkflow(runID string) (WorkflowRun, error) {
 	m.mu.Lock()
 	record, ok := m.records[runID]
+	if ok && record.run.Status == corerun.RunQueued {
+		m.removeFromQueueLocked(runID)
+		record.run.Status = corerun.RunCancelled
+		record.run.FinishedAt = time.Now()
+		record.run.FailureReason = ""
+		m.persistLocked(record.run)
+		m.mu.Unlock()
+		return record.run, nil
+	}
 	m.mu.Unlock()
 	if !ok {
 		return WorkflowRun{}, os.ErrNotExist
@@ -322,8 +421,9 @@ func (m *Manager) ResumeWorkflow(runID string) (WorkflowRun, error) {
 	record.run.FinishedAt = time.Time{}
 	updated := record.run
 	m.persistLocked(updated)
+	m.runningCount++
 	m.mu.Unlock()
-	m.runSupervisor.Add(service)
+	m.promoteQueue()
 	return updated, nil
 }
 
@@ -406,8 +506,9 @@ func (m *Manager) ApproveWorkflow(runID string) (WorkflowRun, error) {
 	record.run.FinishedAt = time.Time{}
 	updated := record.run
 	m.persistLocked(updated)
+	m.runningCount++
 	m.mu.Unlock()
-	m.runSupervisor.Add(service)
+	m.promoteQueue()
 	return updated, nil
 }
 
@@ -450,6 +551,155 @@ func (m *Manager) RejectWorkflow(runID, reason string) (WorkflowRun, error) {
 	m.clearCheckpointForRun(runID)
 	run, _ := m.WorkflowStatus(runID)
 	return run, nil
+}
+
+// RetryNode marks a node for retry and resumes the run from the checkpoint.
+// The run must be paused or failed. The node result is cleared so the runtime re-executes it.
+func (m *Manager) RetryNode(runID, nodeID string) (WorkflowRun, error) {
+	m.mu.Lock()
+	record, ok := m.records[runID]
+	m.mu.Unlock()
+	if !ok {
+		return WorkflowRun{}, os.ErrNotExist
+	}
+	current := record.run
+	if current.Status != corerun.RunPaused && current.Status != corerun.RunFailed {
+		return WorkflowRun{}, fmt.Errorf("workflow run %q is %s; only paused or failed runs can retry a node", runID, current.Status)
+	}
+	if current.RunDir == "" {
+		return WorkflowRun{}, fmt.Errorf("workflow run %q has no run directory", runID)
+	}
+	checkpointPath := filepath.Join(current.RunDir, "checkpoint.json")
+	data, err := os.ReadFile(checkpointPath)
+	if err != nil {
+		return WorkflowRun{}, err
+	}
+	var checkpoint corerun.Checkpoint
+	if err := json.Unmarshal(data, &checkpoint); err != nil {
+		return WorkflowRun{}, err
+	}
+	delete(checkpoint.Nodes, nodeID)
+	checkpoint.RetryNodeID = nodeID
+	checkpoint.Status = corerun.RunRunning
+	checkpoint.Reason = ""
+	checkpoint.UpdatedAt = time.Now()
+	if err := writeJSONFile(checkpointPath, checkpoint); err != nil {
+		return WorkflowRun{}, err
+	}
+	return m.startResumedService(runID, current.Request)
+}
+
+// RerunPartial restarts a terminal run from a specific node, clearing results from that node onward.
+func (m *Manager) RerunPartial(runID, fromNodeID string) (WorkflowRun, error) {
+	m.mu.Lock()
+	record, ok := m.records[runID]
+	m.mu.Unlock()
+	if !ok {
+		return WorkflowRun{}, os.ErrNotExist
+	}
+	current := record.run
+	if !isTerminalRunStatus(current.Status) {
+		return WorkflowRun{}, fmt.Errorf("workflow run %q is %s; only terminal runs can be partially rerun", runID, current.Status)
+	}
+	if current.RunDir == "" {
+		return WorkflowRun{}, fmt.Errorf("workflow run %q has no run directory", runID)
+	}
+	checkpointPath := filepath.Join(current.RunDir, "checkpoint.json")
+	data, err := os.ReadFile(checkpointPath)
+	if err != nil {
+		return WorkflowRun{}, err
+	}
+	var checkpoint corerun.Checkpoint
+	if err := json.Unmarshal(data, &checkpoint); err != nil {
+		return WorkflowRun{}, err
+	}
+	// Clear results for the target node and all subsequent nodes.
+	planPath := filepath.Join(current.RunDir, "plan.json")
+	planData, err := os.ReadFile(planPath)
+	if err != nil {
+		return WorkflowRun{}, err
+	}
+	var plan struct {
+		Order []string `json:"order"`
+	}
+	if err := json.Unmarshal(planData, &plan); err != nil {
+		return WorkflowRun{}, err
+	}
+	found := false
+	for i, id := range plan.Order {
+		if id == fromNodeID {
+			checkpoint.Cursor = i
+			found = true
+		}
+		if found {
+			delete(checkpoint.Nodes, id)
+		}
+	}
+	if !found {
+		return WorkflowRun{}, fmt.Errorf("node %q not found in plan", fromNodeID)
+	}
+	checkpoint.Status = corerun.RunRunning
+	checkpoint.Reason = ""
+	checkpoint.UpdatedAt = time.Now()
+	if err := writeJSONFile(checkpointPath, checkpoint); err != nil {
+		return WorkflowRun{}, err
+	}
+	// Reset summary so the run appears active again.
+	if data, err := os.ReadFile(filepath.Join(current.RunDir, "summary.json")); err == nil {
+		var summary corerun.Summary
+		if json.Unmarshal(data, &summary) == nil {
+			summary.Status = corerun.RunRunning
+			summary.FinishedAt = time.Time{}
+			_ = writeJSONFile(filepath.Join(current.RunDir, "summary.json"), summary)
+		}
+	}
+	return m.startResumedService(runID, current.Request)
+}
+
+// startResumedService creates a new service for a resumed/retry/rerun run.
+func (m *Manager) startResumedService(runID string, req *RunWorkflowRequest) (WorkflowRun, error) {
+	if req == nil {
+		return WorkflowRun{}, fmt.Errorf("workflow run %q has no persisted request", runID)
+	}
+	runRoot := firstNonEmpty(req.RunRoot, req.OutputDir, m.cfg.RunRoot)
+	uc, err := app.NewRunWorkflowUseCase(app.RuntimeOptions{
+		CodexPath:        firstNonEmpty(req.CodexPath, m.cfg.CodexPath, os.Getenv("AGENTFLOW_CODEX_PATH")),
+		ClaudePath:       firstNonEmpty(req.ClaudePath, m.cfg.ClaudePath, os.Getenv("AGENTFLOW_CLAUDE_PATH")),
+		PiPath:           firstNonEmpty(req.PiPath, m.cfg.PiPath, os.Getenv("AGENTFLOW_PI_PATH")),
+		FakeProviderPath: firstNonEmpty(req.FakeProviderPath, m.cfg.FakeProviderPath, os.Getenv("AGENTFLOW_FAKE_PROVIDER_PATH")),
+		LogFormat:        req.LogFormat,
+		EventsJSONL:      req.EventsJSONL,
+		RunRoot:          runRoot,
+		Workflows:        m.workflowRepo,
+	})
+	if err != nil {
+		return WorkflowRun{}, err
+	}
+	service := NewWorkflowRunService(m, uc, *req, runID, true)
+	m.mu.Lock()
+	record, ok := m.records[runID]
+	if !ok {
+		m.mu.Unlock()
+		return WorkflowRun{}, os.ErrNotExist
+	}
+	record.service = service
+	record.run.Status = corerun.RunRunning
+	record.run.ResumeCount++
+	record.run.PausedAt = time.Time{}
+	record.run.PauseReason = ""
+	record.run.ApprovalAt = time.Time{}
+	record.run.ApprovalNodeID = ""
+	record.run.ApprovalMessage = ""
+	record.run.Error = ""
+	record.run.TerminalError = ""
+	record.run.FailureReason = ""
+	record.run.FinishedAt = time.Time{}
+	updated := record.run
+	m.runningCount++
+	m.persistLocked(updated)
+	m.mu.Unlock()
+	m.runSupervisor.Add(service)
+	return updated, nil
 }
 
 func (m *Manager) clearCheckpointForRun(runID string) {
@@ -727,6 +977,12 @@ func (m *Manager) finish(runID string, result runworkflow.RunResult, err error) 
 		return
 	}
 	m.logger.Info("workflow finished", "run_id", runID, "status", result.Status)
+	m.mu.Lock()
+	if m.runningCount > 0 {
+		m.runningCount--
+	}
+	m.mu.Unlock()
+	m.promoteQueue()
 }
 
 func isTerminalRunStatus(status corerun.RunStatus) bool {
@@ -766,14 +1022,26 @@ func (m *Manager) loadPersistedRuns(ctx context.Context) {
 		return
 	}
 	for _, run := range runs {
-		if run.Status == corerun.RunCreated || run.Status == corerun.RunRunning {
-			run.Status = corerun.RunCancelled
+		switch run.Status {
+		case corerun.RunRunning:
+			run.Status = corerun.RunFailed
 			run.FinishedAt = time.Now()
-			run.Error = "daemon stopped before workflow completed"
+			run.Error = "daemon restarted while workflow was running"
 			run.TerminalError = run.Error
+			run.FailureReason = "daemon_restarted"
 			m.persist(run)
+			m.records[run.ID] = &runRecord{run: run}
+		case corerun.RunQueued:
+			// Re-enqueue runs that were waiting when the daemon stopped.
+			m.records[run.ID] = &runRecord{run: run}
+			m.enqueueLocked(run.ID)
+		case corerun.RunPaused, corerun.RunWaitingApproval:
+			// Preserve pause/approval state across restarts.
+			m.records[run.ID] = &runRecord{run: run}
+		default:
+			// Terminal states and created are loaded as-is.
+			m.records[run.ID] = &runRecord{run: run}
 		}
-		m.records[run.ID] = &runRecord{run: run}
 	}
 }
 

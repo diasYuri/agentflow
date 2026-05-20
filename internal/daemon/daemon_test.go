@@ -20,6 +20,29 @@ import (
 	runworkflow "github.com/diasYuri/agentflow/internal/core/runtime"
 )
 
+type fakeRunStore struct {
+	runs []WorkflowRun
+}
+
+func (s *fakeRunStore) LoadRuns(ctx context.Context) ([]WorkflowRun, error) {
+	return append([]WorkflowRun(nil), s.runs...), nil
+}
+
+func (s *fakeRunStore) UpsertRun(ctx context.Context, run WorkflowRun) error {
+	for i := range s.runs {
+		if s.runs[i].ID == run.ID {
+			s.runs[i] = run
+			return nil
+		}
+	}
+	s.runs = append(s.runs, run)
+	return nil
+}
+
+func (s *fakeRunStore) Close() error {
+	return nil
+}
+
 func TestServerStatusOverUnixSocket(t *testing.T) {
 	dir := shortTempDir(t)
 	cfg := Config{
@@ -503,6 +526,228 @@ nodes:
 	}
 	if loaded.RunDir == "" {
 		t.Fatal("expected persisted run dir")
+	}
+}
+
+func TestManagerQueuesAndPromotesByConcurrencyLimit(t *testing.T) {
+	dir := shortTempDir(t)
+	home := filepath.Join(dir, "home")
+	t.Setenv("HOME", home)
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(oldwd)
+	})
+	workflowDir := filepath.Join(dir, ".agentflow", "workflows")
+	if err := os.MkdirAll(workflowDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workflowDir, "slow.yaml"), []byte(`
+version: "1"
+name: slow
+nodes:
+  - id: wait
+    kind: bash
+    command: "sleep 5"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := Config{
+		SocketPath:        filepath.Join(dir, "agentflowd.sock"),
+		PIDPath:           filepath.Join(dir, "agentflowd.pid"),
+		LogPath:           filepath.Join(dir, "agentflowd.log"),
+		RunRoot:           filepath.Join(dir, "runs"),
+		MaxConcurrentRuns: 1,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runSupervisor := suture.NewSimple("test-workflows")
+	done := make(chan error, 1)
+	go func() {
+		done <- runSupervisor.Serve(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+	manager := NewManager(cfg, runSupervisor, nil)
+	first, err := manager.StartWorkflow(RunWorkflowRequest{WorkflowRef: "slow", WorkingDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := manager.StartWorkflow(RunWorkflowRequest{WorkflowRef: "slow", WorkingDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		firstStatus, _ := manager.WorkflowStatus(first.ID)
+		secondStatus, _ := manager.WorkflowStatus(second.ID)
+		if firstStatus.Status == corerun.RunRunning && secondStatus.Status == corerun.RunQueued {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	secondStatus, _ := manager.WorkflowStatus(second.ID)
+	if secondStatus.Status != corerun.RunQueued {
+		t.Fatalf("expected queued second run, got %#v", secondStatus)
+	}
+
+	cancelled, err := manager.CancelWorkflow(first.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cancelled.Status != corerun.RunCancelled {
+		t.Fatalf("expected cancelled first run, got %#v", cancelled)
+	}
+
+	deadline = time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		got, _ := manager.WorkflowStatus(second.ID)
+		if got.Status == corerun.RunRunning || got.Status == corerun.RunSuccess {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	got, _ := manager.WorkflowStatus(second.ID)
+	t.Fatalf("expected queued run to be promoted after slot freed, got %#v", got)
+}
+
+func TestManagerCancelsQueuedWorkflow(t *testing.T) {
+	dir := shortTempDir(t)
+	home := filepath.Join(dir, "home")
+	t.Setenv("HOME", home)
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(oldwd)
+	})
+	workflowDir := filepath.Join(dir, ".agentflow", "workflows")
+	if err := os.MkdirAll(workflowDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workflowDir, "slow.yaml"), []byte(`
+version: "1"
+name: slow
+nodes:
+  - id: wait
+    kind: bash
+    command: "sleep 5"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := Config{
+		SocketPath:        filepath.Join(dir, "agentflowd.sock"),
+		PIDPath:           filepath.Join(dir, "agentflowd.pid"),
+		LogPath:           filepath.Join(dir, "agentflowd.log"),
+		RunRoot:           filepath.Join(dir, "runs"),
+		MaxConcurrentRuns: 1,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runSupervisor := suture.NewSimple("test-workflows")
+	done := make(chan error, 1)
+	go func() {
+		done <- runSupervisor.Serve(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+	manager := NewManager(cfg, runSupervisor, nil)
+	first, err := manager.StartWorkflow(RunWorkflowRequest{WorkflowRef: "slow", WorkingDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := manager.StartWorkflow(RunWorkflowRequest{WorkflowRef: "slow", WorkingDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		got, _ := manager.WorkflowStatus(second.ID)
+		if got.Status == corerun.RunQueued {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	cancelled, err := manager.CancelWorkflow(second.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cancelled.Status != corerun.RunCancelled {
+		t.Fatalf("expected queued run to cancel, got %#v", cancelled)
+	}
+
+	deadline = time.Now().Add(1 * time.Second)
+	for time.Now().Before(deadline) {
+		got, _ := manager.WorkflowStatus(second.ID)
+		if got.Status != corerun.RunCancelled {
+			t.Fatalf("expected queued run to remain cancelled, got %#v", got)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	_, _ = manager.CancelWorkflow(first.ID)
+}
+
+func TestManagerLoadsPersistedRunsAfterRestart(t *testing.T) {
+	dir := shortTempDir(t)
+	store := &fakeRunStore{
+		runs: []WorkflowRun{
+			{
+				ID:        "run-queued",
+				Workflow:  "build",
+				RunDir:    filepath.Join(dir, "runs", "run-queued"),
+				Status:    corerun.RunQueued,
+				StartedAt: time.Now().Add(-2 * time.Minute),
+				QueuedAt:  time.Now().Add(-90 * time.Second),
+				Priority:  3,
+				Tag:       "queued",
+				Request:   nil,
+			},
+			{
+				ID:            "run-running",
+				Workflow:      "build",
+				RunDir:        filepath.Join(dir, "runs", "run-running"),
+				Status:        corerun.RunRunning,
+				StartedAt:     time.Now().Add(-3 * time.Minute),
+				TerminalError: "",
+			},
+		},
+	}
+
+	manager := NewManagerWithStore(Config{RunRoot: filepath.Join(dir, "runs")}, nil, nil, store)
+
+	queued, ok := manager.WorkflowStatus("run-queued")
+	if !ok {
+		t.Fatal("expected queued run to load")
+	}
+	if queued.Status != corerun.RunQueued {
+		t.Fatalf("expected queued status after restart, got %#v", queued)
+	}
+	running, ok := manager.WorkflowStatus("run-running")
+	if !ok {
+		t.Fatal("expected running run to load")
+	}
+	if running.Status != corerun.RunFailed {
+		t.Fatalf("expected crashed running run to fail, got %#v", running)
+	}
+	if running.FailureReason != "daemon_restarted" {
+		t.Fatalf("expected restart failure reason, got %#v", running)
 	}
 }
 

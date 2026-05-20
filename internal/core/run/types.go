@@ -24,6 +24,7 @@ const (
 	RunCreated         RunStatus = "created"
 	RunValidating      RunStatus = "validating"
 	RunPlanned         RunStatus = "planned"
+	RunQueued          RunStatus = "queued"
 	RunRunning         RunStatus = "running"
 	RunPaused          RunStatus = "paused"
 	RunWaitingApproval RunStatus = "wait_approval"

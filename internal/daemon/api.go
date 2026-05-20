@@ -14,6 +14,7 @@ const PIDName = "agentflowd.pid"
 const LogName = "agentflowd.log"
 
 type Config struct {
+	MaxConcurrentRuns int
 	SocketPath       string
 	PIDPath          string
 	LogPath          string
@@ -67,6 +68,7 @@ type RunWorkflowRequest struct {
 	OutputDir        string         `json:"output_dir,omitempty"`
 	DryRun           bool           `json:"dry_run,omitempty"`
 	Tag              string         `json:"tag,omitempty"`
+	Priority         int            `json:"priority,omitempty"`
 }
 
 type WorkflowRun struct {
@@ -91,6 +93,8 @@ type WorkflowRun struct {
 	FailureReason   string              `json:"failure_reason,omitempty"`
 	RecentEvents    []string            `json:"recent_events,omitempty"`
 	Tag             string              `json:"tag,omitempty"`
+	Priority        int                 `json:"priority,omitempty"`
+	QueuedAt        time.Time           `json:"queued_at,omitempty"`
 	Request         *RunWorkflowRequest `json:"-"`
 }
 

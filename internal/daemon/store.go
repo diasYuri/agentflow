@@ -75,7 +75,9 @@ CREATE TABLE IF NOT EXISTS workflow_runs (
 	approval_message TEXT,
 	resume_count INTEGER,
 	request_json TEXT,
-	tag TEXT
+	tag TEXT,
+	priority INTEGER,
+	queued_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_workflow_runs_started_at ON workflow_runs(started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_workflow_runs_status ON workflow_runs(status);
@@ -108,6 +110,8 @@ CREATE INDEX IF NOT EXISTS idx_workflow_definitions_updated_at ON workflow_defin
 		"resume_count INTEGER",
 		"request_json TEXT",
 		"tag TEXT",
+		"priority INTEGER",
+		"queued_at TEXT",
 	}
 	for _, col := range cols {
 		if _, err := s.db.ExecContext(ctx, `ALTER TABLE workflow_runs ADD COLUMN `+col); err != nil {
@@ -235,7 +239,7 @@ func scanWorkflowDefinitionRows(rows *sql.Rows) (WorkflowDefinitionRecord, error
 
 func (s *SQLiteRunStore) LoadRuns(ctx context.Context) ([]WorkflowRun, error) {
 	rows, err := s.db.QueryContext(ctx, `
-SELECT id, workflow, run_dir, status, started_at, finished_at, error, current_step, completed_steps, pending_steps, total_steps, terminal_error, failure_reason, recent_events, paused_at, approval_at, pause_reason, approval_node_id, approval_message, resume_count, request_json, tag
+SELECT id, workflow, run_dir, status, started_at, finished_at, error, current_step, completed_steps, pending_steps, total_steps, terminal_error, failure_reason, recent_events, paused_at, approval_at, pause_reason, approval_node_id, approval_message, resume_count, request_json, tag, priority, queued_at
 FROM workflow_runs
 ORDER BY started_at DESC`)
 	if err != nil {
@@ -253,12 +257,15 @@ ORDER BY started_at DESC`)
 		var pauseReason, approvalNodeID, approvalMessage, requestJSON sql.NullString
 		var tag sql.NullString
 		var totalSteps, resumeCount sql.NullInt64
+		var priority sql.NullInt64
+		var queuedAt sql.NullString
 		if err := rows.Scan(
 			&run.ID, &run.Workflow, &run.RunDir, &run.Status,
 			&startedAt, &finishedAt, &runError,
 			&currentStep, &completedSteps, &pendingSteps,
 			&totalSteps, &terminalError, &failureReason, &recentEvents,
 			&pausedAt, &approvalAt, &pauseReason, &approvalNodeID, &approvalMessage, &resumeCount, &requestJSON, &tag,
+			&priority, &queuedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -276,6 +283,16 @@ ORDER BY started_at DESC`)
 		}
 		if tag.Valid {
 			run.Tag = tag.String
+		}
+		if priority.Valid {
+			run.Priority = int(priority.Int64)
+		}
+		if queuedAt.Valid && queuedAt.String != "" {
+			parsedQueuedAt, err := time.Parse(time.RFC3339Nano, queuedAt.String)
+			if err != nil {
+				return nil, fmt.Errorf("parse queued_at for run %q: %w", run.ID, err)
+			}
+			run.QueuedAt = parsedQueuedAt
 		}
 		parsedStartedAt, err := time.Parse(time.RFC3339Nano, startedAt)
 		if err != nil {
@@ -358,9 +375,13 @@ func (s *SQLiteRunStore) UpsertRun(ctx context.Context, run WorkflowRun) error {
 			requestJSON = string(data)
 		}
 	}
+	var queuedAt any
+	if !run.QueuedAt.IsZero() {
+		queuedAt = run.QueuedAt.UTC().Format(time.RFC3339Nano)
+	}
 	_, err := s.db.ExecContext(ctx, `
-INSERT INTO workflow_runs (id, workflow, run_dir, status, started_at, finished_at, error, current_step, completed_steps, pending_steps, total_steps, terminal_error, failure_reason, recent_events, paused_at, approval_at, pause_reason, approval_node_id, approval_message, resume_count, request_json, tag)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO workflow_runs (id, workflow, run_dir, status, started_at, finished_at, error, current_step, completed_steps, pending_steps, total_steps, terminal_error, failure_reason, recent_events, paused_at, approval_at, pause_reason, approval_node_id, approval_message, resume_count, request_json, tag, priority, queued_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
 	workflow = excluded.workflow,
 	run_dir = excluded.run_dir,
@@ -382,7 +403,9 @@ ON CONFLICT(id) DO UPDATE SET
 	approval_message = excluded.approval_message,
 	resume_count = excluded.resume_count,
 	request_json = COALESCE(excluded.request_json, workflow_runs.request_json),
-	tag = COALESCE(excluded.tag, workflow_runs.tag)`,
+	tag = COALESCE(excluded.tag, workflow_runs.tag),
+	priority = excluded.priority,
+	queued_at = excluded.queued_at`,
 		run.ID,
 		run.Workflow,
 		run.RunDir,
@@ -405,6 +428,8 @@ ON CONFLICT(id) DO UPDATE SET
 		run.ResumeCount,
 		requestJSON,
 		run.Tag,
+		run.Priority,
+		queuedAt,
 	)
 	return err
 }

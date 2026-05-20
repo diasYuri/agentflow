@@ -84,6 +84,24 @@ Se a execução for real, ele delega para [`internal/core/runtime/handlers/execu
 - O resume reabre o checkpoint e cria um novo `WorkflowRunService` reaproveitando o mesmo `run_id`. Nodes anteriores não são re-executados; em pausa por falha, o node em `retry_node_id` é re-executado e o run continua a partir do seguinte.
 - O checkpoint é removido em sucesso, falha definitiva ou cancelamento. Pause não limpa o checkpoint, então o resume funciona mesmo depois de restart do daemon.
 
+### Fila do daemon e estado `queued`
+
+- O daemon mantém uma fila interna de runs no estado `queued`.
+- Quando um workflow é submetido via `StartWorkflow`, o run é criado como `queued`, adicionado a fila e persistido no store.
+- A fila é ordenada por `priority` (maior primeiro) e desempatada por `queued_at`/`started_at` (mais antigo primeiro).
+- Um run e promovido de `queued` para `running` quando houver vaga de acordo com o limite configuravel `MaxConcurrentRuns`.
+- O valor padrao de `MaxConcurrentRuns` e `1`; `0` significa que nenhum run e iniciado automaticamente (todos ficam na fila).
+- Cancelar um run `queued` remove-o da fila e marca como `cancelled` sem criar um service.
+- O estado `queued` e persistido no SQLite, permitindo retomada correta apos restart do daemon.
+
+### Politica de restart do daemon
+
+- Ao subir, o daemon recarrega do store todos os runs operacionais.
+- Runs que estavam `running` no crash sao marcados como `failed` com `FailureReason = "daemon_restarted"`.
+- Runs que estavam `queued` sao re-enfileirados automaticamente.
+- Runs `paused` e `wait_approval` preservam seu estado e podem ser retomados via resume/approve.
+- Estados terminais (`success`, `failed`, `cancelled`) sao carregados como estao.
+
 ## Arquivos principais
 
 - [`internal/core/runtime/run_workflow.go`](/Users/yuri/git/diasYuri/agentflow/internal/core/runtime/run_workflow.go): ponto de entrada do use case de runtime, com validação, dry-run e execução real.
