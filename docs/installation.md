@@ -36,7 +36,9 @@ brew tap diasYuri/agentflow https://github.com/diasYuri/agentflow
 brew install agentflow
 ```
 
-The formula installs both `agentflow` and `agentflowd` into your Homebrew prefix and registers shell completions automatically.
+The formula installs `agentflow`, `agentflowd`, and the `agentflow-extension-rpc` command into your Homebrew prefix and registers shell completions automatically.
+
+The extension adapter command is provided as a Homebrew shim that invokes the published `@agentflow/extensions` package through Bun.
 
 ### Upgrade
 

@@ -17,6 +17,7 @@ class Agentflow < Formula
   homepage "https://github.com/diasYuri/agentflow"
   version "0.0.0"
   license "MIT"
+  depends_on "bun"
 
   on_macos do
     on_arm do
@@ -44,6 +45,12 @@ class Agentflow < Formula
     bundle = Dir["agentflow-*"].first
     bin.install "#{bundle}/agentflow"
     bin.install "#{bundle}/agentflowd"
+    (libexec/"agentflow-extension-rpc").write <<~EOS
+      #!/bin/sh
+      exec bunx --yes @agentflow/extensions "$@"
+    EOS
+    chmod 0755, libexec/"agentflow-extension-rpc"
+    bin.install_symlink libexec/"agentflow-extension-rpc"
     generate_completions_from_executable(bin/"agentflow", "completion")
   end
 
