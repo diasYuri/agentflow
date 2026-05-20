@@ -37,6 +37,25 @@ It is designed to be one of the most complete platforms for local agent workflow
 
 - Go 1.26.1+ (only for development builds)
 - `codex`, `claude`, or `pi` on `PATH` when a workflow uses `kind: agent`
+- `bun` on `PATH` when a workflow uses `kind: extension`
+
+## Extensions
+
+AgentFlow extension nodes run JavaScript/TypeScript through the Bun RPC adapter.
+Install the adapter binary so `agentflow-extension-rpc` is available in `PATH`:
+
+```bash
+npm install -g @agentflow/extensions
+```
+
+Inside each extension project, add the SDK:
+
+```bash
+bun add @agentflow/extensions
+```
+
+See [docs/extension-nodes.md](docs/extension-nodes.md) for the workflow
+contract, directory layout, and node examples.
 
 ## Installation
 

@@ -24,6 +24,20 @@ Each extension should be a Bun-managed project:
 The `agentflow-extension-rpc` binary must be available in `PATH`, or its path
 must be set with `AGENTFLOW_EXTENSION_RPC`.
 
+## Installation
+
+Install the adapter binary globally:
+
+```bash
+npm install -g @agentflow/extensions
+```
+
+Then add the SDK to each extension project:
+
+```bash
+bun add @agentflow/extensions
+```
+
 ## Workflow Usage
 
 ```yaml
