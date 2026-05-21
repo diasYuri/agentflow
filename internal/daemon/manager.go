@@ -269,7 +269,7 @@ func (m *Manager) ListWorkflows() []WorkflowRun {
 	defer m.mu.Unlock()
 	runs := make([]WorkflowRun, 0, len(m.records))
 	for _, record := range m.records {
-		record.run = m.refreshRun(record.run)
+		record.run = m.refreshRun(record.run, record.service != nil)
 		runs = append(runs, record.run)
 	}
 	sort.Slice(runs, func(i, j int) bool {
@@ -285,7 +285,7 @@ func (m *Manager) WorkflowStatus(runID string) (WorkflowRun, bool) {
 	if !ok {
 		return WorkflowRun{}, false
 	}
-	record.run = m.refreshRun(record.run)
+	record.run = m.refreshRun(record.run, record.service != nil)
 	return record.run, true
 }
 
@@ -847,7 +847,7 @@ func (m *Manager) WorkflowEvents(runID string, cursor int, limit int) (WorkflowE
 	return response, nil
 }
 
-func (m *Manager) refreshRun(run WorkflowRun) WorkflowRun {
+func (m *Manager) refreshRun(run WorkflowRun, active bool) WorkflowRun {
 	logMemStats(m.logger, "refreshRun start", slog.String("run_id", run.ID))
 	progress, err := loadProgress(run.RunDir)
 	logMemStats(m.logger, "refreshRun end", slog.String("run_id", run.ID), slog.Int("total_steps", progress.TotalSteps), slog.Int("completed_steps", len(progress.CompletedSteps)), slog.Int("pending_steps", len(progress.PendingSteps)), slog.Int("recent_events", len(progress.RecentEvents)))
@@ -867,7 +867,7 @@ func (m *Manager) refreshRun(run WorkflowRun) WorkflowRun {
 	if len(progress.RecentEvents) > 0 {
 		run.RecentEvents = progress.RecentEvents
 	}
-	if progress.Paused && run.Status != corerun.RunCancelled && run.Status != corerun.RunSuccess && run.Status != corerun.RunFailed {
+	if progress.Paused && !active && run.Status != corerun.RunCancelled && run.Status != corerun.RunSuccess && run.Status != corerun.RunFailed {
 		run.Status = corerun.RunPaused
 		if run.PauseReason == "" && progress.PauseReason != "" {
 			run.PauseReason = progress.PauseReason

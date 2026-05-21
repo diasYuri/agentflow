@@ -908,7 +908,7 @@ func TestManagerPausesAndResumesWorkflowOnFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	flagPath := filepath.Join(dir, "fail-once.flag")
-	cmd := `if [ ! -f ` + flagPath + ` ]; then touch ` + flagPath + `; exit 1; fi; echo ok`
+	cmd := `sleep 1; if [ ! -f ` + flagPath + ` ]; then touch ` + flagPath + `; exit 1; fi; echo ok`
 	if err := os.WriteFile(filepath.Join(workflowDir, "pauseable.yaml"), []byte(`
 version: "1"
 name: pauseable
@@ -977,6 +977,22 @@ nodes:
 	}
 	if resumed.Status != "running" {
 		t.Fatalf("expected running status after resume, got %s", resumed.Status)
+	}
+
+	deadline = time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		got, _ := manager.WorkflowStatus(startedRun.ID)
+		if got.Status == "running" {
+			break
+		}
+		if got.Status == "paused" {
+			t.Fatalf("expected resumed run to stay running while active, got %#v", got)
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	current, _ := manager.WorkflowStatus(startedRun.ID)
+	if current.Status != "running" {
+		t.Fatalf("expected running status while resumed run active, got %#v", current)
 	}
 
 	deadline = time.Now().Add(5 * time.Second)
