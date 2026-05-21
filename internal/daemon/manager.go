@@ -38,10 +38,10 @@ type Manager struct {
 	workflowRepo  ports.WorkflowRepository
 	workflowDefs  *WorkflowDefinitionService
 
-	mu              sync.Mutex
-	records         map[string]*runRecord
-	queue           []string
-	runningCount    int
+	mu           sync.Mutex
+	records      map[string]*runRecord
+	queue        []string
+	runningCount int
 }
 
 type runRecord struct {
@@ -56,6 +56,9 @@ func NewManager(cfg Config, runSupervisor serviceAdder, logger *slog.Logger) *Ma
 func NewManagerWithStore(cfg Config, runSupervisor serviceAdder, logger *slog.Logger, store RunStore) *Manager {
 	if logger == nil {
 		logger = slog.Default()
+	}
+	if cfg.MaxConcurrentRuns <= 0 {
+		cfg.MaxConcurrentRuns = defaultMaxConcurrentRuns
 	}
 	workflowRepo := ports.WorkflowRepository(yamlrepo.NewWorkflowRepository())
 	var workflowDefs *WorkflowDefinitionService
@@ -74,6 +77,7 @@ func NewManagerWithStore(cfg Config, runSupervisor serviceAdder, logger *slog.Lo
 		queue:         []string{},
 	}
 	manager.loadPersistedRuns(context.Background())
+	manager.promoteQueue()
 	return manager
 }
 
@@ -114,7 +118,6 @@ func (m *Manager) StartWorkflow(req RunWorkflowRequest) (WorkflowRun, error) {
 	return run, nil
 }
 
-
 // enqueueLocked adds runID to the queue. Caller must hold m.mu.
 func (m *Manager) enqueueLocked(runID string) {
 	m.queue = append(m.queue, runID)
@@ -150,7 +153,6 @@ func (m *Manager) removeFromQueueLocked(runID string) {
 	}
 }
 
-
 // promoteQueue promotes queued runs to running while there is capacity.
 func (m *Manager) promoteQueue() {
 	m.mu.Lock()
@@ -180,6 +182,10 @@ func (m *Manager) startRunLocked(runID string) {
 	if !ok || record.run.Status != corerun.RunQueued {
 		return
 	}
+	if record.run.Request == nil {
+		m.logger.Warn("skipping queued workflow without persisted request", "run_id", runID)
+		return
+	}
 	req := *record.run.Request
 	runRoot := firstNonEmpty(req.RunRoot, req.OutputDir, m.cfg.RunRoot)
 	uc, err := app.NewRunWorkflowUseCase(app.RuntimeOptions{
@@ -207,9 +213,10 @@ func (m *Manager) startRunLocked(runID string) {
 	record.run.QueuedAt = time.Time{}
 	m.runningCount++
 	m.persistLocked(record.run)
-	// Add to supervisor outside the lock to avoid deadlock with suture callbacks.
 	m.mu.Unlock()
-	m.promoteQueue()
+	if m.runSupervisor != nil {
+		m.runSupervisor.Add(service)
+	}
 	m.mu.Lock()
 }
 
@@ -423,7 +430,9 @@ func (m *Manager) ResumeWorkflow(runID string) (WorkflowRun, error) {
 	m.persistLocked(updated)
 	m.runningCount++
 	m.mu.Unlock()
-	m.promoteQueue()
+	if m.runSupervisor != nil {
+		m.runSupervisor.Add(service)
+	}
 	return updated, nil
 }
 
@@ -965,8 +974,11 @@ func (m *Manager) finish(runID string, result runworkflow.RunResult, err error) 
 		}
 	})
 	if err != nil {
-		m.logger.Error("workflow finished with error", "run_id", runID, "error", err)
-		return
+		if !errors.Is(err, context.Canceled) && result.Status != corerun.RunCancelled {
+			m.logger.Error("workflow finished with error", "run_id", runID, "error", err)
+			return
+		}
+		m.logger.Info("workflow cancelled", "run_id", runID, "error", err)
 	}
 	if result.Status == corerun.RunPaused {
 		m.logger.Info("workflow paused", "run_id", runID)

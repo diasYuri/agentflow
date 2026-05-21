@@ -21,7 +21,7 @@ Em [`internal/cli/root.go`](/Users/yuri/git/diasYuri/agentflow/internal/cli/root
 - `validate <workflow>`: valida o workflow e imprime um resumo no formato `valid: <nome> (<n> nodes)`.
 - `graph <workflow>`: valida o workflow e imprime o grafo em Mermaid.
 - `dry-run <workflow>`: resolve entradas, monta o plano e imprime um JSON com `workflow`, `inputs`, `order` e `nodes`.
-- `workflow run <workflow>`: inicia o workflow no daemon e imprime `run_id`, `run_dir` e `status`.
+- `workflow run <workflow>`: resolve o workflow no CLI, envia o caminho absoluto ao daemon e imprime `run_id`, `run_dir` e `status`.
 - `workflow list`: lista runs conhecidos pelo daemon.
 - `workflow status <id>`: mostra o estado de um run. Aceita `--watch` para acompanhar até o run alcançar um estado terminal (`success`, `failed`, `cancelled`, `timeout` ou `paused`).
 - `workflow watch <id>`: forma curta do `status --watch`.
@@ -85,7 +85,7 @@ Os workflows são resolvidos por nome/ref, seguindo a convenção documentada em
 - `graph` aceita apenas `--format mermaid`; qualquer outro formato retorna erro.
 - `validate` e `graph` validam a definição do workflow, mas não executam etapas nem resolvem inputs externos.
 - `dry-run` não executa comandos; ele mostra o plano já resolvido em JSON para inspeção ou automação.
-- `run` aceita `--dry-run` para validar e planejar sem executar; por padrão essa solicitação vai para o daemon.
+- `run` aceita `--dry-run` para validar e planejar sem executar; por padrão essa solicitação vai para o daemon depois de resolver o workflow localmente no CLI.
 - `run --tag <name>` adiciona um nome descritivo ao run, útil para identificar execuções em listagens.
 - `run -it` é o caminho compatível para executar no processo da CLI.
 - `workflow schedule add` aceita `--cron` ou `--every`, além das mesmas flags de execução usadas por `run` para congelar inputs e variáveis no agendamento.

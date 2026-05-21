@@ -12,28 +12,30 @@ import (
 const SocketName = "agentflowd.sock"
 const PIDName = "agentflowd.pid"
 const LogName = "agentflowd.log"
+const defaultMaxConcurrentRuns = 3
 
 type Config struct {
 	MaxConcurrentRuns int
-	SocketPath       string
-	PIDPath          string
-	LogPath          string
-	RunRoot          string
-	DBPath           string
-	CodexPath        string
-	ClaudePath       string
-	PiPath           string
-	FakeProviderPath string
+	SocketPath        string
+	PIDPath           string
+	LogPath           string
+	RunRoot           string
+	DBPath            string
+	CodexPath         string
+	ClaudePath        string
+	PiPath            string
+	FakeProviderPath  string
 }
 
 func DefaultConfig() Config {
 	root := defaultAgentFlowRoot()
 	return Config{
-		SocketPath: filepath.Join(root, SocketName),
-		PIDPath:    filepath.Join(root, PIDName),
-		LogPath:    filepath.Join(root, LogName),
-		RunRoot:    filepath.Join(root, "runs"),
-		DBPath:     filepath.Join(root, "agentflowd.sqlite"),
+		MaxConcurrentRuns: defaultMaxConcurrentRuns,
+		SocketPath:        filepath.Join(root, SocketName),
+		PIDPath:           filepath.Join(root, PIDName),
+		LogPath:           filepath.Join(root, LogName),
+		RunRoot:           filepath.Join(root, "runs"),
+		DBPath:            filepath.Join(root, "agentflowd.sqlite"),
 	}
 }
 

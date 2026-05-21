@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 
+	yamlrepo "github.com/diasYuri/agentflow/internal/adapters/yaml"
 	"github.com/diasYuri/agentflow/internal/app"
 	corerun "github.com/diasYuri/agentflow/internal/core/run"
 	runworkflow "github.com/diasYuri/agentflow/internal/core/runtime"
@@ -1002,12 +1003,32 @@ func resolveWorkflowRunContext(cmd *cobra.Command, workflowRef string, opts *opt
 	return resolvedRef, normalizedWorkingDir, nil
 }
 
+func resolveDaemonWorkflowRef(ctx context.Context, ref string) (string, error) {
+	if isWorkflowPath(ref) {
+		abs, err := filepath.Abs(ref)
+		if err != nil {
+			return "", fmt.Errorf("resolve workflow path %q: %w", ref, err)
+		}
+		return filepath.Clean(abs), nil
+	}
+	repo := yamlrepo.NewWorkflowRepository()
+	_, sourcePath, err := repo.Load(ctx, ref)
+	if err != nil {
+		return "", err
+	}
+	return sourcePath, nil
+}
+
 func runWorkflowViaDaemon(cmd *cobra.Command, workflowRef string, opts *options) error {
 	inputs, vars, err := parseInputsAndVars(opts)
 	if err != nil {
 		return err
 	}
 	ref, workingDir, err := resolveWorkflowRunContext(cmd, workflowRef, opts)
+	if err != nil {
+		return err
+	}
+	ref, err = resolveDaemonWorkflowRef(cmd.Context(), ref)
 	if err != nil {
 		return err
 	}

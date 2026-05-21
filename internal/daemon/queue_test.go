@@ -24,6 +24,12 @@ func testTempDir(t *testing.T) string {
 	return dir
 }
 
+func TestDefaultConfigUsesThreeConcurrentRuns(t *testing.T) {
+	if got := DefaultConfig().MaxConcurrentRuns; got != 3 {
+		t.Fatalf("expected default max concurrent runs 3, got %d", got)
+	}
+}
+
 func TestManagerStartsWorkflowAsQueued(t *testing.T) {
 	dir := testTempDir(t)
 	home := filepath.Join(dir, "home")
@@ -37,7 +43,8 @@ version: "1"
 name: noop
 nodes:
   - id: ok
-    kind: noop
+    kind: bash
+    command: "sleep 5"
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +132,6 @@ nodes:
 	if queue[0] != run2.ID {
 		t.Fatalf("expected high-priority run %s in queue, got %s", run2.ID, queue[0])
 	}
-
 	_ = run1
 }
 
@@ -224,14 +230,32 @@ func TestManagerRestartMarksRunningAsFailed(t *testing.T) {
 	}
 }
 
-func TestManagerRestartReenqueuesQueued(t *testing.T) {
+func TestManagerPromotesQueuedRunOnStartupWhenCapacityExists(t *testing.T) {
 	dir := testTempDir(t)
+	home := filepath.Join(dir, "home")
+	t.Setenv("HOME", home)
+	workflowDir := filepath.Join(dir, ".agentflow", "workflows")
+	if err := os.MkdirAll(workflowDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workflowDir, "slow.yaml"), []byte(`
+version: "1"
+name: slow
+nodes:
+  - id: wait
+    kind: bash
+    command: "sleep 5"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
 	cfg := Config{
-		SocketPath: filepath.Join(dir, "agentflowd.sock"),
-		PIDPath:    filepath.Join(dir, "agentflowd.pid"),
-		LogPath:    filepath.Join(dir, "agentflowd.log"),
-		RunRoot:    filepath.Join(dir, "runs"),
-		DBPath:     filepath.Join(dir, "agentflowd.sqlite"),
+		SocketPath:        filepath.Join(dir, "agentflowd.sock"),
+		PIDPath:           filepath.Join(dir, "agentflowd.pid"),
+		LogPath:           filepath.Join(dir, "agentflowd.log"),
+		RunRoot:           filepath.Join(dir, "runs"),
+		DBPath:            filepath.Join(dir, "agentflowd.sqlite"),
+		MaxConcurrentRuns: 3,
 	}
 	store, err := OpenSQLiteRunStore(context.Background(), cfg.DBPath)
 	if err != nil {
@@ -240,32 +264,47 @@ func TestManagerRestartReenqueuesQueued(t *testing.T) {
 	defer store.Close()
 
 	run := WorkflowRun{
-		ID:        "test-queued-restart",
-		Workflow:  "noop",
-		RunDir:    filepath.Join(dir, "runs", "test-queued-restart"),
+		ID:        "test-queued-startup",
+		Workflow:  "slow",
+		RunDir:    filepath.Join(dir, "runs", "test-queued-startup"),
 		Status:    corerun.RunQueued,
 		StartedAt: time.Now().Add(-time.Hour),
 		QueuedAt:  time.Now().Add(-time.Hour),
+		Request: &RunWorkflowRequest{
+			WorkflowRef: "slow",
+			WorkingDir:  dir,
+		},
 	}
 	if err := store.UpsertRun(context.Background(), run); err != nil {
 		t.Fatal(err)
 	}
 
-	runSupervisor := suture.NewSimple("test-restart-queue")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runSupervisor := suture.NewSimple("test-startup-promotion")
+	done := make(chan error, 1)
+	go func() {
+		done <- runSupervisor.Serve(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+
 	manager := NewManagerWithStore(cfg, runSupervisor, nil, store)
 
-	loaded, ok := manager.WorkflowStatus("test-queued-restart")
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		loaded, ok := manager.WorkflowStatus(run.ID)
+		if ok && loaded.Status == corerun.RunRunning {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	loaded, ok := manager.WorkflowStatus(run.ID)
 	if !ok {
 		t.Fatal("expected run to be loaded")
 	}
-	if loaded.Status != corerun.RunQueued {
-		t.Fatalf("expected status queued after restart, got %s", loaded.Status)
-	}
-
-	manager.mu.Lock()
-	queueLen := len(manager.queue)
-	manager.mu.Unlock()
-	if queueLen != 1 {
-		t.Fatalf("expected queue length 1 after restart, got %d", queueLen)
-	}
+	t.Fatalf("expected queued run to promote on startup, got %#v", loaded)
 }

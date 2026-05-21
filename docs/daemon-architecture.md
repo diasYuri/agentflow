@@ -59,7 +59,7 @@ sub-supervisor com o mesmo `run_id` em modo resume. Retorna 409 para runs `succe
 
 ## CLI
 
-`agentflow workflow run <workflow>` inicia o workflow no daemon e retorna imediatamente com `run_id`, `run_dir` e `status`.
+`agentflow workflow run <workflow>` resolve o workflow no CLI, envia o caminho absoluto ao daemon e retorna imediatamente com `run_id`, `run_dir` e `status`.
 
 `agentflow workflow run -it <workflow>` executa no processo da CLI, preservando o comportamento foreground/interativo. O alias legado `agentflow run` segue a mesma regra: daemon por padrão, local apenas com `-it`.
 

@@ -90,7 +90,7 @@ Se a execução for real, ele delega para [`internal/core/runtime/handlers/execu
 - Quando um workflow é submetido via `StartWorkflow`, o run é criado como `queued`, adicionado a fila e persistido no store.
 - A fila é ordenada por `priority` (maior primeiro) e desempatada por `queued_at`/`started_at` (mais antigo primeiro).
 - Um run e promovido de `queued` para `running` quando houver vaga de acordo com o limite configuravel `MaxConcurrentRuns`.
-- O valor padrao de `MaxConcurrentRuns` e `1`; `0` significa que nenhum run e iniciado automaticamente (todos ficam na fila).
+- O valor padrao de `MaxConcurrentRuns` e `3`; quando a configuracao do daemon e deixada no default, a fila eh promovida automaticamente ate tres runs simultaneos.
 - Cancelar um run `queued` remove-o da fila e marca como `cancelled` sem criar um service.
 - O estado `queued` e persistido no SQLite, permitindo retomada correta apos restart do daemon.
 
@@ -98,7 +98,7 @@ Se a execução for real, ele delega para [`internal/core/runtime/handlers/execu
 
 - Ao subir, o daemon recarrega do store todos os runs operacionais.
 - Runs que estavam `running` no crash sao marcados como `failed` com `FailureReason = "daemon_restarted"`.
-- Runs que estavam `queued` sao re-enfileirados automaticamente.
+- Runs que estavam `queued` sao re-enfileirados automaticamente e, se houver capacidade, sao promovidos imediatamente para `running`.
 - Runs `paused` e `wait_approval` preservam seu estado e podem ser retomados via resume/approve.
 - Estados terminais (`success`, `failed`, `cancelled`) sao carregados como estao.
 

@@ -422,6 +422,8 @@ func TestRunCommandDoesNotExposeOutputDirFlag(t *testing.T) {
 }
 
 func TestRunCommandSendsTagToDaemon(t *testing.T) {
+	workflowPath := setupDaemonRunWorkflow(t)
+
 	var got daemon.RunWorkflowRequest
 	oldClient := newWorkflowRunClient
 	newWorkflowRunClient = func(socketPath string) workflowRunClient {
@@ -441,12 +443,17 @@ func TestRunCommandSendsTagToDaemon(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
+	if got.WorkflowRef != workflowPath {
+		t.Fatalf("workflow ref mismatch: got %q want %q", got.WorkflowRef, workflowPath)
+	}
 	if got.Tag != "release-123" {
 		t.Fatalf("tag mismatch: got %q", got.Tag)
 	}
 }
 
 func TestRunCommandSendsRuntimeOptionsToDaemon(t *testing.T) {
+	workflowPath := setupDaemonRunWorkflow(t)
+
 	var got daemon.RunWorkflowRequest
 	oldClient := newWorkflowRunClient
 	newWorkflowRunClient = func(socketPath string) workflowRunClient {
@@ -476,8 +483,8 @@ func TestRunCommandSendsRuntimeOptionsToDaemon(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	if got.WorkflowRef != "daemon-run" {
-		t.Fatalf("workflow ref mismatch: got %q", got.WorkflowRef)
+	if got.WorkflowRef != workflowPath {
+		t.Fatalf("workflow ref mismatch: got %q want %q", got.WorkflowRef, workflowPath)
 	}
 	if got.CodexPath != "/tmp/codex" {
 		t.Fatalf("codex path mismatch: got %q", got.CodexPath)
@@ -500,17 +507,7 @@ func TestRunCommandSendsRuntimeOptionsToDaemon(t *testing.T) {
 }
 
 func TestRunCommandNormalizesDaemonPathsRelativeToCallerCwd(t *testing.T) {
-	dir := t.TempDir()
-	oldwd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		_ = os.Chdir(oldwd)
-	})
+	workflowPath := setupDaemonRunWorkflow(t)
 
 	var got daemon.RunWorkflowRequest
 	oldClient := newWorkflowRunClient
@@ -539,6 +536,9 @@ func TestRunCommandNormalizesDaemonPathsRelativeToCallerCwd(t *testing.T) {
 
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
+	}
+	if got.WorkflowRef != workflowPath {
+		t.Fatalf("workflow ref mismatch: got %q want %q", got.WorkflowRef, workflowPath)
 	}
 
 	wantCodex, err := filepath.Abs("bin/codex")
@@ -580,17 +580,7 @@ func TestRunCommandNormalizesDaemonPathsRelativeToCallerCwd(t *testing.T) {
 }
 
 func TestRunCommandSendsAbsoluteDefaultWorkingDirToDaemon(t *testing.T) {
-	dir := t.TempDir()
-	oldwd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		_ = os.Chdir(oldwd)
-	})
+	setupDaemonRunWorkflow(t)
 
 	var got daemon.RunWorkflowRequest
 	oldClient := newWorkflowRunClient
@@ -620,6 +610,43 @@ func TestRunCommandSendsAbsoluteDefaultWorkingDirToDaemon(t *testing.T) {
 	if got.WorkingDir != want {
 		t.Fatalf("working dir mismatch: got %q want %q", got.WorkingDir, want)
 	}
+}
+
+func setupDaemonRunWorkflow(t *testing.T) string {
+	t.Helper()
+
+	dir := t.TempDir()
+	t.Setenv("HOME", filepath.Join(dir, "home"))
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(oldwd)
+	})
+
+	workflowDir := filepath.Join(dir, ".agentflow", "workflows")
+	if err := os.MkdirAll(workflowDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	workflowPath := filepath.Join(workflowDir, "daemon-run.yaml")
+	if err := os.WriteFile(workflowPath, []byte(`
+version: "1"
+name: daemon-run
+nodes:
+  - id: ok
+    kind: noop
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	absPath, err := filepath.EvalSymlinks(workflowPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return absPath
 }
 
 func TestDaemonProviderEnvIncludesPiPath(t *testing.T) {

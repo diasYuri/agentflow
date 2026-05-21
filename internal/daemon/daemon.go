@@ -16,6 +16,9 @@ func Run(ctx context.Context, cfg Config, logger *slog.Logger) error {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	if cfg.MaxConcurrentRuns <= 0 {
+		cfg.MaxConcurrentRuns = defaultMaxConcurrentRuns
+	}
 	if cfg.SocketPath == "" || cfg.PIDPath == "" || cfg.LogPath == "" || cfg.RunRoot == "" || cfg.DBPath == "" {
 		defaults := DefaultConfig()
 		if cfg.SocketPath == "" {
