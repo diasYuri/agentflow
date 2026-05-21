@@ -58,6 +58,7 @@ describe("dashboard logic", () => {
 
 	test("maps run status to safe actions", () => {
 		expect(availableRunActions("running")).toEqual(["pause", "cancel"]);
+		expect(availableRunActions("queued")).toEqual(["cancel"]);
 		expect(availableRunActions("paused")).toEqual(["resume", "cancel"]);
 		expect(availableRunActions("wait_approval")).toEqual([
 			"approve",

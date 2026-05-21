@@ -189,6 +189,95 @@ nodes:
 	}
 }
 
+func TestManagerPromotesNewRunAfterWorkflowPauses(t *testing.T) {
+	dir := testTempDir(t)
+	manager, cleanup := newQueueTestManager(t, dir, 1)
+	defer cleanup()
+
+	writeQueueWorkflow(t, dir, "pauseable.yaml", `
+version: "1"
+name: pauseable
+execution:
+  pause_when_fail: true
+nodes:
+  - id: fail
+    kind: bash
+    retries: 0
+    command: "exit 1"
+`)
+	writeQueueWorkflow(t, dir, "slow.yaml", `
+version: "1"
+name: slow
+nodes:
+  - id: wait
+    kind: bash
+    command: "sleep 5"
+`)
+
+	pausedRun, err := manager.StartWorkflow(RunWorkflowRequest{WorkflowRef: "pauseable", WorkingDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForQueueStatus(t, manager, pausedRun.ID, corerun.RunPaused, 3*time.Second)
+
+	nextRun, err := manager.StartWorkflow(RunWorkflowRequest{WorkflowRef: "slow", WorkingDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForQueueStatus(t, manager, nextRun.ID, corerun.RunRunning, 3*time.Second)
+	_, _ = manager.CancelWorkflow(nextRun.ID)
+}
+
+func TestManagerQueuesResumeWhenConcurrencyIsFull(t *testing.T) {
+	dir := testTempDir(t)
+	manager, cleanup := newQueueTestManager(t, dir, 1)
+	defer cleanup()
+
+	flagPath := filepath.Join(dir, "fail-once.flag")
+	writeQueueWorkflow(t, dir, "pauseable.yaml", `
+version: "1"
+name: pauseable
+execution:
+  pause_when_fail: true
+nodes:
+  - id: flaky
+    kind: bash
+    retries: 0
+    command: "if [ ! -f `+flagPath+` ]; then touch `+flagPath+`; exit 1; fi; echo ok"
+`)
+	writeQueueWorkflow(t, dir, "slow.yaml", `
+version: "1"
+name: slow
+nodes:
+  - id: wait
+    kind: bash
+    command: "sleep 5"
+`)
+
+	pausedRun, err := manager.StartWorkflow(RunWorkflowRequest{WorkflowRef: "pauseable", WorkingDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForQueueStatus(t, manager, pausedRun.ID, corerun.RunPaused, 3*time.Second)
+
+	activeRun, err := manager.StartWorkflow(RunWorkflowRequest{WorkflowRef: "slow", WorkingDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForQueueStatus(t, manager, activeRun.ID, corerun.RunRunning, 3*time.Second)
+
+	resumed, err := manager.ResumeWorkflow(pausedRun.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resumed.Status != corerun.RunQueued || !resumed.ResumeQueued {
+		t.Fatalf("expected resume to queue while capacity is full, got %#v", resumed)
+	}
+
+	_, _ = manager.CancelWorkflow(activeRun.ID)
+	waitForQueueStatus(t, manager, pausedRun.ID, corerun.RunSuccess, 5*time.Second)
+}
+
 func TestManagerRestartMarksRunningAsFailed(t *testing.T) {
 	dir := testTempDir(t)
 	cfg := Config{
@@ -307,4 +396,58 @@ nodes:
 		t.Fatal("expected run to be loaded")
 	}
 	t.Fatalf("expected queued run to promote on startup, got %#v", loaded)
+}
+
+func newQueueTestManager(t *testing.T, dir string, maxConcurrentRuns int) (*Manager, func()) {
+	t.Helper()
+	home := filepath.Join(dir, "home")
+	t.Setenv("HOME", home)
+	cfg := Config{
+		SocketPath:        filepath.Join(dir, "agentflowd.sock"),
+		PIDPath:           filepath.Join(dir, "agentflowd.pid"),
+		LogPath:           filepath.Join(dir, "agentflowd.log"),
+		RunRoot:           filepath.Join(dir, "runs"),
+		DBPath:            filepath.Join(dir, "agentflowd.sqlite"),
+		MaxConcurrentRuns: maxConcurrentRuns,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	runSupervisor := suture.NewSimple("test-queue-lifecycle")
+	done := make(chan error, 1)
+	go func() {
+		done <- runSupervisor.Serve(ctx)
+	}()
+	cleanup := func() {
+		cancel()
+		<-done
+	}
+	return NewManager(cfg, runSupervisor, nil), cleanup
+}
+
+func writeQueueWorkflow(t *testing.T, dir, name, content string) {
+	t.Helper()
+	workflowDir := filepath.Join(dir, "home", ".agentflow", "workflows")
+	if err := os.MkdirAll(workflowDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workflowDir, name), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func waitForQueueStatus(t *testing.T, manager *Manager, runID string, want corerun.RunStatus, timeout time.Duration) WorkflowRun {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		got, ok := manager.WorkflowStatus(runID)
+		if ok && got.Status == want {
+			return got
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	got, ok := manager.WorkflowStatus(runID)
+	if !ok {
+		t.Fatalf("expected run %q to exist", runID)
+	}
+	t.Fatalf("expected run %q status %s, got %#v", runID, want, got)
+	return WorkflowRun{}
 }

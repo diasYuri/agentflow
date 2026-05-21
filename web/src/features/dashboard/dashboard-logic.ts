@@ -38,6 +38,7 @@ const terminalStatuses = new Set<WorkflowRunStatus>([
 export function availableRunActions(
 	status: WorkflowRunStatus,
 ): WorkflowRunAction[] {
+	if (status === "queued") return ["cancel"];
 	if (activeStatuses.has(status)) return ["pause", "cancel"];
 	if (status === "paused") return ["resume", "cancel"];
 	if (status === "wait_approval") return ["approve", "reject", "cancel"];

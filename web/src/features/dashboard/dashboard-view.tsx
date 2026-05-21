@@ -66,6 +66,7 @@ const statusColors: Record<string, string> = {
 	failed: "#dc2626",
 	cancelled: "#737373",
 	running: "#2563eb",
+	queued: "#0891b2",
 	planned: "#0891b2",
 	validating: "#7c3aed",
 	created: "#64748b",

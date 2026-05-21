@@ -91,13 +91,14 @@ func (m *Manager) StartWorkflow(req RunWorkflowRequest) (WorkflowRun, error) {
 		return WorkflowRun{}, fmt.Errorf("workflow ref is required")
 	}
 	now := time.Now()
-	runID := runworkflow.NewRunID(req.WorkflowRef, now)
 	runRoot := firstNonEmpty(req.RunRoot, req.OutputDir, m.cfg.RunRoot)
 	effectiveReq := req
 	if effectiveReq.RunRoot == "" {
 		effectiveReq.RunRoot = runRoot
 	}
 	storedReq := effectiveReq
+	m.mu.Lock()
+	runID := m.newRunIDLocked(req.WorkflowRef, now)
 	run := WorkflowRun{
 		ID:        runID,
 		Workflow:  req.WorkflowRef,
@@ -109,13 +110,21 @@ func (m *Manager) StartWorkflow(req RunWorkflowRequest) (WorkflowRun, error) {
 		QueuedAt:  now,
 		Request:   &storedReq,
 	}
-	m.mu.Lock()
 	m.records[runID] = &runRecord{run: run}
 	m.enqueueLocked(runID)
 	m.mu.Unlock()
 	m.persist(run)
 	m.promoteQueue()
 	return run, nil
+}
+
+func (m *Manager) newRunIDLocked(workflowRef string, now time.Time) string {
+	for attempt := 0; ; attempt++ {
+		runID := runworkflow.NewRunID(workflowRef, now.Add(time.Duration(attempt)*time.Nanosecond))
+		if _, exists := m.records[runID]; !exists {
+			return runID
+		}
+	}
 }
 
 // enqueueLocked adds runID to the queue. Caller must hold m.mu.
@@ -204,13 +213,29 @@ func (m *Manager) startRunLocked(runID string) {
 		record.run.FinishedAt = time.Now()
 		record.run.Error = err.Error()
 		record.run.TerminalError = err.Error()
+		record.run.QueuedAt = time.Time{}
+		record.run.ResumeQueued = false
 		m.persistLocked(record.run)
 		return
 	}
-	service := NewWorkflowRunService(m, uc, req, runID, false)
+	resume := record.run.ResumeQueued
+	service := NewWorkflowRunService(m, uc, req, runID, resume)
 	record.service = service
 	record.run.Status = corerun.RunRunning
 	record.run.QueuedAt = time.Time{}
+	record.run.ResumeQueued = false
+	if resume {
+		record.run.ResumeCount++
+		record.run.PausedAt = time.Time{}
+		record.run.PauseReason = ""
+		record.run.ApprovalAt = time.Time{}
+		record.run.ApprovalNodeID = ""
+		record.run.ApprovalMessage = ""
+		record.run.Error = ""
+		record.run.TerminalError = ""
+		record.run.FailureReason = ""
+		record.run.FinishedAt = time.Time{}
+	}
 	m.runningCount++
 	m.persistLocked(record.run)
 	m.mu.Unlock()
@@ -306,6 +331,7 @@ func (m *Manager) CancelWorkflow(runID string) (WorkflowRun, error) {
 		m.removeFromQueueLocked(runID)
 		record.run.Status = corerun.RunCancelled
 		record.run.FinishedAt = time.Now()
+		record.run.ResumeQueued = false
 		record.run.FailureReason = ""
 		m.persistLocked(record.run)
 		m.mu.Unlock()
@@ -389,37 +415,22 @@ func (m *Manager) PauseWorkflow(runID string) (WorkflowRun, error) {
 func (m *Manager) ResumeWorkflow(runID string) (WorkflowRun, error) {
 	m.mu.Lock()
 	record, ok := m.records[runID]
-	m.mu.Unlock()
 	if !ok {
+		m.mu.Unlock()
 		return WorkflowRun{}, os.ErrNotExist
 	}
 	current := record.run
 	if current.Status != corerun.RunPaused {
+		m.mu.Unlock()
 		return WorkflowRun{}, fmt.Errorf("workflow run %q is %s; only paused runs can be resumed", runID, current.Status)
 	}
 	if current.Request == nil {
+		m.mu.Unlock()
 		return WorkflowRun{}, fmt.Errorf("workflow run %q has no persisted request; cannot resume", runID)
 	}
-	req := *current.Request
-	runRoot := firstNonEmpty(req.RunRoot, req.OutputDir, m.cfg.RunRoot)
-	uc, err := app.NewRunWorkflowUseCase(app.RuntimeOptions{
-		CodexPath:        firstNonEmpty(req.CodexPath, m.cfg.CodexPath, os.Getenv("AGENTFLOW_CODEX_PATH")),
-		ClaudePath:       firstNonEmpty(req.ClaudePath, m.cfg.ClaudePath, os.Getenv("AGENTFLOW_CLAUDE_PATH")),
-		PiPath:           firstNonEmpty(req.PiPath, m.cfg.PiPath, os.Getenv("AGENTFLOW_PI_PATH")),
-		FakeProviderPath: firstNonEmpty(req.FakeProviderPath, m.cfg.FakeProviderPath, os.Getenv("AGENTFLOW_FAKE_PROVIDER_PATH")),
-		LogFormat:        req.LogFormat,
-		EventsJSONL:      req.EventsJSONL,
-		RunRoot:          runRoot,
-		Workflows:        m.workflowRepo,
-	})
-	if err != nil {
-		return WorkflowRun{}, err
-	}
-	service := NewWorkflowRunService(m, uc, req, runID, true)
-	m.mu.Lock()
-	record.service = service
-	record.run.Status = corerun.RunRunning
-	record.run.ResumeCount++
+	record.run.Status = corerun.RunQueued
+	record.run.ResumeQueued = true
+	record.run.QueuedAt = time.Now()
 	record.run.PausedAt = time.Time{}
 	record.run.PauseReason = ""
 	record.run.Error = ""
@@ -427,11 +438,12 @@ func (m *Manager) ResumeWorkflow(runID string) (WorkflowRun, error) {
 	record.run.FailureReason = ""
 	record.run.FinishedAt = time.Time{}
 	updated := record.run
+	m.enqueueLocked(runID)
 	m.persistLocked(updated)
-	m.runningCount++
 	m.mu.Unlock()
-	if m.runSupervisor != nil {
-		m.runSupervisor.Add(service)
+	m.promoteQueue()
+	if current, ok := m.WorkflowStatus(runID); ok {
+		return current, nil
 	}
 	return updated, nil
 }
@@ -466,20 +478,6 @@ func (m *Manager) ApproveWorkflow(runID string) (WorkflowRun, error) {
 		return WorkflowRun{}, fmt.Errorf("workflow run %q checkpoint is missing approval state", runID)
 	}
 	approval := *checkpoint.Approval
-	runRoot := firstNonEmpty(current.Request.RunRoot, current.Request.OutputDir, m.cfg.RunRoot)
-	uc, err := app.NewRunWorkflowUseCase(app.RuntimeOptions{
-		CodexPath:        firstNonEmpty(current.Request.CodexPath, m.cfg.CodexPath, os.Getenv("AGENTFLOW_CODEX_PATH")),
-		ClaudePath:       firstNonEmpty(current.Request.ClaudePath, m.cfg.ClaudePath, os.Getenv("AGENTFLOW_CLAUDE_PATH")),
-		PiPath:           firstNonEmpty(current.Request.PiPath, m.cfg.PiPath, os.Getenv("AGENTFLOW_PI_PATH")),
-		FakeProviderPath: firstNonEmpty(current.Request.FakeProviderPath, m.cfg.FakeProviderPath, os.Getenv("AGENTFLOW_FAKE_PROVIDER_PATH")),
-		LogFormat:        current.Request.LogFormat,
-		EventsJSONL:      current.Request.EventsJSONL,
-		RunRoot:          runRoot,
-		Workflows:        m.workflowRepo,
-	})
-	if err != nil {
-		return WorkflowRun{}, err
-	}
 	if checkpoint.Nodes == nil {
 		checkpoint.Nodes = map[string]corerun.NodeResult{}
 	}
@@ -501,11 +499,10 @@ func (m *Manager) ApproveWorkflow(runID string) (WorkflowRun, error) {
 	if err := writeJSONFile(checkpointPath, checkpoint); err != nil {
 		return WorkflowRun{}, err
 	}
-	service := NewWorkflowRunService(m, uc, *current.Request, runID, true)
 	m.mu.Lock()
-	record.service = service
-	record.run.Status = corerun.RunRunning
-	record.run.ResumeCount++
+	record.run.Status = corerun.RunQueued
+	record.run.ResumeQueued = true
+	record.run.QueuedAt = time.Now()
 	record.run.ApprovalAt = time.Time{}
 	record.run.ApprovalNodeID = ""
 	record.run.ApprovalMessage = ""
@@ -514,10 +511,13 @@ func (m *Manager) ApproveWorkflow(runID string) (WorkflowRun, error) {
 	record.run.FailureReason = ""
 	record.run.FinishedAt = time.Time{}
 	updated := record.run
+	m.enqueueLocked(runID)
 	m.persistLocked(updated)
-	m.runningCount++
 	m.mu.Unlock()
 	m.promoteQueue()
+	if current, ok := m.WorkflowStatus(runID); ok {
+		return current, nil
+	}
 	return updated, nil
 }
 
@@ -693,6 +693,7 @@ func (m *Manager) startResumedService(runID string, req *RunWorkflowRequest) (Wo
 	}
 	record.service = service
 	record.run.Status = corerun.RunRunning
+	record.run.ResumeQueued = false
 	record.run.ResumeCount++
 	record.run.PausedAt = time.Time{}
 	record.run.PauseReason = ""
@@ -867,7 +868,7 @@ func (m *Manager) refreshRun(run WorkflowRun, active bool) WorkflowRun {
 	if len(progress.RecentEvents) > 0 {
 		run.RecentEvents = progress.RecentEvents
 	}
-	if progress.Paused && !active && run.Status != corerun.RunCancelled && run.Status != corerun.RunSuccess && run.Status != corerun.RunFailed {
+	if progress.Paused && !active && run.Status != corerun.RunQueued && run.Status != corerun.RunCancelled && run.Status != corerun.RunSuccess && run.Status != corerun.RunFailed {
 		run.Status = corerun.RunPaused
 		if run.PauseReason == "" && progress.PauseReason != "" {
 			run.PauseReason = progress.PauseReason
@@ -876,7 +877,7 @@ func (m *Manager) refreshRun(run WorkflowRun, active bool) WorkflowRun {
 	if run.Status == corerun.RunPaused && run.PauseReason == "" && progress.PauseReason != "" {
 		run.PauseReason = progress.PauseReason
 	}
-	if progress.ApprovalPending && run.Status != corerun.RunCancelled && run.Status != corerun.RunSuccess && run.Status != corerun.RunFailed {
+	if progress.ApprovalPending && run.Status != corerun.RunQueued && run.Status != corerun.RunCancelled && run.Status != corerun.RunSuccess && run.Status != corerun.RunFailed {
 		run.Status = corerun.RunWaitingApproval
 	}
 	if run.ApprovalNodeID == "" && progress.ApprovalNodeID != "" {
@@ -918,6 +919,7 @@ func (m *Manager) finish(runID string, result runworkflow.RunResult, err error) 
 			if run.FinishedAt.IsZero() {
 				run.FinishedAt = time.Now()
 			}
+			run.ResumeQueued = false
 			run.PausedAt = time.Time{}
 			run.PauseReason = ""
 			run.FailureReason = ""
@@ -932,6 +934,7 @@ func (m *Manager) finish(runID string, result runworkflow.RunResult, err error) 
 		}
 		applyProgress(run, result.Summary)
 		if result.Status == corerun.RunPaused {
+			run.ResumeQueued = false
 			run.PausedAt = time.Now()
 			if run.PauseReason == "" {
 				if result.PauseReason != "" {
@@ -947,6 +950,7 @@ func (m *Manager) finish(runID string, result runworkflow.RunResult, err error) 
 			return
 		}
 		if result.Status == corerun.RunWaitingApproval {
+			run.ResumeQueued = false
 			run.ApprovalAt = time.Now()
 			run.ApprovalNodeID = result.ApprovalNodeID
 			run.ApprovalMessage = result.ApprovalMessage
@@ -959,6 +963,7 @@ func (m *Manager) finish(runID string, result runworkflow.RunResult, err error) 
 			return
 		}
 		run.FinishedAt = time.Now()
+		run.ResumeQueued = false
 		run.PausedAt = time.Time{}
 		run.PauseReason = ""
 		run.FailureReason = result.FailureReason
@@ -973,6 +978,7 @@ func (m *Manager) finish(runID string, result runworkflow.RunResult, err error) 
 			run.TerminalError = ""
 		}
 	})
+	m.releaseRunSlot(runID)
 	if err != nil {
 		if !errors.Is(err, context.Canceled) && result.Status != corerun.RunCancelled {
 			m.logger.Error("workflow finished with error", "run_id", runID, "error", err)
@@ -989,7 +995,13 @@ func (m *Manager) finish(runID string, result runworkflow.RunResult, err error) 
 		return
 	}
 	m.logger.Info("workflow finished", "run_id", runID, "status", result.Status)
+}
+
+func (m *Manager) releaseRunSlot(runID string) {
 	m.mu.Lock()
+	if record, ok := m.records[runID]; ok {
+		record.service = nil
+	}
 	if m.runningCount > 0 {
 		m.runningCount--
 	}

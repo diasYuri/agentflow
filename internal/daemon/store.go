@@ -77,7 +77,8 @@ CREATE TABLE IF NOT EXISTS workflow_runs (
 	request_json TEXT,
 	tag TEXT,
 	priority INTEGER,
-	queued_at TEXT
+	queued_at TEXT,
+	resume_queued INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_workflow_runs_started_at ON workflow_runs(started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_workflow_runs_status ON workflow_runs(status);
@@ -112,6 +113,7 @@ CREATE INDEX IF NOT EXISTS idx_workflow_definitions_updated_at ON workflow_defin
 		"tag TEXT",
 		"priority INTEGER",
 		"queued_at TEXT",
+		"resume_queued INTEGER",
 	}
 	for _, col := range cols {
 		if _, err := s.db.ExecContext(ctx, `ALTER TABLE workflow_runs ADD COLUMN `+col); err != nil {
@@ -239,7 +241,7 @@ func scanWorkflowDefinitionRows(rows *sql.Rows) (WorkflowDefinitionRecord, error
 
 func (s *SQLiteRunStore) LoadRuns(ctx context.Context) ([]WorkflowRun, error) {
 	rows, err := s.db.QueryContext(ctx, `
-SELECT id, workflow, run_dir, status, started_at, finished_at, error, current_step, completed_steps, pending_steps, total_steps, terminal_error, failure_reason, recent_events, paused_at, approval_at, pause_reason, approval_node_id, approval_message, resume_count, request_json, tag, priority, queued_at
+SELECT id, workflow, run_dir, status, started_at, finished_at, error, current_step, completed_steps, pending_steps, total_steps, terminal_error, failure_reason, recent_events, paused_at, approval_at, pause_reason, approval_node_id, approval_message, resume_count, request_json, tag, priority, queued_at, resume_queued
 FROM workflow_runs
 ORDER BY started_at DESC`)
 	if err != nil {
@@ -259,13 +261,14 @@ ORDER BY started_at DESC`)
 		var totalSteps, resumeCount sql.NullInt64
 		var priority sql.NullInt64
 		var queuedAt sql.NullString
+		var resumeQueued sql.NullInt64
 		if err := rows.Scan(
 			&run.ID, &run.Workflow, &run.RunDir, &run.Status,
 			&startedAt, &finishedAt, &runError,
 			&currentStep, &completedSteps, &pendingSteps,
 			&totalSteps, &terminalError, &failureReason, &recentEvents,
 			&pausedAt, &approvalAt, &pauseReason, &approvalNodeID, &approvalMessage, &resumeCount, &requestJSON, &tag,
-			&priority, &queuedAt,
+			&priority, &queuedAt, &resumeQueued,
 		); err != nil {
 			return nil, err
 		}
@@ -293,6 +296,9 @@ ORDER BY started_at DESC`)
 				return nil, fmt.Errorf("parse queued_at for run %q: %w", run.ID, err)
 			}
 			run.QueuedAt = parsedQueuedAt
+		}
+		if resumeQueued.Valid {
+			run.ResumeQueued = resumeQueued.Int64 != 0
 		}
 		parsedStartedAt, err := time.Parse(time.RFC3339Nano, startedAt)
 		if err != nil {
@@ -380,8 +386,8 @@ func (s *SQLiteRunStore) UpsertRun(ctx context.Context, run WorkflowRun) error {
 		queuedAt = run.QueuedAt.UTC().Format(time.RFC3339Nano)
 	}
 	_, err := s.db.ExecContext(ctx, `
-INSERT INTO workflow_runs (id, workflow, run_dir, status, started_at, finished_at, error, current_step, completed_steps, pending_steps, total_steps, terminal_error, failure_reason, recent_events, paused_at, approval_at, pause_reason, approval_node_id, approval_message, resume_count, request_json, tag, priority, queued_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO workflow_runs (id, workflow, run_dir, status, started_at, finished_at, error, current_step, completed_steps, pending_steps, total_steps, terminal_error, failure_reason, recent_events, paused_at, approval_at, pause_reason, approval_node_id, approval_message, resume_count, request_json, tag, priority, queued_at, resume_queued)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
 	workflow = excluded.workflow,
 	run_dir = excluded.run_dir,
@@ -405,7 +411,8 @@ ON CONFLICT(id) DO UPDATE SET
 	request_json = COALESCE(excluded.request_json, workflow_runs.request_json),
 	tag = COALESCE(excluded.tag, workflow_runs.tag),
 	priority = excluded.priority,
-	queued_at = excluded.queued_at`,
+	queued_at = excluded.queued_at,
+	resume_queued = excluded.resume_queued`,
 		run.ID,
 		run.Workflow,
 		run.RunDir,
@@ -430,8 +437,16 @@ ON CONFLICT(id) DO UPDATE SET
 		run.Tag,
 		run.Priority,
 		queuedAt,
+		boolToSQLiteInt(run.ResumeQueued),
 	)
 	return err
+}
+
+func boolToSQLiteInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 func (s *SQLiteRunStore) Close() error {

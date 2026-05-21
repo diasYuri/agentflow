@@ -97,6 +97,7 @@ type WorkflowRun struct {
 	Tag             string              `json:"tag,omitempty"`
 	Priority        int                 `json:"priority,omitempty"`
 	QueuedAt        time.Time           `json:"queued_at,omitempty"`
+	ResumeQueued    bool                `json:"resume_queued,omitempty"`
 	Request         *RunWorkflowRequest `json:"-"`
 }
 

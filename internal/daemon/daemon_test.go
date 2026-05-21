@@ -357,6 +357,40 @@ func TestSQLiteRunStorePersistsFailureReason(t *testing.T) {
 	}
 }
 
+func TestSQLiteRunStorePersistsResumeQueued(t *testing.T) {
+	dir := shortTempDir(t)
+	dbPath := filepath.Join(dir, "agentflowd.sqlite")
+	store, err := OpenSQLiteRunStore(context.Background(), dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	run := WorkflowRun{
+		ID:           "run-resume-queued",
+		Workflow:     "demo",
+		RunDir:       "/tmp/run-resume-queued",
+		Status:       corerun.RunQueued,
+		StartedAt:    time.Unix(100, 0),
+		QueuedAt:     time.Unix(110, 0),
+		ResumeQueued: true,
+	}
+	if err := store.UpsertRun(context.Background(), run); err != nil {
+		t.Fatal(err)
+	}
+
+	runs, err := store.LoadRuns(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("expected one run, got %d", len(runs))
+	}
+	if !runs[0].ResumeQueued {
+		t.Fatalf("expected resume_queued to persist, got %#v", runs[0])
+	}
+}
+
 func TestManagerPersistsFailureReason(t *testing.T) {
 	dir := shortTempDir(t)
 	manager := NewManager(Config{RunRoot: filepath.Join(dir, "runs")}, nil, nil)

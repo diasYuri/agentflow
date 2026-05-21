@@ -131,6 +131,7 @@ export type WorkflowRunStatus =
 	| "created"
 	| "validating"
 	| "planned"
+	| "queued"
 	| "running"
 	| "paused"
 	| "wait_approval"
@@ -160,6 +161,7 @@ export interface WorkflowRun {
 	failure_reason?: string;
 	recent_events?: string[];
 	tag?: string;
+	resume_queued?: boolean;
 }
 
 export interface WorkflowInspect {
