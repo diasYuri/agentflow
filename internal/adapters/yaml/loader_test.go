@@ -199,15 +199,31 @@ func TestGoalV2WorkflowValidates(t *testing.T) {
 	if _, ok := spec.Outputs["verification"]; !ok {
 		t.Fatal("expected verification output")
 	}
-	if len(spec.Nodes) != 5 {
-		t.Fatalf("expected 5 expanded nodes, got %d", len(spec.Nodes))
+	if len(spec.Nodes) != 6 {
+		t.Fatalf("expected 6 expanded nodes, got %d", len(spec.Nodes))
 	}
-	verifyNode := spec.Nodes[len(spec.Nodes)-1]
+	var implementNode *workflow.NodeSpec
+	var verifyNode *workflow.NodeSpec
+	for i := range spec.Nodes {
+		node := &spec.Nodes[i]
+		switch node.ID {
+		case "implement_goal_plans":
+			implementNode = node
+		case "verify_goal":
+			verifyNode = node
+		}
+	}
+	if implementNode == nil {
+		t.Fatal("expected implement_goal_plans node")
+	}
+	if verifyNode == nil {
+		t.Fatal("expected verify_goal node")
+	}
 	if verifyNode.ID != "verify_goal" {
 		t.Fatalf("expected final node verify_goal, got %q", verifyNode.ID)
 	}
-	if verifyNode.GoToIf == nil || verifyNode.GoToIf.Target != "draft_goal_spec" {
-		t.Fatalf("expected verify_goal to loop back to draft_goal_spec, got %#v", verifyNode.GoToIf)
+	if verifyNode.GoToIf == nil || verifyNode.GoToIf.Target != "implement_goal_plans" {
+		t.Fatalf("expected verify_goal to loop back to implement_goal_plans, got %#v", verifyNode.GoToIf)
 	}
 
 	if err := workflow.Validate(spec, workflow.DefaultProviders(), nil); err != nil {

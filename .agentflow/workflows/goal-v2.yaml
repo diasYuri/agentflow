@@ -1,6 +1,6 @@
 version: "2"
 name: goal-v2
-description: "Recebe um goal, gera uma spec completa, quebra em planos paralelizáveis, revisa, refina e verifica se o objetivo foi totalmente atingido."
+description: "Recebe um goal, gera uma spec completa, quebra em planos paralelizáveis, implementa, revisa, refina e verifica se o objetivo foi totalmente atingido."
 
 inputs:
   goal:
@@ -169,16 +169,100 @@ steps:
                     context:
                       type: string
 
+  implement_goal_plans:
+    nodes:
+      - id: implement_goal_plans
+        kind: map
+        depends_on: [break_goal_plans]
+        for_each: "${nodes.break_goal_plans.output.plan_matrix}"
+        concurrency: 1
+        max_items: 20
+        fail_fast: true
+        nodes:
+          - id: implement_phase
+            kind: map
+            for_each: "${item}"
+            concurrency: 2
+            max_items: 50
+            fail_fast: false
+            nodes:
+              - id: implement_plan
+                kind: agent
+                provider: claude
+                permission:
+                  write: true
+                prompt: |
+                  You are the implementation agent operating inside the current repository.
+
+                  Implement exactly this plan, respecting the workflow order:
+                  ${item}
+
+                  Rules:
+                  - Read the file referenced in `path` before changing code.
+                  - Implement only the scope of the current plan.
+                  - Do not revert or overwrite existing work or earlier plan changes.
+                  - Preserve the repository's existing architecture, boundaries, naming, and style.
+                  - Build software that is tested, maintainable, and easy to evolve.
+                  - Favor clear design over cleverness.
+                  - Apply pragmatic SOLID principles, small focused functions, narrow interfaces, and explicit dependencies.
+                  - Avoid unnecessary abstraction, but extract helpers or types when duplication or complexity starts to hide intent.
+                  - Add or update tests for every behavior change, regression risk, or bug fix introduced by the plan.
+                  - Prefer small, focused test coverage that proves the behavior end to end within the plan scope.
+                  - Run relevant fast local validations before finishing.
+                  - Return valid JSON that follows the schema.
+                outputs:
+                  plan_path:
+                    type: string
+                  status:
+                    type: string
+                  summary:
+                    type: string
+                  files_changed:
+                    type: array
+                  validation:
+                    type: array
+                  follow_ups:
+                    type: array
+                output_schema:
+                  type: object
+                  required:
+                    - plan_path
+                    - status
+                    - summary
+                    - files_changed
+                    - validation
+                    - follow_ups
+                  additionalProperties: false
+                  properties:
+                    plan_path:
+                      type: string
+                    status:
+                      type: string
+                    summary:
+                      type: string
+                    files_changed:
+                      type: array
+                      items:
+                        type: string
+                    validation:
+                      type: array
+                      items:
+                        type: string
+                    follow_ups:
+                      type: array
+                      items:
+                        type: string
+
   review_goal:
     nodes:
       - id: review_goal
         kind: agent
         provider: codex
-        depends_on: [break_goal_plans]
+        depends_on: [implement_goal_plans]
         prompt: |
           You are a pragmatic technical planning reviewer.
 
-          Review the complete spec and the plan matrix after generation.
+          Review the complete spec, the plan matrix, and the implementation results after the first implementation pass.
 
           Original goal:
           ${inputs.goal}
@@ -188,6 +272,9 @@ steps:
 
           Plans:
           ${nodes.break_goal_plans.output.plan_matrix}
+
+          Implementations:
+          ${nodes.implement_goal_plans.outputs}
 
           Rules:
           - Prioritize real coverage gaps, missing dependencies, ordering issues, and risk omissions.
@@ -251,6 +338,9 @@ steps:
           Plans:
           ${nodes.break_goal_plans.output.plan_matrix}
 
+          Implementations:
+          ${nodes.implement_goal_plans.outputs}
+
           Review:
           ${nodes.review_goal.output}
 
@@ -298,7 +388,7 @@ steps:
           write: true
         go_to_if:
           when: "${nodes.verify_goal.output.complete} == false"
-          target: draft_goal_spec
+          target: implement_goal_plans
         prompt: |
           You are the final verifier for the goal.
 
@@ -312,6 +402,9 @@ steps:
 
           Plans:
           ${nodes.break_goal_plans.output.plan_matrix}
+
+          Implementations:
+          ${nodes.implement_goal_plans.outputs}
 
           Review:
           ${nodes.review_goal.output}
@@ -370,6 +463,9 @@ nodes:
   - id: break_goal_plans
     ref: break_goal_plans
 
+  - id: implement_goal_plans
+    ref: implement_goal_plans
+
   - id: review_goal
     ref: review_goal
 
@@ -394,6 +490,9 @@ outputs:
     type: string
   plan_matrix:
     value: "${nodes.break_goal_plans.output.plan_matrix}"
+    type: array
+  implementation:
+    value: "${nodes.implement_goal_plans.outputs}"
     type: array
   summary:
     value: "${nodes.verify_goal.output.summary}"
