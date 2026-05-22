@@ -1200,6 +1200,7 @@ func renderWorkflowList(w io.Writer, runs []daemon.WorkflowRun, format string, n
 	}
 	effectiveNoColor := noColor || !interactive
 	f := newCLIFormat(!effectiveNoColor)
+	const workflowListMaxTableWidth = 100
 	rows := make([]workflowListRow, 0, len(runs))
 	for _, run := range runs {
 		rows = append(rows, workflowListRow{
@@ -1214,8 +1215,9 @@ func renderWorkflowList(w io.Writer, runs []daemon.WorkflowRun, format string, n
 			Age:       formatWorkflowElapsed(run),
 		})
 	}
-	cols := []string{"ID", "TAG", "WORKFLOW", "STATUS", "STEP ATUAL", "CONCLUÍDOS", "TOTAL", "TEMPO", "RUN DIR"}
-	widths := []int{6, 12, 20, 12, 18, 10, 5, 8, 0}
+	cols := []string{"ID", "TAG", "WORKFLOW", "STATUS", "STEP", "DONE", "TOTAL", "ELAPSED", "RUN DIR"}
+	widths := []int{6, 10, 16, 10, 10, 4, 5, 7, 12}
+	minWidths := []int{4, 6, 10, 7, 8, 4, 4, 6, 8}
 	maxWidth := terminalWidth(w)
 	if !interactive {
 		maxWidth = 0
@@ -1224,9 +1226,16 @@ func renderWorkflowList(w io.Writer, runs []daemon.WorkflowRun, format string, n
 		if w := lipgloss.Width(col); w > widths[i] {
 			widths[i] = w
 		}
+		if widths[i] < minWidths[i] {
+			widths[i] = minWidths[i]
+		}
 	}
 	if maxWidth > 0 {
-		widths = fitWidths(widths, maxWidth, 2)
+		tableMaxWidth := maxWidth
+		if tableMaxWidth > workflowListMaxTableWidth {
+			tableMaxWidth = workflowListMaxTableWidth
+		}
+		widths = fitWidths(widths, tableMaxWidth-(len(widths)+3), 2, minWidths)
 	}
 	tableRows := make([][]string, 0, len(rows))
 	for _, row := range rows {
@@ -1559,21 +1568,64 @@ func terminalWidth(w io.Writer) int {
 
 func isInteractiveWriter(w io.Writer) bool { return terminalWidth(w) > 0 }
 
-func fitWidths(widths []int, maxWidth int, gap int) []int {
+func fitWidths(widths []int, maxWidth int, gap int, minWidths []int) []int {
 	result := append([]int(nil), widths...)
-	fixed := 0
-	for i, width := range result {
-		if i == len(result)-1 {
-			continue
-		}
-		fixed += width
-	}
-	fixed += gap * (len(result) - 1)
-	remaining := maxWidth - fixed
-	if remaining <= 0 {
+	if len(result) == 0 {
 		return result
 	}
-	result[len(result)-1] = remaining
+	if len(minWidths) != len(result) {
+		minWidths = nil
+	}
+	total := 0
+	for i, width := range result {
+		if width < 1 {
+			width = 1
+		}
+		result[i] = width
+		total += width
+	}
+	total += gap * (len(result) - 1)
+	if total <= maxWidth {
+		result[len(result)-1] += maxWidth - total
+		return result
+	}
+
+	remaining := total - maxWidth
+	for remaining > 0 {
+		shrunk := false
+		for i := len(result) - 1; i >= 0 && remaining > 0; i-- {
+			minWidth := 1
+			if minWidths != nil {
+				minWidth = minWidths[i]
+				if minWidth < 1 {
+					minWidth = 1
+				}
+			}
+			if result[i] <= minWidth {
+				continue
+			}
+			result[i]--
+			remaining--
+			shrunk = true
+		}
+		if !shrunk {
+			break
+		}
+	}
+	for remaining > 0 {
+		shrunk := false
+		for i := len(result) - 1; i >= 0 && remaining > 0; i-- {
+			if result[i] <= 1 {
+				continue
+			}
+			result[i]--
+			remaining--
+			shrunk = true
+		}
+		if !shrunk {
+			break
+		}
+	}
 	return result
 }
 

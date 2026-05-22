@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
 	corerun "github.com/diasYuri/agentflow/internal/core/run"
 	"github.com/diasYuri/agentflow/internal/daemon"
 	"github.com/spf13/cobra"
@@ -145,7 +146,7 @@ func TestWorkflowListRendersTableAndJson(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := out.String()
-	if !strings.Contains(got, "ID") || !strings.Contains(got, "CONCLUÍDOS") || !strings.Contains(got, "TOTAL") || !strings.Contains(got, "run-1") {
+	if !strings.Contains(got, "ID") || !strings.Contains(got, "DONE") || !strings.Contains(got, "TOTAL") || !strings.Contains(got, "run-1") {
 		t.Fatalf("unexpected list output: %q", got)
 	}
 	if !strings.Contains(got, "smoke-test") {
@@ -207,13 +208,13 @@ func TestWorkflowListRendersElapsedTime(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := out.String()
-	for _, want := range []string{"TEMPO", "5m0s", "7s", "3s", "2h0m0s"} {
+	for _, want := range []string{"ELAPSED", "5m0s", "7s", "3s", "2h0m0s"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("expected %q in output: %q", want, got)
 		}
 	}
-	if strings.Contains(got, "IDADE") {
-		t.Fatalf("expected IDADE header to be renamed, got %q", got)
+	if strings.Contains(got, "TEMPO") || strings.Contains(got, "STEP ATUAL") || strings.Contains(got, "CONCLUÍDOS") {
+		t.Fatalf("expected English headers, got %q", got)
 	}
 
 	out.Reset()
@@ -223,6 +224,86 @@ func TestWorkflowListRendersElapsedTime(t *testing.T) {
 	got = out.String()
 	if strings.Contains(got, "elapsed") || !strings.Contains(got, `"started_at"`) || !strings.Contains(got, `"finished_at"`) {
 		t.Fatalf("unexpected json output: %q", got)
+	}
+}
+
+func TestWorkflowListFitsNarrowTerminal(t *testing.T) {
+	t.Setenv("COLUMNS", "80")
+	run := daemon.WorkflowRun{
+		ID:          "run-1",
+		Workflow:    "long-workflow-name",
+		Status:      "running",
+		Tag:         "smoke-test",
+		CurrentStep: "execute a very long build step name",
+		CompletedSteps: []string{
+			"plan",
+			"build",
+			"test",
+		},
+		TotalSteps: 12,
+		RunDir:     "/tmp/agentflow/runs/run-1-with-a-very-long-directory-name",
+		StartedAt:  time.Now().Add(-2 * time.Hour),
+	}
+
+	f, err := os.CreateTemp(t.TempDir(), "workflow-list-*.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = f.Close() })
+
+	if err := renderWorkflowList(f, []daemon.WorkflowRun{run}, string(workflowOutputText), true, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Seek(0, 0); err != nil {
+		t.Fatal(err)
+	}
+	out, err := os.ReadFile(f.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+	for _, line := range strings.Split(strings.TrimSpace(got), "\n") {
+		if lipgloss.Width(line) > 80 {
+			t.Fatalf("expected line width <= 80, got %d for line %q", lipgloss.Width(line), line)
+		}
+	}
+	for _, want := range []string{"STEP ATUAL", "CONCLUÍDOS", "TEMPO"} {
+		if strings.Contains(got, want) {
+			t.Fatalf("expected English-only headers in narrow layout, found %q in %q", want, got)
+		}
+	}
+}
+
+func TestWorkflowListCapsWideTerminalWidth(t *testing.T) {
+	t.Setenv("COLUMNS", "140")
+	run := daemon.WorkflowRun{
+		ID:          "run-1",
+		Workflow:    "build",
+		Status:      "running",
+		Tag:         "smoke-test",
+		CurrentStep: "compile",
+		RunDir:      "/tmp/agentflow/runs/run-1",
+		StartedAt:   time.Now().Add(-30 * time.Minute),
+	}
+
+	f, err := os.CreateTemp(t.TempDir(), "workflow-list-wide-*.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = f.Close() })
+
+	if err := renderWorkflowList(f, []daemon.WorkflowRun{run}, string(workflowOutputText), true, true); err != nil {
+		t.Fatal(err)
+	}
+	out, err := os.ReadFile(f.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+	for _, line := range strings.Split(strings.TrimSpace(got), "\n") {
+		if lipgloss.Width(line) > 100 {
+			t.Fatalf("expected line width <= 100, got %d for line %q", lipgloss.Width(line), line)
+		}
 	}
 }
 
