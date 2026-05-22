@@ -38,7 +38,24 @@ token_override = ""         # pin a token instead of generating one
 [paths]
 root = ""                   # override the AgentFlow root directory
 daemon_socket = ""          # override the agentflowd unix socket
+
+[chat_agent]
+provider = "openai"         # OpenAI-compatible provider name
+model = "gpt-4o-mini"       # model ID within the provider
+timeout = "60s"
+history_limit = 40
+
+[chat_agent.providers.openai]
+base_url = "https://api.openai.com"
+api_key_env = "OPENAI_API_KEY"
+temperature = 0.2
+max_tokens = 1000
+top_p = 0.9
 ```
+
+The conversation studio uses the Go Genkit SDK with the OpenAI-compatible
+plugin. Provider `base_url` values may include `/v1`; when omitted, AgentFlow
+adds it before calling the provider.
 
 ### Environment variables
 

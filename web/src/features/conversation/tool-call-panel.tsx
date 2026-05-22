@@ -9,6 +9,14 @@ export function ToolCallPanel({ sessionId }: { sessionId: string }) {
 	const { data: calls = [] } = useQuery({
 		queryKey: ["tool-calls", sessionId],
 		queryFn: () => api.sessions.toolCalls(sessionId),
+		refetchInterval: (query) => {
+			const calls = query.state.data ?? [];
+			return calls.some(
+				(call) => call.status === "pending" || call.status === "running",
+			)
+				? 1000
+				: false;
+		},
 	});
 	const queryClient = useQueryClient();
 

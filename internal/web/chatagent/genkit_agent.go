@@ -1,15 +1,20 @@
 package chatagent
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
+	"net/url"
 	"os"
+	"strings"
 	"time"
+
+	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/genkit"
+	"github.com/firebase/genkit/go/plugins/compat_oai"
+	"github.com/openai/openai-go"
+	"github.com/openai/openai-go/option"
 )
 
 const defaultHTTPTimeout = 60 * time.Second
@@ -27,15 +32,13 @@ type ProviderConfig struct {
 	TopP        float64
 }
 
-// GenkitAgent is a production chat agent that calls OpenAI-compatible
-// chat completion APIs over HTTP. The name retains the Genkit intent
-// from the plan; the implementation uses standard net/http so it works
-// while the Go Genkit SDK is not yet available on the module proxy.
+// GenkitAgent is a production chat agent backed by Genkit's
+// OpenAI-compatible provider plugin.
 type GenkitAgent struct {
-	provider   string
-	model      string
-	config     ProviderConfig
-	httpClient *http.Client
+	provider string
+	model    string
+	config   ProviderConfig
+	genkit   *genkit.Genkit
 }
 
 // NewGenkitAgent builds an agent for the selected provider and model.
@@ -52,14 +55,9 @@ func NewGenkitAgent(provider, model string, providers map[string]ProviderConfig,
 		return nil, fmt.Errorf("chatagent: provider %q not configured", provider)
 	}
 
-	key := cfg.APIKey
-	if key == "" && cfg.APIKeyEnv != "" {
-		if v, ok := os.LookupEnv(cfg.APIKeyEnv); ok {
-			key = v
-		}
-	}
-	if key == "" {
-		return nil, fmt.Errorf("chatagent: provider %q requires api_key or api_key_env", provider)
+	key, err := resolveAPIKey(provider, cfg)
+	if err != nil {
+		return nil, err
 	}
 	cfg.APIKey = key
 
@@ -67,127 +65,114 @@ func NewGenkitAgent(provider, model string, providers map[string]ProviderConfig,
 		timeout = defaultHTTPTimeout
 	}
 
+	opts := []option.RequestOption{option.WithRequestTimeout(timeout)}
+	for k, v := range cfg.Headers {
+		opts = append(opts, option.WithHeader(k, v))
+	}
+
+	g := genkit.Init(context.Background(), genkit.WithPlugins(&compat_oai.OpenAICompatible{
+		Provider: provider,
+		APIKey:   cfg.APIKey,
+		BaseURL:  normalizeOpenAIBaseURL(cfg.BaseURL),
+		Opts:     opts,
+	}))
+
 	return &GenkitAgent{
-		provider:   provider,
-		model:      model,
-		config:     cfg,
-		httpClient: &http.Client{Timeout: timeout},
+		provider: provider,
+		model:    model,
+		config:   cfg,
+		genkit:   g,
 	}, nil
 }
 
-type oaiMessage struct {
-	Role       string        `json:"role"`
-	Content    string        `json:"content,omitempty"`
-	Name       string        `json:"name,omitempty"`
-	ToolCallID string        `json:"tool_call_id,omitempty"`
-	ToolCalls  []oaiToolCall `json:"tool_calls,omitempty"`
+func resolveAPIKey(provider string, cfg ProviderConfig) (string, error) {
+	if key := strings.TrimSpace(cfg.APIKey); key != "" {
+		return key, nil
+	}
+
+	envName := strings.TrimSpace(cfg.APIKeyEnv)
+	if envName == "" {
+		envName = defaultAPIKeyEnv(provider)
+	}
+	if envName == "" {
+		return "", fmt.Errorf("chatagent: provider %q requires api_key or api_key_env", provider)
+	}
+
+	key, ok := os.LookupEnv(envName)
+	if !ok {
+		return "", fmt.Errorf("chatagent: provider %q api_key_env %q is not set", provider, envName)
+	}
+	if strings.TrimSpace(key) == "" {
+		return "", fmt.Errorf("chatagent: provider %q api_key_env %q is empty", provider, envName)
+	}
+	return strings.TrimSpace(key), nil
 }
 
-type oaiToolCall struct {
-	ID       string          `json:"id"`
-	Type     string          `json:"type"`
-	Function oaiToolFunction `json:"function"`
+func defaultAPIKeyEnv(provider string) string {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "openai":
+		return "OPENAI_API_KEY"
+	default:
+		return ""
+	}
 }
 
-type oaiToolFunction struct {
-	Name      string `json:"name"`
-	Arguments string `json:"arguments,omitempty"`
-}
-
-type oaiToolSpec struct {
-	Type     string            `json:"type"`
-	Function oaiToolDefinition `json:"function"`
-}
-
-type oaiToolDefinition struct {
-	Name        string         `json:"name"`
-	Description string         `json:"description,omitempty"`
-	Parameters  map[string]any `json:"parameters,omitempty"`
-}
-
-// oaiRequest is the JSON body for a chat completion call.
-type oaiRequest struct {
-	Model       string        `json:"model"`
-	Messages    []oaiMessage  `json:"messages"`
-	Tools       []oaiToolSpec `json:"tools,omitempty"`
-	ToolChoice  any           `json:"tool_choice,omitempty"`
-	Temperature *float64      `json:"temperature,omitempty"`
-	MaxTokens   *int          `json:"max_tokens,omitempty"`
-	TopP        *float64      `json:"top_p,omitempty"`
-}
-
-// oaiResponse mirrors the essential fields of an OpenAI chat completion.
-type oaiResponse struct {
-	Choices []struct {
-		Message      oaiMessage `json:"message"`
-		FinishReason string     `json:"finish_reason,omitempty"`
-	} `json:"choices"`
-	Error *struct {
-		Message string `json:"message"`
-		Type    string `json:"type"`
-	} `json:"error,omitempty"`
-}
-
-// Run sends the system prompt, history, and user message to the model and
-// returns the assistant text. When the model emits tool calls, the agent
-// executes them locally and continues the request/response loop until the
-// model returns a final assistant message.
+// Run sends the system prompt, history, user message, and available tools to
+// Genkit. Genkit owns the model request and tool-calling loop.
 func (g *GenkitAgent) Run(ctx context.Context, req RunRequest) (RunResponse, error) {
-	messages, err := buildConversation(req)
+	messages := buildGenkitMessages(req)
+	tools := buildGenkitTools(req.ToolEnvironment)
+
+	opts := []ai.GenerateOption{
+		ai.WithModelName(g.provider + "/" + g.model),
+		ai.WithSystem(SystemPrompt()),
+		ai.WithMessages(messages...),
+		ai.WithPrompt(req.UserMessage),
+		ai.WithMaxTurns(maxToolTurns),
+	}
+	if cfg := g.generationConfig(); cfg != nil {
+		opts = append(opts, ai.WithConfig(cfg))
+	}
+	if len(tools) > 0 {
+		opts = append(opts, ai.WithTools(tools...))
+	}
+
+	resp, err := genkit.Generate(ctx, g.genkit, opts...)
 	if err != nil {
-		return RunResponse{}, err
-	}
-	tools, toolIndex := buildToolSpecs(req.ToolEnvironment)
-
-	for turn := 0; turn < maxToolTurns; turn++ {
-		resp, err := g.complete(ctx, messages, tools)
-		if err != nil {
-			return RunResponse{}, err
-		}
-		if len(resp.Choices) == 0 {
-			return RunResponse{}, errors.New("chatagent: empty choices from model")
-		}
-
-		msg := resp.Choices[0].Message
-		if len(msg.ToolCalls) == 0 {
-			return RunResponse{
-				Text: msg.Content,
-				Metadata: map[string]any{
-					"provider": g.provider,
-					"model":    g.model,
-				},
-			}, nil
-		}
-
-		messages = append(messages, msg)
-		for _, call := range msg.ToolCalls {
-			tool, ok := toolIndex[call.Function.Name]
-			if !ok {
-				return RunResponse{}, fmt.Errorf("chatagent: tool %q is not available", call.Function.Name)
-			}
-			result, err := tool.Invoke(ctx, json.RawMessage(call.Function.Arguments))
-			if err != nil {
-				return RunResponse{}, fmt.Errorf("tool %s: %w", call.Function.Name, err)
-			}
-			payload, err := json.Marshal(result)
-			if err != nil {
-				return RunResponse{}, fmt.Errorf("marshal tool result %s: %w", call.Function.Name, err)
-			}
-			messages = append(messages, oaiMessage{
-				Role:       "tool",
-				ToolCallID: call.ID,
-				Content:    string(payload),
-			})
-		}
+		return RunResponse{}, fmt.Errorf("chatagent: generate: %w", err)
 	}
 
-	return RunResponse{}, fmt.Errorf("chatagent: exceeded %d tool turns", maxToolTurns)
+	return RunResponse{
+		Text: resp.Text(),
+		Metadata: map[string]any{
+			"provider": g.provider,
+			"model":    g.model,
+		},
+	}, nil
 }
 
-func buildConversation(req RunRequest) ([]oaiMessage, error) {
-	msgs := make([]oaiMessage, 0, len(req.History)+2)
-	msgs = append(msgs, oaiMessage{Role: "system", Content: SystemPrompt()})
+func (g *GenkitAgent) generationConfig() *openai.ChatCompletionNewParams {
+	cfg := openai.ChatCompletionNewParams{}
+	configured := false
+	if g.config.Temperature > 0 {
+		cfg.Temperature = openai.Float(g.config.Temperature)
+		configured = true
+	}
+	if g.config.MaxTokens > 0 {
+		cfg.MaxCompletionTokens = openai.Int(int64(g.config.MaxTokens))
+		configured = true
+	}
+	if g.config.TopP > 0 {
+		cfg.TopP = openai.Float(g.config.TopP)
+		configured = true
+	}
+	if !configured {
+		return nil
+	}
+	return &cfg
+}
 
+func buildGenkitMessages(req RunRequest) []*ai.Message {
 	limit := req.HistoryLimit
 	if limit <= 0 {
 		limit = 40
@@ -196,91 +181,90 @@ func buildConversation(req RunRequest) ([]oaiMessage, error) {
 	if len(req.History) > limit {
 		start = len(req.History) - limit
 	}
+
+	messages := make([]*ai.Message, 0, len(req.History[start:]))
 	for _, h := range req.History[start:] {
-		msgs = append(msgs, oaiMessage{Role: h.Role, Content: h.Content})
+		switch h.Role {
+		case "user":
+			messages = append(messages, ai.NewUserTextMessage(h.Content))
+		case "assistant", "model":
+			messages = append(messages, ai.NewModelTextMessage(h.Content))
+		case "system":
+			messages = append(messages, ai.NewSystemTextMessage(h.Content))
+		}
 	}
-	msgs = append(msgs, oaiMessage{Role: "user", Content: req.UserMessage})
-	return msgs, nil
+	return messages
 }
 
-func buildToolSpecs(env *ToolEnvironment) ([]oaiToolSpec, map[string]Tool) {
+func buildGenkitTools(env *ToolEnvironment) []ai.ToolRef {
 	if env == nil {
-		return nil, nil
+		return nil
 	}
 	tools := BuildTools(env)
-	specs := make([]oaiToolSpec, 0, len(tools))
-	index := make(map[string]Tool, len(tools))
+	refs := make([]ai.ToolRef, 0, len(tools))
 	for _, tool := range tools {
-		specs = append(specs, oaiToolSpec{
-			Type: "function",
-			Function: oaiToolDefinition{
-				Name:        tool.Name,
-				Description: tool.Description,
-				Parameters:  tool.Parameters,
-			},
-		})
-		index[tool.Name] = tool
+		t := tool
+		apiName := openAIToolName(t.Name)
+		refs = append(refs, ai.NewTool(apiName, t.Description, func(ctx *ai.ToolContext, input any) (any, error) {
+			raw, err := json.Marshal(input)
+			if err != nil {
+				return nil, fmt.Errorf("marshal tool input %s: %w", apiName, err)
+			}
+			return t.Invoke(ctx, json.RawMessage(raw))
+		}, ai.WithInputSchema(t.Parameters)))
 	}
-	return specs, index
+	return refs
 }
 
-func (g *GenkitAgent) complete(ctx context.Context, messages []oaiMessage, tools []oaiToolSpec) (oaiResponse, error) {
-	oaiReq := oaiRequest{Model: g.model, Messages: messages}
-	if len(tools) > 0 {
-		oaiReq.Tools = tools
-		oaiReq.ToolChoice = "auto"
-	}
-	if g.config.Temperature > 0 {
-		oaiReq.Temperature = &g.config.Temperature
-	}
-	if g.config.MaxTokens > 0 {
-		oaiReq.MaxTokens = &g.config.MaxTokens
-	}
-	if g.config.TopP > 0 {
-		oaiReq.TopP = &g.config.TopP
+func openAIToolName(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "tool"
 	}
 
-	body, err := json.Marshal(oaiReq)
-	if err != nil {
-		return oaiResponse{}, fmt.Errorf("marshal request: %w", err)
+	var b strings.Builder
+	b.Grow(len(name))
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+		case r >= 'A' && r <= 'Z':
+			b.WriteRune(r)
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r == '_' || r == '-':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('_')
+		}
 	}
 
-	baseURL := g.config.BaseURL
-	if baseURL == "" {
-		baseURL = "https://api.openai.com"
+	out := strings.Trim(b.String(), "_-")
+	if out == "" {
+		out = "tool"
 	}
-	url := baseURL + "/v1/chat/completions"
+	if len(out) > 64 {
+		out = out[:64]
+		out = strings.TrimRight(out, "_-")
+		if out == "" {
+			out = "tool"
+		}
+	}
+	return out
+}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
-	if err != nil {
-		return oaiResponse{}, fmt.Errorf("build request: %w", err)
+func normalizeOpenAIBaseURL(raw string) string {
+	raw = strings.TrimRight(strings.TrimSpace(raw), "/")
+	if raw == "" {
+		return ""
 	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+g.config.APIKey)
-	for k, v := range g.config.Headers {
-		httpReq.Header.Set(k, v)
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return raw
 	}
-
-	httpResp, err := g.httpClient.Do(httpReq)
-	if err != nil {
-		return oaiResponse{}, fmt.Errorf("http post: %w", err)
+	if strings.HasSuffix(u.Path, "/v1") {
+		return raw
 	}
-	defer httpResp.Body.Close()
-
-	respBody, err := io.ReadAll(httpResp.Body)
-	if err != nil {
-		return oaiResponse{}, fmt.Errorf("read response: %w", err)
-	}
-	if httpResp.StatusCode >= 400 {
-		return oaiResponse{}, fmt.Errorf("chat completion failed (%d): %s", httpResp.StatusCode, string(respBody))
-	}
-
-	var resp oaiResponse
-	if err := json.Unmarshal(respBody, &resp); err != nil {
-		return oaiResponse{}, fmt.Errorf("decode response: %w", err)
-	}
-	if resp.Error != nil && resp.Error.Message != "" {
-		return oaiResponse{}, fmt.Errorf("model error (%s): %s", resp.Error.Type, resp.Error.Message)
-	}
-	return resp, nil
+	u.Path = strings.TrimRight(u.Path, "/") + "/v1"
+	return u.String()
 }

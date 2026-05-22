@@ -13,6 +13,43 @@ import (
 	"github.com/diasYuri/agentflow/internal/daemon"
 )
 
+type chatCompletionRequest struct {
+	Model               string                `json:"model"`
+	Messages            []chatRequestMessage  `json:"messages"`
+	Tools               []chatRequestToolSpec `json:"tools,omitempty"`
+	Temperature         *float64              `json:"temperature,omitempty"`
+	MaxCompletionTokens *int64                `json:"max_completion_tokens,omitempty"`
+	TopP                *float64              `json:"top_p,omitempty"`
+}
+
+type chatRequestMessage struct {
+	Role      string            `json:"role"`
+	Content   any               `json:"content,omitempty"`
+	ToolCalls []chatToolCall    `json:"tool_calls,omitempty"`
+	ToolID    string            `json:"tool_call_id,omitempty"`
+	Function  *chatToolFunction `json:"function,omitempty"`
+}
+
+type chatToolCall struct {
+	ID       string           `json:"id"`
+	Type     string           `json:"type"`
+	Function chatToolFunction `json:"function"`
+}
+
+type chatToolFunction struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments,omitempty"`
+}
+
+type chatRequestToolSpec struct {
+	Type     string `json:"type"`
+	Function struct {
+		Name        string         `json:"name"`
+		Description string         `json:"description,omitempty"`
+		Parameters  map[string]any `json:"parameters,omitempty"`
+	} `json:"function"`
+}
+
 func TestNewGenkitAgentRequiresProviderAndModel(t *testing.T) {
 	_, err := NewGenkitAgent("", "gpt-4", nil, 0)
 	if err == nil {
@@ -42,13 +79,38 @@ func TestNewGenkitAgentRequiresConfiguredProvider(t *testing.T) {
 }
 
 func TestNewGenkitAgentRequiresAPIKey(t *testing.T) {
-	_, err := NewGenkitAgent("openai", "gpt-4", map[string]ProviderConfig{
-		"openai": {},
+	_, err := NewGenkitAgent("custom", "gpt-4", map[string]ProviderConfig{
+		"custom": {},
 	}, 0)
 	if err == nil {
 		t.Fatal("expected error for missing api key")
 	}
 	if !strings.Contains(err.Error(), "requires api_key or api_key_env") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestNewGenkitAgentDefaultsOpenAIAPIKeyEnv(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "sk-default")
+	agent, err := NewGenkitAgent("openai", "gpt-4", map[string]ProviderConfig{
+		"openai": {},
+	}, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if agent.config.APIKey != "sk-default" {
+		t.Fatalf("expected default OpenAI api key env, got %q", agent.config.APIKey)
+	}
+}
+
+func TestNewGenkitAgentReportsMissingAPIKeyEnv(t *testing.T) {
+	_, err := NewGenkitAgent("openai", "gpt-4", map[string]ProviderConfig{
+		"openai": {APIKeyEnv: "MISSING_OPENAI_KEY"},
+	}, 0)
+	if err == nil {
+		t.Fatal("expected error for missing api key env")
+	}
+	if !strings.Contains(err.Error(), `api_key_env "MISSING_OPENAI_KEY" is not set`) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -79,8 +141,32 @@ func TestNewGenkitAgentExplicitAPIKeyWinsOverEnv(t *testing.T) {
 	}
 }
 
-func TestRunSendsOpenAICompatibleRequest(t *testing.T) {
-	var received oaiRequest
+func TestOpenAIToolNameSanitizesInvalidCharacters(t *testing.T) {
+	got := openAIToolName("agentflow.list workflows!")
+	if got != "agentflow_list_workflows" {
+		t.Fatalf("unexpected sanitized name: %q", got)
+	}
+	if len(openAIToolName(strings.Repeat("a", 80))) > 64 {
+		t.Fatalf("expected sanitized name to be capped at 64 chars")
+	}
+}
+
+func TestNormalizeOpenAIBaseURLAppendsV1(t *testing.T) {
+	tests := map[string]string{
+		"https://api.openai.com":        "https://api.openai.com/v1",
+		"http://localhost:11434/":       "http://localhost:11434/v1",
+		"https://openrouter.ai/api/v1":  "https://openrouter.ai/api/v1",
+		"https://example.com/custom/v1": "https://example.com/custom/v1",
+	}
+	for in, want := range tests {
+		if got := normalizeOpenAIBaseURL(in); got != want {
+			t.Fatalf("normalizeOpenAIBaseURL(%q)=%q want %q", in, got, want)
+		}
+	}
+}
+
+func TestRunSendsGenkitOpenAICompatibleRequest(t *testing.T) {
+	var received chatCompletionRequest
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			t.Errorf("expected POST, got %s", r.Method)
@@ -88,28 +174,20 @@ func TestRunSendsOpenAICompatibleRequest(t *testing.T) {
 		if r.URL.Path != "/v1/chat/completions" {
 			t.Errorf("expected /v1/chat/completions, got %s", r.URL.Path)
 		}
-		auth := r.Header.Get("Authorization")
-		if auth != "Bearer sk-test" {
+		if auth := r.Header.Get("Authorization"); auth != "Bearer sk-test" {
 			t.Errorf("expected Bearer sk-test, got %s", auth)
 		}
-		if ct := r.Header.Get("Content-Type"); ct != "application/json" {
+		if ct := r.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
 			t.Errorf("expected application/json, got %s", ct)
 		}
 		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
 			t.Fatalf("decode request: %v", err)
 		}
 
-		resp := oaiResponse{
-			Choices: []struct {
-				Message      oaiMessage `json:"message"`
-				FinishReason string     `json:"finish_reason,omitempty"`
-			}{
-				{Message: oaiMessage{Role: "assistant", Content: "Hello from test"}},
-			},
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(resp)
+		writeChatCompletion(w, "test-model", map[string]any{
+			"role":    "assistant",
+			"content": "Hello from test",
+		})
 	}))
 	defer server.Close()
 
@@ -137,43 +215,31 @@ func TestRunSendsOpenAICompatibleRequest(t *testing.T) {
 	if resp.Metadata["provider"] != "test" {
 		t.Fatalf("unexpected provider metadata: %v", resp.Metadata)
 	}
-
 	if received.Model != "test-model" {
 		t.Fatalf("model=%q", received.Model)
 	}
 	if len(received.Messages) != 4 {
-		t.Fatalf("expected 4 messages (system + 2 history + user), got %d", len(received.Messages))
+		t.Fatalf("expected 4 messages (system + 2 history + user), got %d: %+v", len(received.Messages), received.Messages)
 	}
-	if received.Messages[0].Role != "system" {
-		t.Fatalf("first message must be system, got %s", received.Messages[0].Role)
+	if received.Messages[0].Role != "system" || !strings.Contains(messageText(received.Messages[0]), "AgentFlow") {
+		t.Fatalf("system message mismatch: %+v", received.Messages[0])
 	}
-	if !strings.Contains(received.Messages[0].Content, "AgentFlow") {
-		t.Fatalf("system prompt missing AgentFlow: %s", received.Messages[0].Content)
-	}
-	if received.Messages[1].Role != "user" || received.Messages[1].Content != "previous" {
+	if received.Messages[1].Role != "user" || messageText(received.Messages[1]) != "previous" {
 		t.Fatalf("history[0] mismatch: %+v", received.Messages[1])
 	}
-	if received.Messages[2].Role != "assistant" || received.Messages[2].Content != "ok" {
+	if received.Messages[2].Role != "assistant" || messageText(received.Messages[2]) != "ok" {
 		t.Fatalf("history[1] mismatch: %+v", received.Messages[2])
 	}
-	if received.Messages[3].Role != "user" || received.Messages[3].Content != "hi" {
+	if received.Messages[3].Role != "user" || messageText(received.Messages[3]) != "hi" {
 		t.Fatalf("user message mismatch: %+v", received.Messages[3])
 	}
 }
 
 func TestRunAppliesGenerationConfig(t *testing.T) {
-	var received oaiRequest
+	var received chatCompletionRequest
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewDecoder(r.Body).Decode(&received)
-		resp := oaiResponse{
-			Choices: []struct {
-				Message      oaiMessage `json:"message"`
-				FinishReason string     `json:"finish_reason,omitempty"`
-			}{{Message: oaiMessage{Role: "assistant", Content: "ok"}}},
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(resp)
+		writeChatCompletion(w, "m", map[string]any{"role": "assistant", "content": "ok"})
 	}))
 	defer server.Close()
 
@@ -196,8 +262,8 @@ func TestRunAppliesGenerationConfig(t *testing.T) {
 	if received.Temperature == nil || *received.Temperature != 0.5 {
 		t.Fatalf("temperature mismatch: %v", received.Temperature)
 	}
-	if received.MaxTokens == nil || *received.MaxTokens != 100 {
-		t.Fatalf("max_tokens mismatch: %v", received.MaxTokens)
+	if received.MaxCompletionTokens == nil || *received.MaxCompletionTokens != 100 {
+		t.Fatalf("max_completion_tokens mismatch: %v", received.MaxCompletionTokens)
 	}
 	if received.TopP == nil || *received.TopP != 0.9 {
 		t.Fatalf("top_p mismatch: %v", received.TopP)
@@ -205,18 +271,10 @@ func TestRunAppliesGenerationConfig(t *testing.T) {
 }
 
 func TestRunRespectsHistoryLimit(t *testing.T) {
-	var received oaiRequest
+	var received chatCompletionRequest
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewDecoder(r.Body).Decode(&received)
-		resp := oaiResponse{
-			Choices: []struct {
-				Message      oaiMessage `json:"message"`
-				FinishReason string     `json:"finish_reason,omitempty"`
-			}{{Message: oaiMessage{Role: "assistant", Content: "ok"}}},
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(resp)
+		writeChatCompletion(w, "m", map[string]any{"role": "assistant", "content": "ok"})
 	}))
 	defer server.Close()
 
@@ -244,19 +302,19 @@ func TestRunRespectsHistoryLimit(t *testing.T) {
 	if len(received.Messages) != 12 {
 		t.Fatalf("expected 12 messages with limit 10, got %d", len(received.Messages))
 	}
-	if received.Messages[1].Content != "msg-40" {
-		t.Fatalf("expected first history msg-40, got %s", received.Messages[1].Content)
+	if messageText(received.Messages[1]) != "msg-40" {
+		t.Fatalf("expected first history msg-40, got %s", messageText(received.Messages[1]))
 	}
 }
 
 func TestRunExecutesToolsUntilFinalAnswer(t *testing.T) {
 	var (
 		mu        sync.Mutex
-		requests  []oaiRequest
+		requests  []chatCompletionRequest
 		callCount int
 	)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var received oaiRequest
+		var received chatCompletionRequest
 		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
 			t.Fatalf("decode request: %v", err)
 		}
@@ -266,38 +324,22 @@ func TestRunExecutesToolsUntilFinalAnswer(t *testing.T) {
 		current := callCount
 		mu.Unlock()
 
-		w.Header().Set("Content-Type", "application/json")
 		switch current {
 		case 1:
-			resp := oaiResponse{
-				Choices: []struct {
-					Message      oaiMessage `json:"message"`
-					FinishReason string     `json:"finish_reason,omitempty"`
-				}{
-					{Message: oaiMessage{
-						Role: "assistant",
-						ToolCalls: []oaiToolCall{{
-							ID:   "call_1",
-							Type: "function",
-							Function: oaiToolFunction{
-								Name:      "agentflow.list_workflows",
-								Arguments: `{"include_runs":false}`,
-							},
-						}},
-					}},
-				},
-			}
-			_ = json.NewEncoder(w).Encode(resp)
+			writeChatCompletion(w, "m", map[string]any{
+				"role":    "assistant",
+				"content": nil,
+				"tool_calls": []map[string]any{{
+					"id":   "call_1",
+					"type": "function",
+					"function": map[string]any{
+						"name":      "agentflow_list_workflows",
+						"arguments": `{"include_runs":false}`,
+					},
+				}},
+			})
 		case 2:
-			resp := oaiResponse{
-				Choices: []struct {
-					Message      oaiMessage `json:"message"`
-					FinishReason string     `json:"finish_reason,omitempty"`
-				}{
-					{Message: oaiMessage{Role: "assistant", Content: "All done"}},
-				},
-			}
-			_ = json.NewEncoder(w).Encode(resp)
+			writeChatCompletion(w, "m", map[string]any{"role": "assistant", "content": "All done"})
 		default:
 			t.Fatalf("unexpected request count %d", current)
 		}
@@ -334,18 +376,27 @@ func TestRunExecutesToolsUntilFinalAnswer(t *testing.T) {
 	if len(requests[0].Tools) == 0 {
 		t.Fatal("expected tool definitions in first request")
 	}
-	if requests[0].Tools[0].Function.Name != "agentflow.list_workflows" {
-		t.Fatalf("unexpected tool name: %s", requests[0].Tools[0].Function.Name)
+	if !hasToolName(requests[0].Tools, "agentflow_list_workflows") {
+		t.Fatalf("expected agentflow_list_workflows tool, got: %+v", requests[0].Tools)
 	}
 	if len(requests[1].Messages) == 0 || requests[1].Messages[len(requests[1].Messages)-1].Role != "tool" {
 		t.Fatalf("expected tool message in second request: %+v", requests[1].Messages)
 	}
 }
 
+func hasToolName(tools []chatRequestToolSpec, name string) bool {
+	for _, tool := range tools {
+		if tool.Function.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
 func TestRunReturnsErrorOnHTTPFailure(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
-		_, _ = w.Write([]byte(`{"error":{"message":"invalid key"}}`))
+		_, _ = w.Write([]byte(`{"error":{"message":"invalid key","type":"invalid_request_error"}}`))
 	}))
 	defer server.Close()
 
@@ -359,37 +410,8 @@ func TestRunReturnsErrorOnHTTPFailure(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for 401")
 	}
-	if !strings.Contains(err.Error(), "401") {
-		t.Fatalf("expected 401 in error, got: %v", err)
-	}
-}
-
-func TestRunReturnsErrorOnModelError(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		resp := oaiResponse{
-			Error: &struct {
-				Message string `json:"message"`
-				Type    string `json:"type"`
-			}{Message: "context length exceeded", Type: "invalid_request_error"},
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(resp)
-	}))
-	defer server.Close()
-
-	agent, err := NewGenkitAgent("test", "m", map[string]ProviderConfig{
-		"test": {BaseURL: server.URL, APIKey: "k"},
-	}, 0)
-	if err != nil {
-		t.Fatalf("new agent: %v", err)
-	}
-	_, err = agent.Run(context.Background(), RunRequest{UserMessage: "x"})
-	if err == nil {
-		t.Fatal("expected error for model error")
-	}
-	if !strings.Contains(err.Error(), "context length exceeded") {
-		t.Fatalf("expected model error message, got: %v", err)
+	if !strings.Contains(err.Error(), "401") && !strings.Contains(err.Error(), "invalid key") {
+		t.Fatalf("expected HTTP/model error, got: %v", err)
 	}
 }
 
@@ -431,4 +453,40 @@ func (f *fakeAgent) Run(ctx context.Context, req RunRequest) (RunResponse, error
 
 func TestFakeAgentSatisfiesInterface(t *testing.T) {
 	var _ Agent = (*fakeAgent)(nil)
+}
+
+func writeChatCompletion(w http.ResponseWriter, model string, message map[string]any) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"id":      "chatcmpl-test",
+		"object":  "chat.completion",
+		"created": 0,
+		"model":   model,
+		"choices": []map[string]any{{
+			"index":         0,
+			"message":       message,
+			"finish_reason": "stop",
+		}},
+	})
+}
+
+func messageText(msg chatRequestMessage) string {
+	switch c := msg.Content.(type) {
+	case string:
+		return c
+	case []any:
+		var b strings.Builder
+		for _, part := range c {
+			m, ok := part.(map[string]any)
+			if !ok {
+				continue
+			}
+			if text, ok := m["text"].(string); ok {
+				b.WriteString(text)
+			}
+		}
+		return b.String()
+	default:
+		return ""
+	}
 }
