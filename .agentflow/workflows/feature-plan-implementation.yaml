@@ -85,7 +85,7 @@ nodes:
     nodes:
       - id: implement_plan
         kind: agent
-        provider: pi
+        provider: codex
         permission:
           write: true
         prompt: |
