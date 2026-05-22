@@ -9,12 +9,15 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/diasYuri/agentflow/internal/app"
 	"github.com/diasYuri/agentflow/internal/core/workflow"
 	"github.com/diasYuri/agentflow/internal/daemon"
+	"github.com/diasYuri/agentflow/internal/web/chatagent"
 	"github.com/diasYuri/agentflow/internal/web/diagnostics"
 	"github.com/diasYuri/agentflow/internal/web/events"
 	"github.com/diasYuri/agentflow/internal/web/persistence"
@@ -24,26 +27,40 @@ import (
 // Service exposes session, message, tool-call, approval, diagnostic,
 // SSE, and debug bundle endpoints under /api/v1.
 type Service struct {
-	Sessions            *session.Sessions
-	Diagnostics         *diagnostics.Recorder
-	Broker              *events.Broker
-	Projects            session.ProjectResolver
-	FolderPicker        FolderPicker
-	WorkflowDefinitions WorkflowDefinitionClient
-	WorkflowRuns        WorkflowRunClient
-	DB                  *persistence.DB
-	Bundler             *diagnostics.BundleExporter
+	Sessions              *session.Sessions
+	Diagnostics           *diagnostics.Recorder
+	Broker                *events.Broker
+	Projects              session.ProjectResolver
+	FolderPicker          FolderPicker
+	WorkflowDefinitions   WorkflowDefinitionClient
+	WorkflowRuns          WorkflowRunClient
+	logger                *slog.Logger
+	DB                    *persistence.DB
+	Bundler               *diagnostics.BundleExporter
+	ChatAgent             ChatAgent
+	ChatAgentTimeout      time.Duration
+	ChatAgentHistoryLimit int
 }
 
 // Options bundles dependencies for NewService.
 type Options struct {
-	DB                  *persistence.DB
-	Projects            session.ProjectResolver
-	Broker              *events.Broker
-	Policy              diagnostics.RedactionPolicy
-	FolderPicker        FolderPicker
-	WorkflowDefinitions WorkflowDefinitionClient
-	WorkflowRuns        WorkflowRunClient
+	DB                    *persistence.DB
+	Projects              session.ProjectResolver
+	Broker                *events.Broker
+	Policy                diagnostics.RedactionPolicy
+	FolderPicker          FolderPicker
+	WorkflowDefinitions   WorkflowDefinitionClient
+	WorkflowRuns          WorkflowRunClient
+	Logger                *slog.Logger
+	ChatAgent             ChatAgent
+	ChatAgentTimeout      time.Duration
+	ChatAgentHistoryLimit int
+}
+
+// ChatAgent is the narrow interface the API uses to schedule assistant
+// responses.  Nil means chat is not configured.
+type ChatAgent interface {
+	Run(ctx context.Context, req chatagent.RunRequest) (chatagent.RunResponse, error)
 }
 
 type projectAdder interface {
@@ -63,6 +80,7 @@ type WorkflowDefinitionClient interface {
 }
 
 type WorkflowRunClient interface {
+	RunWorkflow(ctx context.Context, req daemon.RunWorkflowRequest) (daemon.RunWorkflowResponse, error)
 	ListWorkflows(ctx context.Context) (daemon.ListWorkflowsResponse, error)
 	WorkflowStatus(ctx context.Context, runID string) (daemon.RunWorkflowResponse, error)
 	WorkflowEvents(ctx context.Context, runID string, cursor int, limit int) (daemon.WorkflowEventsResponse, error)
@@ -93,6 +111,9 @@ func NewService(opts Options) (*Service, error) {
 	if opts.FolderPicker == nil {
 		opts.FolderPicker = NativeFolderPicker{}
 	}
+	if opts.Logger == nil {
+		opts.Logger = slog.Default()
+	}
 	policy := opts.Policy
 	if policy.MaxValueBytes == 0 && len(policy.SecretKeySubstrings) == 0 && len(policy.SecretValuePatterns) == 0 {
 		policy = diagnostics.DefaultPolicy()
@@ -121,15 +142,19 @@ func NewService(opts Options) (*Service, error) {
 		Payloads:    persistence.NewPayloadStore(opts.DB),
 	}, policy)
 	return &Service{
-		Sessions:            sessions,
-		Diagnostics:         rec,
-		Broker:              opts.Broker,
-		Projects:            opts.Projects,
-		FolderPicker:        opts.FolderPicker,
-		WorkflowDefinitions: opts.WorkflowDefinitions,
-		WorkflowRuns:        opts.WorkflowRuns,
-		DB:                  opts.DB,
-		Bundler:             bundler,
+		Sessions:              sessions,
+		Diagnostics:           rec,
+		Broker:                opts.Broker,
+		Projects:              opts.Projects,
+		FolderPicker:          opts.FolderPicker,
+		WorkflowDefinitions:   opts.WorkflowDefinitions,
+		WorkflowRuns:          opts.WorkflowRuns,
+		logger:                opts.Logger,
+		DB:                    opts.DB,
+		Bundler:               bundler,
+		ChatAgent:             opts.ChatAgent,
+		ChatAgentTimeout:      opts.ChatAgentTimeout,
+		ChatAgentHistoryLimit: opts.ChatAgentHistoryLimit,
 	}, nil
 }
 

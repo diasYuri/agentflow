@@ -3,15 +3,17 @@ import { createRoot } from "react-dom/client";
 import "./styles/index.css";
 import { Providers } from "./app/providers";
 import { Router } from "./app/router";
+import { persistToken, resolveBootstrapToken } from "./lib/utils";
 
 // Shell ready marker for ingration tests
 console.info("agentflow web shell ready");
 
-const token =
-	new URLSearchParams(window.location.search).get("token") ??
-	localStorage.getItem("agentflow_token");
+const token = resolveBootstrapToken(
+	window.location.search,
+	localStorage.getItem("agentflow_token"),
+);
 if (token) {
-	localStorage.setItem("agentflow_token", token);
+	persistToken(token);
 	window.history.replaceState({}, "", window.location.pathname);
 }
 

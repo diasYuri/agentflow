@@ -213,6 +213,11 @@ func (s *Sessions) RecordToolCall(ctx context.Context, call persistence.ToolCall
 	return s.tools.Insert(ctx, call)
 }
 
+// GetToolCall returns a tool call row by id.
+func (s *Sessions) GetToolCall(ctx context.Context, id string) (persistence.ToolCall, error) {
+	return s.tools.Get(ctx, id)
+}
+
 // UpdateToolCallStatus transitions a tool call.
 func (s *Sessions) UpdateToolCallStatus(ctx context.Context, id string, status persistence.ToolCallStatus, responseRef, errMsg string) error {
 	return s.tools.UpdateStatus(ctx, id, status, responseRef, errMsg)

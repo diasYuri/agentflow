@@ -49,10 +49,32 @@ type Paths struct {
 	DaemonSocket string `toml:"daemon_socket"`
 }
 
+type ChatAgent struct {
+	Provider     string                    `toml:"provider"`
+	Model        string                    `toml:"model"`
+	Timeout      string                    `toml:"timeout"`
+	Sandbox      string                    `toml:"sandbox"`
+	HistoryLimit int                       `toml:"history_limit"`
+	Providers    map[string]ProviderConfig `toml:"-"`
+}
+
+// ProviderConfig holds the connection and generation settings for one
+// OpenAI-compatible backend.
+type ProviderConfig struct {
+	BaseURL     string            `toml:"base_url"`
+	APIKey      string            `toml:"api_key"`
+	APIKeyEnv   string            `toml:"api_key_env"`
+	Headers     map[string]string `toml:"-"`
+	Temperature float64           `toml:"temperature"`
+	MaxTokens   int               `toml:"max_tokens"`
+	TopP        float64           `toml:"top_p"`
+}
+
 type Settings struct {
-	Server Server `toml:"web"`
-	Auth   Auth   `toml:"web_auth"`
-	Paths  Paths  `toml:"paths"`
+	Server    Server    `toml:"web"`
+	Auth      Auth      `toml:"web_auth"`
+	Paths     Paths     `toml:"paths"`
+	ChatAgent ChatAgent `toml:"chat_agent"`
 }
 
 func Defaults() Settings {
@@ -64,6 +86,12 @@ func Defaults() Settings {
 			Daemon:      DaemonRequirementAuto,
 		},
 		Paths: Paths{Root: defaultRoot()},
+		ChatAgent: ChatAgent{
+			Timeout:      "60s",
+			Sandbox:      "read-only",
+			HistoryLimit: 40,
+			Providers:    map[string]ProviderConfig{},
+		},
 	}
 }
 

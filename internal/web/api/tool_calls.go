@@ -97,5 +97,8 @@ func (s *Service) handleToolCallChild(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if updated, err := s.Sessions.GetToolCall(r.Context(), id); err == nil {
+		s.Broker.Publish(updated.SessionID, events.KindToolCall, updated, updated.CorrelationID)
+	}
 	w.WriteHeader(http.StatusNoContent)
 }

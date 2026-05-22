@@ -66,7 +66,7 @@ export function SessionView() {
 			<div className="flex min-h-0 flex-1">
 				<div className="flex min-w-0 flex-1 flex-col">
 					<Timeline sessionId={id} />
-					<Composer sessionId={id} />
+						<Composer sessionId={id} projectName={session?.project_name} />
 				</div>
 				<div className="hidden w-72 shrink-0 overflow-auto border-l border-border/60 bg-background/35 px-3 pb-4 pt-16 backdrop-blur-xl lg:block">
 					<ToolCallPanel sessionId={id} />

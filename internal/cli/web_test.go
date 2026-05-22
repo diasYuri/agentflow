@@ -28,6 +28,7 @@ func TestWebCommandHelpListsFlags(t *testing.T) {
 	for _, want := range []string{
 		"--host", "--port", "--no-open", "--dev-assets",
 		"--daemon", "--root", "--token",
+		"-l", "--log",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("expected %q in help output:\n%s", want, got)
@@ -45,12 +46,13 @@ func TestWebCommandFlagsCaptured(t *testing.T) {
 		"--host", "127.0.0.2",
 		"--port", "12345",
 		"--no-open",
+		"-l",
 		"--daemon", "off",
 		"--token", "abc",
 	}); err != nil {
 		t.Fatalf("unexpected parse error: %v", err)
 	}
-	for _, want := range []string{"host", "port", "no-open", "daemon", "token"} {
+	for _, want := range []string{"host", "port", "no-open", "log", "daemon", "token"} {
 		if !web.Flags().Changed(want) {
 			t.Fatalf("expected flag %q to be marked changed", want)
 		}
@@ -62,6 +64,7 @@ func TestWebFlagsOverridesIncludeChangedValues(t *testing.T) {
 		host:         "127.0.0.5",
 		port:         1234,
 		noOpen:       true,
+		logToStdout:  true,
 		devAssets:    "/tmp/dev",
 		daemon:       string(settings.DaemonRequirementRequired),
 		root:         "/srv/root",

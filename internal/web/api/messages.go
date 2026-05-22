@@ -79,4 +79,7 @@ func (s *Service) handleAppendMessage(w http.ResponseWriter, r *http.Request, se
 	}
 	s.Broker.Publish(sessionID, events.KindMessage, stored, stored.CorrelationID)
 	writeJSON(w, http.StatusCreated, stored)
+	if stored.Role == persistence.MessageRoleUser {
+		s.scheduleChatAgent(sessionID, stored)
+	}
 }

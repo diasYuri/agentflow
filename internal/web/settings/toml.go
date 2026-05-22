@@ -66,6 +66,65 @@ func applyTOML(cfg *Settings, values map[string]map[string]string) error {
 			cfg.Paths.DaemonSocket = v
 		}
 	}
+	if chat, ok := values["chat_agent"]; ok {
+		if v, ok := chat["provider"]; ok {
+			cfg.ChatAgent.Provider = v
+		}
+		if v, ok := chat["model"]; ok {
+			cfg.ChatAgent.Model = v
+		}
+		if v, ok := chat["timeout"]; ok {
+			cfg.ChatAgent.Timeout = v
+		}
+		if v, ok := chat["sandbox"]; ok {
+			cfg.ChatAgent.Sandbox = v
+		}
+		if v, ok := chat["history_limit"]; ok {
+			if n, err := strconv.Atoi(v); err == nil {
+				cfg.ChatAgent.HistoryLimit = n
+			}
+		}
+	}
+	// Parse provider configs from sections like [chat_agent.providers.openai]
+	for section, kv := range values {
+		if !strings.HasPrefix(section, "chat_agent.providers.") {
+			continue
+		}
+		name := strings.TrimPrefix(section, "chat_agent.providers.")
+		if name == "" {
+			continue
+		}
+		pc := ProviderConfig{Headers: map[string]string{}}
+		for k, v := range kv {
+			switch k {
+			case "base_url":
+				pc.BaseURL = v
+			case "api_key":
+				pc.APIKey = v
+			case "api_key_env":
+				pc.APIKeyEnv = v
+			case "temperature":
+				if f, err := strconv.ParseFloat(v, 64); err == nil {
+					pc.Temperature = f
+				}
+			case "max_tokens":
+				if n, err := strconv.Atoi(v); err == nil {
+					pc.MaxTokens = n
+				}
+			case "top_p":
+				if f, err := strconv.ParseFloat(v, 64); err == nil {
+					pc.TopP = f
+				}
+			default:
+				// Treat unknown keys as optional headers
+				pc.Headers[k] = v
+			}
+		}
+		if cfg.ChatAgent.Providers == nil {
+			cfg.ChatAgent.Providers = map[string]ProviderConfig{}
+		}
+		cfg.ChatAgent.Providers[name] = pc
+	}
 	return nil
 }
 

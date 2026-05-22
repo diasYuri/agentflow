@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -14,6 +15,7 @@ import (
 	"github.com/diasYuri/agentflow/internal/core/workflow"
 	"github.com/diasYuri/agentflow/internal/daemon"
 	"github.com/diasYuri/agentflow/internal/web/api"
+	"github.com/diasYuri/agentflow/internal/web/chatagent"
 	"github.com/diasYuri/agentflow/internal/web/events"
 	"github.com/diasYuri/agentflow/internal/web/persistence"
 )
@@ -372,6 +374,18 @@ func newFakeWorkflowRuns() *fakeWorkflowRuns {
 	}
 }
 
+func (f *fakeWorkflowRuns) RunWorkflow(_ context.Context, req daemon.RunWorkflowRequest) (daemon.RunWorkflowResponse, error) {
+	run := daemon.WorkflowRun{
+		ID:        "run-new",
+		Workflow:  req.WorkflowRef,
+		Status:    corerun.RunRunning,
+		StartedAt: time.Date(2026, 5, 22, 12, 0, 0, 0, time.UTC),
+	}
+	f.lastAction = "run:" + req.WorkflowRef
+	f.run = run
+	return daemon.RunWorkflowResponse{Run: run}, nil
+}
+
 func (f *fakeWorkflowRuns) ListWorkflows(context.Context) (daemon.ListWorkflowsResponse, error) {
 	return daemon.ListWorkflowsResponse{Runs: []daemon.WorkflowRun{f.run}}, nil
 }
@@ -550,4 +564,133 @@ func TestToolCallLifecycleEndpointRoundTrip(t *testing.T) {
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("patch tool call: %d body=%s", rec.Code, rec.Body.String())
 	}
+}
+
+func TestAppendMessageSchedulesChatAgentAndPublishesAssistant(t *testing.T) {
+	svc, mux, broker := newTestServiceWithAgent(t, &fakeChatAgent{
+		resp: chatagent.RunResponse{
+			Text: "assistant reply",
+			Metadata: map[string]any{
+				"provider": "fake",
+			},
+		},
+	})
+	rec := doReq(t, mux, http.MethodPost, "/api/v1/projects/demo/sessions", nil)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create session: %d body=%s", rec.Code, rec.Body.String())
+	}
+	session := decodeSession(t, rec)
+
+	sub := broker.Subscribe(session.ID)
+	defer sub.Close()
+
+	rec = doReq(t, mux, http.MethodPost, "/api/v1/sessions/"+session.ID+"/messages", map[string]any{
+		"role":    "user",
+		"content": "hello",
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("append message: %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	assistantSeen := false
+	for time.Now().Before(deadline) {
+		select {
+		case ev := <-sub.C:
+			msg, ok := ev.Payload.(persistence.Message)
+			if !ok {
+				continue
+			}
+			if ev.Kind == events.KindMessage && msg.Role == persistence.MessageRoleAssistant && msg.Content == "assistant reply" {
+				assistantSeen = true
+				break
+			}
+		default:
+			time.Sleep(10 * time.Millisecond)
+		}
+		if assistantSeen {
+			break
+		}
+	}
+	if !assistantSeen {
+		t.Fatal("did not receive assistant SSE message")
+	}
+
+	messages, err := svc.Sessions.ListMessages(context.Background(), session.ID, 0)
+	if err != nil {
+		t.Fatalf("list messages: %v", err)
+	}
+	if len(messages) != 2 || messages[1].Role != persistence.MessageRoleAssistant || messages[1].Content != "assistant reply" {
+		t.Fatalf("unexpected messages: %+v", messages)
+	}
+
+	calls, err := svc.Sessions.ListToolCalls(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("list tool calls: %v", err)
+	}
+	if len(calls) != 1 || calls[0].Name != "agentflow.chat" || calls[0].Status != persistence.ToolCallStatusSucceeded {
+		t.Fatalf("unexpected tool calls: %+v", calls)
+	}
+}
+
+func TestAppendMessageChatAgentFailureMarksToolCallAndDiagnostic(t *testing.T) {
+	svc, mux, _ := newTestServiceWithAgent(t, &fakeChatAgent{err: errors.New("boom")})
+	rec := doReq(t, mux, http.MethodPost, "/api/v1/projects/demo/sessions", nil)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create session: %d body=%s", rec.Code, rec.Body.String())
+	}
+	session := decodeSession(t, rec)
+
+	rec = doReq(t, mux, http.MethodPost, "/api/v1/sessions/"+session.ID+"/messages", map[string]any{
+		"role":    "user",
+		"content": "hello",
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("append message: %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		calls, err := svc.Sessions.ListToolCalls(context.Background(), session.ID)
+		if err != nil {
+			t.Fatalf("list tool calls: %v", err)
+		}
+		if len(calls) == 1 && calls[0].Status == persistence.ToolCallStatusFailed {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	calls, err := svc.Sessions.ListToolCalls(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("list tool calls: %v", err)
+	}
+	if len(calls) != 1 || calls[0].Status != persistence.ToolCallStatusFailed || calls[0].Name != "agentflow.chat" {
+		t.Fatalf("unexpected tool calls: %+v", calls)
+	}
+
+	diags, err := svc.Diagnostics.ListBySession(context.Background(), session.ID, 10)
+	if err != nil {
+		t.Fatalf("list diagnostics: %v", err)
+	}
+	if len(diags) == 0 || diags[0].Level != persistence.DiagnosticLevelError {
+		t.Fatalf("unexpected diagnostics: %+v", diags)
+	}
+
+	messages, err := svc.Sessions.ListMessages(context.Background(), session.ID, 0)
+	if err != nil {
+		t.Fatalf("list messages: %v", err)
+	}
+	if len(messages) != 1 || messages[0].Role != persistence.MessageRoleUser {
+		t.Fatalf("unexpected messages: %+v", messages)
+	}
+}
+
+type fakeChatAgent struct {
+	resp chatagent.RunResponse
+	err  error
+}
+
+func (f *fakeChatAgent) Run(context.Context, chatagent.RunRequest) (chatagent.RunResponse, error) {
+	return f.resp, f.err
 }

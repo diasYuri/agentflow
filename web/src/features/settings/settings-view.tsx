@@ -1,4 +1,5 @@
 import { api } from "@/lib/api";
+import { clearPersistedToken } from "@/lib/utils";
 import { useStore } from "@/lib/store";
 import { useQuery } from "@tanstack/react-query";
 import { Settings } from "lucide-react";
@@ -95,12 +96,13 @@ export function SettingsView() {
 						Session Token
 					</h2>
 					<p className="mt-2 text-xs text-muted-foreground">
-						The token is stored in localStorage and sent with every request.
+						The token is stored in localStorage and mirrored into a cookie so
+						deep links keep working on reload.
 					</p>
 					<button
 						type="button"
 						onClick={() => {
-							localStorage.removeItem("agentflow_token");
+							clearPersistedToken();
 							window.location.reload();
 						}}
 						className="mt-3 rounded-xl border border-red-500/30 px-3 py-1.5 text-xs text-red-600 transition-colors hover:bg-red-500/10 dark:text-red-400"

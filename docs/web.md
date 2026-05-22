@@ -60,6 +60,7 @@ daemon_socket = ""          # override the agentflowd unix socket
 | `--host`         | `web.host`                           |
 | `--port`         | `web.port` (use `0` to auto-select)  |
 | `--no-open`      | `web.open_browser = false`           |
+| `-l`, `--log`    | send backend logs to stdout          |
 | `--dev-assets`   | `web.dev_assets`                     |
 | `--daemon`       | `web.daemon`                         |
 | `--root`         | `paths.root`                         |

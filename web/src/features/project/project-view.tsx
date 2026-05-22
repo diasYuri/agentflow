@@ -2,8 +2,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api";
+import { invalidateProjectSessionLists } from "@/lib/query-utils";
 import { useStore } from "@/lib/store";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	ArrowUp,
 	Bot,
@@ -20,6 +21,7 @@ export function ProjectView() {
 	const params = useParams();
 	const projectName = params.name ?? useStore.getState().selectedProject;
 	const navigate = useNavigate();
+	const queryClient = useQueryClient();
 	const { data: project } = useQuery({
 		queryKey: ["project", projectName],
 		queryFn: () => (projectName ? api.projects.get(projectName) : null),
@@ -47,12 +49,13 @@ export function ProjectView() {
 		e.preventDefault();
 		if (!title.trim() || !projectName) return;
 		setIsCreating(true);
-		try {
-			const session = await api.projects.createSession(projectName, {
-				title: title.trim(),
-			});
-			setTitle("");
-			navigate(`/sessions/${session.id}`);
+			try {
+				const session = await api.projects.createSession(projectName, {
+					title: title.trim(),
+				});
+				await invalidateProjectSessionLists(queryClient, projectName);
+				setTitle("");
+				navigate(`/sessions/${session.id}`);
 		} catch (err) {
 			alert(String(err));
 		} finally {
@@ -64,16 +67,17 @@ export function ProjectView() {
 		const text = prompt.trim();
 		if (!text || !projectName || isCreating) return;
 		setIsCreating(true);
-		try {
-			const session = await api.projects.createSession(projectName, {
-				title: text.slice(0, 80),
-			});
-			await api.sessions.appendMessage(session.id, {
-				role: "user",
-				content: text,
-			});
-			setPrompt("");
-			navigate(`/sessions/${session.id}`);
+			try {
+				const session = await api.projects.createSession(projectName, {
+					title: text.slice(0, 80),
+				});
+				await api.sessions.appendMessage(session.id, {
+					role: "user",
+					content: text,
+				});
+				await invalidateProjectSessionLists(queryClient, projectName);
+				setPrompt("");
+				navigate(`/sessions/${session.id}`);
 		} catch (err) {
 			alert(String(err));
 		} finally {

@@ -1,26 +1,40 @@
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api";
+import { invalidateConversationQueries } from "@/lib/query-utils";
 import { ArrowUp, AtSign, ChevronDown, Mic } from "lucide-react";
 import { useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 
-export function Composer({ sessionId }: { sessionId: string }) {
+export function Composer({
+	sessionId,
+	projectName,
+}: {
+	sessionId: string;
+	projectName?: string | null;
+}) {
 	const [content, setContent] = useState("");
 	const [sending, setSending] = useState(false);
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
+	const queryClient = useQueryClient();
 
 	const submit = async () => {
 		const text = content.trim();
 		if (!text || sending) return;
 		setSending(true);
 		try {
-			await api.sessions.appendMessage(sessionId, {
-				role: "user",
-				content: text,
-			});
-			setContent("");
-			textareaRef.current?.focus();
-		} catch (err) {
+				await api.sessions.appendMessage(sessionId, {
+					role: "user",
+					content: text,
+				});
+				await invalidateConversationQueries(
+					queryClient,
+					sessionId,
+					projectName,
+				);
+				setContent("");
+				textareaRef.current?.focus();
+			} catch (err) {
 			alert(String(err));
 		} finally {
 			setSending(false);

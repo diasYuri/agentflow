@@ -223,3 +223,98 @@ func TestCommentsAndBlankLinesAreIgnored(t *testing.T) {
 		t.Fatalf("port=%d", cfg.Server.Port)
 	}
 }
+
+func TestLoadParsesChatAgentSettings(t *testing.T) {
+	tmp := t.TempDir()
+	body := []byte("[chat_agent]\nprovider = \"openai\"\nmodel = \"gpt-4\"\ntimeout = \"30s\"\nsandbox = \"read-only\"\nhistory_limit = 20\n\n[chat_agent.providers.openai]\nbase_url = \"https://api.openai.com\"\napi_key_env = \"OPENAI_API_KEY\"\ntemperature = 0.2\nmax_tokens = 1000\ntop_p = 0.9\nX-Custom = \"header-value\"\n\n[chat_agent.providers.ollama]\nbase_url = \"http://localhost:11434\"\napi_key = \"ollama-key\"\n")
+	if err := os.WriteFile(filepath.Join(tmp, SettingsFileName), body, 0o600); err != nil {
+		t.Fatalf("write toml: %v", err)
+	}
+	cfg, err := Load(tmp, MapEnv{}, Overrides{})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.ChatAgent.Provider != "openai" {
+		t.Fatalf("provider=%s", cfg.ChatAgent.Provider)
+	}
+	if cfg.ChatAgent.Model != "gpt-4" {
+		t.Fatalf("model=%s", cfg.ChatAgent.Model)
+	}
+	if cfg.ChatAgent.Timeout != "30s" {
+		t.Fatalf("timeout=%s", cfg.ChatAgent.Timeout)
+	}
+	if cfg.ChatAgent.Sandbox != "read-only" {
+		t.Fatalf("sandbox=%s", cfg.ChatAgent.Sandbox)
+	}
+	if cfg.ChatAgent.HistoryLimit != 20 {
+		t.Fatalf("history_limit=%d", cfg.ChatAgent.HistoryLimit)
+	}
+	openai, ok := cfg.ChatAgent.Providers["openai"]
+	if !ok {
+		t.Fatal("missing openai provider")
+	}
+	if openai.BaseURL != "https://api.openai.com" {
+		t.Fatalf("base_url=%s", openai.BaseURL)
+	}
+	if openai.APIKeyEnv != "OPENAI_API_KEY" {
+		t.Fatalf("api_key_env=%s", openai.APIKeyEnv)
+	}
+	if openai.Temperature != 0.2 {
+		t.Fatalf("temperature=%f", openai.Temperature)
+	}
+	if openai.MaxTokens != 1000 {
+		t.Fatalf("max_tokens=%d", openai.MaxTokens)
+	}
+	if openai.TopP != 0.9 {
+		t.Fatalf("top_p=%f", openai.TopP)
+	}
+	if openai.Headers["X-Custom"] != "header-value" {
+		t.Fatalf("header=%v", openai.Headers)
+	}
+	ollama, ok := cfg.ChatAgent.Providers["ollama"]
+	if !ok {
+		t.Fatal("missing ollama provider")
+	}
+	if ollama.APIKey != "ollama-key" {
+		t.Fatalf("ollama api_key=%s", ollama.APIKey)
+	}
+}
+
+func TestLoadChatAgentEnvOverridesTOML(t *testing.T) {
+	tmp := t.TempDir()
+	body := []byte("[chat_agent]\nprovider = \"openai\"\nmodel = \"gpt-4\"\n")
+	if err := os.WriteFile(filepath.Join(tmp, SettingsFileName), body, 0o600); err != nil {
+		t.Fatalf("write toml: %v", err)
+	}
+	env := MapEnv{
+		EnvPrefix + "CHAT_AGENT_PROVIDER": "anthropic",
+		EnvPrefix + "CHAT_AGENT_MODEL":    "claude-3",
+	}
+	cfg, err := Load(tmp, env, Overrides{})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.ChatAgent.Provider != "anthropic" {
+		t.Fatalf("provider=%s", cfg.ChatAgent.Provider)
+	}
+	if cfg.ChatAgent.Model != "claude-3" {
+		t.Fatalf("model=%s", cfg.ChatAgent.Model)
+	}
+}
+
+func TestDefaultsIncludeChatAgentDefaults(t *testing.T) {
+	d := Defaults()
+	if d.ChatAgent.Timeout != "60s" {
+		t.Fatalf("timeout=%s", d.ChatAgent.Timeout)
+	}
+	if d.ChatAgent.Sandbox != "read-only" {
+		t.Fatalf("sandbox=%s", d.ChatAgent.Sandbox)
+	}
+	if d.ChatAgent.HistoryLimit != 40 {
+		t.Fatalf("history_limit=%d", d.ChatAgent.HistoryLimit)
+	}
+	if d.ChatAgent.Providers == nil {
+		t.Fatal("providers map is nil")
+	}
+}
+

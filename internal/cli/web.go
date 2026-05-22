@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -17,13 +18,14 @@ import (
 // zero pointers so the settings package can distinguish "user did not
 // pass this flag" from "user pinned the default".
 type webFlags struct {
-	host      string
-	port      int
-	noOpen    bool
-	devAssets string
-	daemon    string
-	root      string
-	token     string
+	host        string
+	port        int
+	noOpen      bool
+	logToStdout bool
+	devAssets   string
+	daemon      string
+	root        string
+	token       string
 
 	hostSet      bool
 	portSet      bool
@@ -52,6 +54,7 @@ func newWebCommand() *cobra.Command {
 	cmd.Flags().StringVar(&flags.daemon, "daemon", string(settings.DaemonRequirementAuto), "agentflowd requirement: auto, required, or off")
 	cmd.Flags().StringVar(&flags.root, "root", "", "override the AgentFlow root directory (default ~/.agentflow)")
 	cmd.Flags().StringVar(&flags.token, "token", "", "override the generated session token (advanced)")
+	cmd.Flags().BoolVarP(&flags.logToStdout, "log", "l", false, "send backend logs to stdout")
 
 	cmd.PreRunE = func(cmd *cobra.Command, _ []string) error {
 		flags.hostSet = cmd.Flags().Changed("host")
@@ -72,9 +75,13 @@ func runWebCommand(cmd *cobra.Command, flags *webFlags) error {
 	if err != nil {
 		return err
 	}
+	var logOutput io.Writer = os.Stderr
+	if flags.logToStdout {
+		logOutput = cmd.OutOrStdout()
+	}
 	command := &web.Command{
 		Settings: cfg,
-		Logger:   slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		Logger:   slog.New(slog.NewTextHandler(logOutput, nil)),
 		Stdout:   cmd.OutOrStdout(),
 		OpenURL:  openBrowserURL,
 	}

@@ -15,6 +15,7 @@ import (
 	"github.com/diasYuri/agentflow/internal/app"
 	"github.com/diasYuri/agentflow/internal/daemon"
 	"github.com/diasYuri/agentflow/internal/web/api"
+	"github.com/diasYuri/agentflow/internal/web/chatagent"
 	"github.com/diasYuri/agentflow/internal/web/events"
 	"github.com/diasYuri/agentflow/internal/web/persistence"
 	"github.com/diasYuri/agentflow/internal/web/session"
@@ -151,12 +152,28 @@ func (c *Command) openAPI(ctx context.Context) error {
 	}
 	broker := events.NewBroker(64)
 	daemonClient := daemon.NewClient(c.Settings.Paths.DaemonSocket)
+	agent, agentTimeout, fallbackReason := buildChatAgent(c.Settings.ChatAgent)
+	if fallbackReason != "" {
+		c.Logger.Warn("chat agent fallback enabled", "reason", fallbackReason)
+	} else {
+		c.Logger.Info(
+			"chat agent configured",
+			"provider", c.Settings.ChatAgent.Provider,
+			"model", c.Settings.ChatAgent.Model,
+			"timeout", agentTimeout.String(),
+			"history_limit", c.Settings.ChatAgent.HistoryLimit,
+		)
+	}
 	svc, err := api.NewService(api.Options{
-		DB:                  db,
-		Projects:            projects,
-		Broker:              broker,
-		WorkflowDefinitions: daemonClient,
-		WorkflowRuns:        daemonClient,
+		DB:                    db,
+		Projects:              projects,
+		Broker:                broker,
+		Logger:                c.Logger,
+		WorkflowDefinitions:   daemonClient,
+		WorkflowRuns:          daemonClient,
+		ChatAgent:             agent,
+		ChatAgentTimeout:      agentTimeout,
+		ChatAgentHistoryLimit: c.Settings.ChatAgent.HistoryLimit,
 	})
 	if err != nil {
 		_ = db.Close()
@@ -167,6 +184,41 @@ func (c *Command) openAPI(ctx context.Context) error {
 	c.api = svc
 	c.broker = broker
 	return nil
+}
+
+func buildChatAgent(cfg settings.ChatAgent) (chatagent.Agent, time.Duration, string) {
+	timeout := defaultChatAgentTimeout(cfg.Timeout)
+	if cfg.Provider == "" || cfg.Model == "" {
+		reason := "chat agent is not configured"
+		return chatagent.NewFallbackAgent(reason), timeout, reason
+	}
+	providers := map[string]chatagent.ProviderConfig{}
+	for name, pc := range cfg.Providers {
+		providers[name] = chatagent.ProviderConfig{
+			BaseURL:     pc.BaseURL,
+			APIKey:      pc.APIKey,
+			APIKeyEnv:   pc.APIKeyEnv,
+			Headers:     pc.Headers,
+			Temperature: pc.Temperature,
+			MaxTokens:   pc.MaxTokens,
+			TopP:        pc.TopP,
+		}
+	}
+	agent, err := chatagent.NewGenkitAgent(cfg.Provider, cfg.Model, providers, timeout)
+	if err != nil {
+		reason := err.Error()
+		return chatagent.NewFallbackAgent(reason), timeout, reason
+	}
+	return agent, timeout, ""
+}
+
+func defaultChatAgentTimeout(raw string) time.Duration {
+	if strings.TrimSpace(raw) != "" {
+		if d, err := time.ParseDuration(raw); err == nil && d > 0 {
+			return d
+		}
+	}
+	return 60 * time.Second
 }
 
 func (c *Command) closeAPI() {

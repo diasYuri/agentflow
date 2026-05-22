@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/diasYuri/agentflow/internal/web/chatagent"
 	"github.com/diasYuri/agentflow/internal/web/settings"
 )
 
@@ -80,5 +81,31 @@ func TestAssetProviderFallsBackToEmbedded(t *testing.T) {
 	c := &Command{Settings: cfg}
 	if _, ok := c.assetProvider().(*embeddedAssets); !ok {
 		t.Fatalf("expected embeddedAssets when DevAssets empty")
+	}
+}
+
+func TestBuildChatAgentFallsBackWhenUnconfigured(t *testing.T) {
+	agent, timeout, reason := buildChatAgent(settings.ChatAgent{})
+	if agent == nil {
+		t.Fatal("expected fallback agent, got nil")
+	}
+	if timeout <= 0 {
+		t.Fatalf("unexpected timeout: %s", timeout)
+	}
+	if reason == "" {
+		t.Fatal("expected fallback reason")
+	}
+	resp, err := agent.Run(context.Background(), chatagent.RunRequest{
+		ProjectName: "demo",
+		UserMessage: "hello",
+	})
+	if err != nil {
+		t.Fatalf("run fallback agent: %v", err)
+	}
+	if resp.Metadata["provider"] != "fallback" {
+		t.Fatalf("provider=%v", resp.Metadata["provider"])
+	}
+	if !strings.Contains(resp.Text, "chat agent is not configured") {
+		t.Fatalf("fallback response did not explain the configuration gap: %q", resp.Text)
 	}
 }

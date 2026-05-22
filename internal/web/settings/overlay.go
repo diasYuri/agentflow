@@ -34,6 +34,12 @@ func applyEnv(cfg *Settings, env Env) {
 	if v, ok := lookupNonEmpty(env, EnvPrefix+"DAEMON_SOCKET"); ok {
 		cfg.Paths.DaemonSocket = v
 	}
+	if v, ok := lookupNonEmpty(env, EnvPrefix+"CHAT_AGENT_PROVIDER"); ok {
+		cfg.ChatAgent.Provider = v
+	}
+	if v, ok := lookupNonEmpty(env, EnvPrefix+"CHAT_AGENT_MODEL"); ok {
+		cfg.ChatAgent.Model = v
+	}
 }
 
 // applyOverrides overlays the CLI flag values, which always win because

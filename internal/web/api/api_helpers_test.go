@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -52,6 +54,10 @@ func (s *stubProjects) Add(name, path string) error {
 }
 
 func newTestService(t *testing.T) (*api.Service, *http.ServeMux, *events.Broker) {
+	return newTestServiceWithAgent(t, nil)
+}
+
+func newTestServiceWithAgent(t *testing.T, agent api.ChatAgent) (*api.Service, *http.ServeMux, *events.Broker) {
 	t.Helper()
 	dir := t.TempDir()
 	db, err := persistence.Open(context.Background(), filepath.Join(dir, "web.sqlite"))
@@ -61,7 +67,13 @@ func newTestService(t *testing.T) (*api.Service, *http.ServeMux, *events.Broker)
 	t.Cleanup(func() { db.Close() })
 	projects := newStubProjects(app.Project{Name: "demo", Path: "/p"})
 	broker := events.NewBroker(8)
-	svc, err := api.NewService(api.Options{DB: db, Projects: projects, Broker: broker})
+	svc, err := api.NewService(api.Options{
+		DB:        db,
+		Projects:  projects,
+		Broker:    broker,
+		ChatAgent: agent,
+		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
 	if err != nil {
 		t.Fatalf("new service: %v", err)
 	}
