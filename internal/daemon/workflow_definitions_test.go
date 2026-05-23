@@ -44,8 +44,14 @@ func TestWorkflowDefinitionCRUDPersistsInSQLiteAndFilesystem(t *testing.T) {
 	t.Cleanup(ts.Close)
 
 	spec := coreworkflow.WorkflowSpec{
-		Version: "1",
+		Version: "2",
 		Name:    "internal-crud",
+		Inputs: map[string]coreworkflow.InputSpec{
+			"query": {Type: "string", Required: true},
+		},
+		Outputs: map[string]coreworkflow.OutputSpec{
+			"summary": {Type: "string", Value: "${nodes.ok.output}"},
+		},
 		Nodes: []coreworkflow.NodeSpec{
 			{ID: "ok", Kind: coreworkflow.NodeKindNoop},
 		},
@@ -90,6 +96,15 @@ func TestWorkflowDefinitionCRUDPersistsInSQLiteAndFilesystem(t *testing.T) {
 	mustDecodeBody(t, getResp.Body, &got)
 	if got.WorkflowDefinition.ID != created.WorkflowDefinition.ID {
 		t.Fatalf("expected id %q, got %q", created.WorkflowDefinition.ID, got.WorkflowDefinition.ID)
+	}
+	if got.WorkflowDefinition.Inputs["query"].Type != "string" {
+		t.Fatalf("expected input metadata, got %#v", got.WorkflowDefinition.Inputs)
+	}
+	if got.WorkflowDefinition.Outputs["summary"].Type != "string" {
+		t.Fatalf("expected output metadata, got %#v", got.WorkflowDefinition.Outputs)
+	}
+	if !strings.Contains(got.WorkflowDefinition.Graph, "graph TD") || len(got.WorkflowDefinition.Order) != 1 {
+		t.Fatalf("expected graph metadata, got graph=%q order=%#v", got.WorkflowDefinition.Graph, got.WorkflowDefinition.Order)
 	}
 
 	updatedSpec := coreworkflow.WorkflowSpec{

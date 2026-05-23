@@ -14,6 +14,7 @@ import (
 
 type WorkflowDefinitionClient interface {
 	ListWorkflowDefinitions(ctx context.Context) (daemon.WorkflowDefinitionsResponse, error)
+	WorkflowDefinition(ctx context.Context, id string) (daemon.WorkflowDefinitionResponse, error)
 }
 
 type WorkflowRunClient interface {
@@ -67,6 +68,7 @@ func BuildTools(env *ToolEnvironment) []Tool {
 	}
 	return []Tool{
 		newListWorkflowsTool(env),
+		newDescribeWorkflowTool(env),
 		newRunWorkflowTool(env),
 		newInspectWorkflowTool(env),
 		newReadProjectTool(env),
@@ -143,6 +145,48 @@ func newListWorkflowsTool(env *ToolEnvironment) Tool {
 			"properties": map[string]any{
 				"include_runs": map[string]any{"type": "boolean"},
 			},
+			"additionalProperties": false,
+		},
+		Invoke: invoke,
+	}
+}
+
+type describeWorkflowInput struct {
+	Workflow string `json:"workflow"`
+}
+
+type describeWorkflowOutput struct {
+	Definition daemon.WorkflowDefinition `json:"definition"`
+}
+
+func newDescribeWorkflowTool(env *ToolEnvironment) Tool {
+	invoke := func(ctx context.Context, raw json.RawMessage) (any, error) {
+		if env.Definitions == nil {
+			return nil, errors.New("workflow definition client is not configured")
+		}
+		var in describeWorkflowInput
+		if err := decodeToolInput(raw, &in); err != nil {
+			return nil, err
+		}
+		ref := strings.TrimSpace(in.Workflow)
+		if ref == "" {
+			return nil, errors.New("workflow is required")
+		}
+		resp, err := env.Definitions.WorkflowDefinition(ctx, ref)
+		if err != nil {
+			return nil, fmt.Errorf("describe workflow %s: %w", ref, err)
+		}
+		return describeWorkflowOutput{Definition: resp.WorkflowDefinition}, nil
+	}
+	return Tool{
+		Name:        "agentflow.describe_workflow",
+		Description: "Get a workflow definition by id or name, including declared inputs, outputs, graph, execution order, and raw spec.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"workflow": map[string]any{"type": "string"},
+			},
+			"required":             []string{"workflow"},
 			"additionalProperties": false,
 		},
 		Invoke: invoke,

@@ -441,6 +441,10 @@ func (f *toolDefsFake) ListWorkflowDefinitions(context.Context) (daemon.Workflow
 	return daemon.WorkflowDefinitionsResponse{Definitions: f.defs}, nil
 }
 
+func (f *toolDefsFake) WorkflowDefinition(context.Context, string) (daemon.WorkflowDefinitionResponse, error) {
+	return daemon.WorkflowDefinitionResponse{}, nil
+}
+
 // fakeAgent is a test double that returns canned responses.
 type fakeAgent struct {
 	resp RunResponse

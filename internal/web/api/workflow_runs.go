@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+
+	"github.com/diasYuri/agentflow/internal/daemon"
 )
 
 const (
@@ -25,6 +27,18 @@ func (s *Service) handleWorkflowRuns(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, resp)
+	case http.MethodPost:
+		var req daemon.RunWorkflowRequest
+		if err := decodeJSON(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		resp, err := s.WorkflowRuns.RunWorkflow(r.Context(), req)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusCreated, resp)
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}

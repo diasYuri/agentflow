@@ -129,6 +129,31 @@ func TestWorkflowRunProxyListsAndInspectsRuns(t *testing.T) {
 	}
 }
 
+func TestWorkflowRunProxyStartsRun(t *testing.T) {
+	svc, mux, _ := newTestService(t)
+	client := newFakeWorkflowRuns()
+	svc.WorkflowRuns = client
+
+	rec := doReq(t, mux, http.MethodPost, "/api/v1/workflows", map[string]any{
+		"workflow_ref": "build",
+		"inputs":       map[string]any{"query": "ship"},
+		"tag":          "web",
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("run status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if client.lastAction != "run:build" {
+		t.Fatalf("unexpected action %q", client.lastAction)
+	}
+	var got daemon.RunWorkflowResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode run: %v", err)
+	}
+	if got.Run.ID != "run-new" || got.Run.Workflow != "build" {
+		t.Fatalf("unexpected run: %+v", got.Run)
+	}
+}
+
 func TestWorkflowRunProxyActions(t *testing.T) {
 	svc, mux, _ := newTestService(t)
 	client := newFakeWorkflowRuns()

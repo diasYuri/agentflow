@@ -115,7 +115,13 @@ adds it before calling the provider.
 | GET    | `/api/v1/sessions/{id}/stream`      | yes  | SSE stream for session events                       |
 | GET    | `/api/v1/stream`                    | yes  | SSE stream for all events                           |
 | GET    | `/api/v1/diagnostics`               | yes  | Recent diagnostics across all sessions              |
+| GET    | `/api/v1/workflow-definitions`      | yes  | List workflow definitions from `agentflowd`         |
+| GET    | `/api/v1/workflow-definitions/{id}` | yes  | Get inputs, outputs, graph, order, and raw spec     |
+| POST   | `/api/v1/workflow-definitions`      | yes  | Create a workflow definition from JSON or YAML      |
+| PUT    | `/api/v1/workflow-definitions/{id}` | yes  | Update a workflow definition from JSON or YAML      |
+| DELETE | `/api/v1/workflow-definitions/{id}` | yes  | Delete a workflow definition                        |
 | GET    | `/api/v1/workflows`                 | yes  | List workflow runs from `agentflowd`                |
+| POST   | `/api/v1/workflows`                 | yes  | Start a workflow run with `workflow_ref` and inputs |
 | GET    | `/api/v1/workflows/{run_id}`        | yes  | Get workflow run status                             |
 | GET    | `/api/v1/workflows/{run_id}/inspect` | yes | Get executive run metrics                           |
 | GET    | `/api/v1/workflows/{run_id}/nodes`  | yes  | List node results for a run                         |
@@ -158,6 +164,9 @@ Requests from non-loopback peers are rejected with HTTP 403.
 - **Right panel** -- tool-call lifecycle cards, approval actions (approve/reject), and recent diagnostics.
 
 ### Workflow editor
+- Lists workflow definitions through `/api/v1/workflow-definitions`.
+- Shows the selected definition's declared inputs, outputs, Mermaid graph, and raw execution order.
+- Builds a run payload from declared input types and starts execution through `POST /api/v1/workflows`.
 - **YAML editor** -- plain textarea with syntax-friendly monospace font; drafts persist to localStorage.
 - **Graph view** -- canvas-based visualization of workflow nodes and dependency edges.
 - **Toggle** -- switch between YAML and Graph views.

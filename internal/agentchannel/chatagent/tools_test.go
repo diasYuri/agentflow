@@ -16,11 +16,16 @@ import (
 
 type fakeDefinitions struct {
 	resp daemon.WorkflowDefinitionsResponse
+	def  daemon.WorkflowDefinitionResponse
 	err  error
 }
 
 func (f *fakeDefinitions) ListWorkflowDefinitions(_ context.Context) (daemon.WorkflowDefinitionsResponse, error) {
 	return f.resp, f.err
+}
+
+func (f *fakeDefinitions) WorkflowDefinition(_ context.Context, _ string) (daemon.WorkflowDefinitionResponse, error) {
+	return f.def, f.err
 }
 
 type fakeRuns struct {
@@ -124,14 +129,14 @@ func findTool(t *testing.T, tools []Tool, name string) Tool {
 
 func TestBuildToolsListsFiveTools(t *testing.T) {
 	tools := BuildTools(&ToolEnvironment{})
-	if len(tools) != 5 {
-		t.Fatalf("expected 5 tools, got %d", len(tools))
+	if len(tools) != 6 {
+		t.Fatalf("expected 6 tools, got %d", len(tools))
 	}
 	names := map[string]bool{}
 	for _, tool := range tools {
 		names[tool.Name] = true
 	}
-	want := []string{"agentflow.list_workflows", "agentflow.run_workflow", "agentflow.inspect_workflow", "agentflow.read_project", "agentflow.ask_environment"}
+	want := []string{"agentflow.list_workflows", "agentflow.describe_workflow", "agentflow.run_workflow", "agentflow.inspect_workflow", "agentflow.read_project", "agentflow.ask_environment"}
 	for _, n := range want {
 		if !names[n] {
 			t.Fatalf("missing tool %q", n)
@@ -169,6 +174,32 @@ func TestListWorkflowsOmitsRunsWhenIncludeRunsFalse(t *testing.T) {
 	out := result.(listWorkflowsOutput)
 	if len(out.Runs) != 0 {
 		t.Fatalf("expected zero runs, got %d", len(out.Runs))
+	}
+}
+
+func TestDescribeWorkflowReturnsInputsOutputsAndGraph(t *testing.T) {
+	defs := &fakeDefinitions{def: daemon.WorkflowDefinitionResponse{WorkflowDefinition: daemon.WorkflowDefinition{
+		ID:    "wf1",
+		Name:  "build",
+		Graph: "graph TD\n  start\n",
+		Inputs: map[string]workflow.InputSpec{
+			"query": {Type: "string", Required: true},
+		},
+		Outputs: map[string]workflow.OutputSpec{
+			"summary": {Type: "string"},
+		},
+	}}}
+	tool := findTool(t, BuildTools(&ToolEnvironment{Definitions: defs}), "agentflow.describe_workflow")
+	result, err := tool.Invoke(context.Background(), json.RawMessage(`{"workflow":"build"}`))
+	if err != nil {
+		t.Fatalf("invoke: %v", err)
+	}
+	out := result.(describeWorkflowOutput)
+	if out.Definition.Inputs["query"].Type != "string" || out.Definition.Outputs["summary"].Type != "string" {
+		t.Fatalf("missing definition metadata: %+v", out.Definition)
+	}
+	if !strings.Contains(out.Definition.Graph, "graph TD") {
+		t.Fatalf("missing graph: %q", out.Definition.Graph)
 	}
 }
 

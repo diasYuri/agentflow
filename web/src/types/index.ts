@@ -105,9 +105,28 @@ export interface WorkflowDefinitionSummary {
 export interface WorkflowDefinition {
 	id: string;
 	name: string;
+	version?: string;
+	description?: string;
+	inputs: Record<string, WorkflowInputSpec>;
+	outputs: Record<string, WorkflowOutputSpec>;
+	graph: string;
+	order: string[];
 	spec: WorkflowSpec;
 	created_at: string;
 	updated_at: string;
+}
+
+export interface WorkflowInputSpec {
+	type?: string;
+	required?: boolean;
+	default?: unknown;
+	schema?: Record<string, unknown>;
+}
+
+export interface WorkflowOutputSpec {
+	value?: unknown;
+	type?: string;
+	schema?: Record<string, unknown>;
 }
 
 export interface WorkflowSpec {
@@ -162,6 +181,15 @@ export interface WorkflowRun {
 	recent_events?: string[];
 	tag?: string;
 	resume_queued?: boolean;
+}
+
+export interface RunWorkflowRequest {
+	workflow_ref: string;
+	inputs?: Record<string, unknown>;
+	vars?: Record<string, unknown>;
+	tag?: string;
+	dry_run?: boolean;
+	working_dir?: string;
 }
 
 export interface WorkflowInspect {

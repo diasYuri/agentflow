@@ -30,11 +30,17 @@ type WorkflowDefinitionRecord struct {
 }
 
 type WorkflowDefinition struct {
-	ID        string                `json:"id"`
-	Name      string                `json:"name"`
-	Spec      workflow.WorkflowSpec `json:"spec"`
-	CreatedAt time.Time             `json:"created_at"`
-	UpdatedAt time.Time             `json:"updated_at"`
+	ID          string                         `json:"id"`
+	Name        string                         `json:"name"`
+	Version     string                         `json:"version"`
+	Description string                         `json:"description,omitempty"`
+	Inputs      map[string]workflow.InputSpec  `json:"inputs"`
+	Outputs     map[string]workflow.OutputSpec `json:"outputs"`
+	Graph       string                         `json:"graph"`
+	Order       []string                       `json:"order"`
+	Spec        workflow.WorkflowSpec          `json:"spec"`
+	CreatedAt   time.Time                      `json:"created_at"`
+	UpdatedAt   time.Time                      `json:"updated_at"`
 }
 
 type WorkflowDefinitionSummary struct {
@@ -123,12 +129,9 @@ func (s *WorkflowDefinitionService) Create(ctx context.Context, spec workflow.Wo
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
-	def := WorkflowDefinition{
-		ID:        record.ID,
-		Name:      record.Name,
-		Spec:      prepared,
-		CreatedAt: record.CreatedAt,
-		UpdatedAt: record.UpdatedAt,
+	def, err := workflowDefinitionFromSpec(record.ID, record.Name, prepared, record.CreatedAt, record.UpdatedAt)
+	if err != nil {
+		return WorkflowDefinition{}, err
 	}
 	tx, err := s.store.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -174,12 +177,9 @@ func (s *WorkflowDefinitionService) Update(ctx context.Context, id string, spec 
 		CreatedAt: current.CreatedAt,
 		UpdatedAt: now,
 	}
-	def := WorkflowDefinition{
-		ID:        updated.ID,
-		Name:      updated.Name,
-		Spec:      prepared,
-		CreatedAt: updated.CreatedAt,
-		UpdatedAt: updated.UpdatedAt,
+	def, err := workflowDefinitionFromSpec(updated.ID, updated.Name, prepared, updated.CreatedAt, updated.UpdatedAt)
+	if err != nil {
+		return WorkflowDefinition{}, err
 	}
 	tx, err := s.store.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -281,12 +281,38 @@ func (s *WorkflowDefinitionService) definitionFromRecord(record WorkflowDefiniti
 	if err := json.Unmarshal([]byte(record.SpecJSON), &spec); err != nil {
 		return WorkflowDefinition{}, fmt.Errorf("unmarshal workflow definition %q: %w", record.ID, err)
 	}
+	return workflowDefinitionFromSpec(record.ID, record.Name, spec, record.CreatedAt, record.UpdatedAt)
+}
+
+func workflowDefinitionFromSpec(id string, name string, spec workflow.WorkflowSpec, createdAt time.Time, updatedAt time.Time) (WorkflowDefinition, error) {
+	plan, err := workflow.BuildPlan(spec)
+	if err != nil {
+		return WorkflowDefinition{}, fmt.Errorf("build workflow definition graph %q: %w", id, err)
+	}
+	var graph bytes.Buffer
+	if err := workflow.WriteMermaidGraph(&graph, plan); err != nil {
+		return WorkflowDefinition{}, fmt.Errorf("render workflow definition graph %q: %w", id, err)
+	}
+	inputs := spec.Inputs
+	if inputs == nil {
+		inputs = map[string]workflow.InputSpec{}
+	}
+	outputs := spec.Outputs
+	if outputs == nil {
+		outputs = map[string]workflow.OutputSpec{}
+	}
 	return WorkflowDefinition{
-		ID:        record.ID,
-		Name:      record.Name,
-		Spec:      spec,
-		CreatedAt: record.CreatedAt,
-		UpdatedAt: record.UpdatedAt,
+		ID:          id,
+		Name:        name,
+		Version:     spec.Version,
+		Description: spec.Description,
+		Inputs:      inputs,
+		Outputs:     outputs,
+		Graph:       graph.String(),
+		Order:       append([]string(nil), plan.Order...),
+		Spec:        spec,
+		CreatedAt:   createdAt,
+		UpdatedAt:   updatedAt,
 	}, nil
 }
 

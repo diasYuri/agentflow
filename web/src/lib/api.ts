@@ -5,6 +5,7 @@ import type {
 	Message,
 	PickFolderResponse,
 	Project,
+	RunWorkflowRequest,
 	Session,
 	SettingsResponse,
 	ToolCall,
@@ -206,6 +207,11 @@ export const api = {
 	},
 
 	workflowRuns: {
+		run: (body: RunWorkflowRequest) =>
+			fetchJSON<{ run: WorkflowRun }>("/api/v1/workflows", {
+				method: "POST",
+				body: JSON.stringify(body),
+			}).then((r) => r.run),
 		list: () =>
 			fetchJSON<{ runs: WorkflowRun[] | null }>("/api/v1/workflows").then((r) =>
 				arrayOrEmpty(r.runs),
