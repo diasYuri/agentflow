@@ -331,6 +331,7 @@ func (s *Service) HandleUserMessage(ctx context.Context, sessionID string, userM
 			SessionID:     sessionID,
 			ProjectPath:   sess.ProjectPath,
 			ProjectName:   sess.ProjectName,
+			Projects:      s.Projects,
 			Definitions:   s.WorkflowDefinitions,
 			Runs:          s.WorkflowRuns,
 			ProjectReader: chatagent.NewProjectReader(sess.ProjectPath),

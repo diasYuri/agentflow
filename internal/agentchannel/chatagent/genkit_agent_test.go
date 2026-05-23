@@ -334,7 +334,7 @@ func TestRunExecutesToolsUntilFinalAnswer(t *testing.T) {
 					"type": "function",
 					"function": map[string]any{
 						"name":      "agentflow_list_workflows",
-						"arguments": `{"include_runs":false}`,
+						"arguments": `{}`,
 					},
 				}},
 			})
@@ -425,6 +425,9 @@ func TestSystemPromptIncludesExpectedInstructions(t *testing.T) {
 		"ask for confirmation",
 		"slash commands",
 		"explicit user intent",
+		"which projects are available",
+		"workflow-definition listing tool",
+		"run-listing or run-inspection tools",
 	}
 	for _, want := range checks {
 		if !strings.Contains(p, want) {

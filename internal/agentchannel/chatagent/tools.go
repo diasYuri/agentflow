@@ -7,10 +7,15 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/diasYuri/agentflow/internal/app"
 	"github.com/diasYuri/agentflow/internal/core/ports"
 	"github.com/diasYuri/agentflow/internal/core/workflow"
 	"github.com/diasYuri/agentflow/internal/daemon"
 )
+
+type ProjectClient interface {
+	List() ([]app.Project, error)
+}
 
 type WorkflowDefinitionClient interface {
 	ListWorkflowDefinitions(ctx context.Context) (daemon.WorkflowDefinitionsResponse, error)
@@ -45,6 +50,7 @@ type ToolEnvironment struct {
 	SessionID        string
 	ProjectPath      string
 	ProjectName      string
+	Projects         ProjectClient
 	Definitions      WorkflowDefinitionClient
 	Runs             WorkflowRunClient
 	ProjectReader    *ProjectReader
@@ -67,7 +73,9 @@ func BuildTools(env *ToolEnvironment) []Tool {
 		env = &ToolEnvironment{}
 	}
 	return []Tool{
+		newListProjectsTool(env),
 		newListWorkflowsTool(env),
+		newListRunsTool(env),
 		newDescribeWorkflowTool(env),
 		newRunWorkflowTool(env),
 		newInspectWorkflowTool(env),
@@ -101,50 +109,95 @@ func wrapToolInvoke(rec ToolCallRecorder, name string, fn toolInvoker) toolInvok
 	}
 }
 
-type listWorkflowsInput struct {
-	IncludeRuns *bool `json:"include_runs,omitempty"`
+type listProjectsOutput struct {
+	Projects []app.Project `json:"projects"`
+}
+
+func newListProjectsTool(env *ToolEnvironment) Tool {
+	invoke := func(_ context.Context, raw json.RawMessage) (any, error) {
+		var in struct{}
+		if err := decodeToolInput(raw, &in); err != nil {
+			return nil, err
+		}
+		if env.Projects == nil {
+			return nil, errors.New("project client is not configured")
+		}
+		projects, err := env.Projects.List()
+		if err != nil {
+			return nil, fmt.Errorf("list projects: %w", err)
+		}
+		return listProjectsOutput{Projects: projects}, nil
+	}
+	return Tool{
+		Name:        "agentflow.list_projects",
+		Description: "List configured AgentFlow projects available to select or discuss. Use this for questions about available projects, not for workflows or executions.",
+		Parameters: map[string]any{
+			"type":                 "object",
+			"properties":           map[string]any{},
+			"additionalProperties": false,
+		},
+		Invoke: invoke,
+	}
 }
 
 type listWorkflowsOutput struct {
 	Definitions []daemon.WorkflowDefinitionSummary `json:"definitions"`
-	Runs        []daemon.WorkflowRun               `json:"runs,omitempty"`
 }
 
 func newListWorkflowsTool(env *ToolEnvironment) Tool {
 	invoke := func(ctx context.Context, raw json.RawMessage) (any, error) {
-		var in listWorkflowsInput
+		var in struct{}
 		if err := decodeToolInput(raw, &in); err != nil {
 			return nil, err
 		}
-		if env.Definitions == nil && env.Runs == nil {
-			return nil, errors.New("workflow clients are not configured")
+		if env.Definitions == nil {
+			return nil, errors.New("workflow definition client is not configured")
 		}
 		out := listWorkflowsOutput{}
-		if env.Definitions != nil {
-			resp, err := env.Definitions.ListWorkflowDefinitions(ctx)
-			if err != nil {
-				return nil, fmt.Errorf("list workflow definitions: %w", err)
-			}
-			out.Definitions = resp.Definitions
+		resp, err := env.Definitions.ListWorkflowDefinitions(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("list workflow definitions: %w", err)
 		}
-		includeRuns := in.IncludeRuns == nil || *in.IncludeRuns
-		if includeRuns && env.Runs != nil {
-			resp, err := env.Runs.ListWorkflows(ctx)
-			if err != nil {
-				return nil, fmt.Errorf("list workflow runs: %w", err)
-			}
-			out.Runs = resp.Runs
-		}
+		out.Definitions = resp.Definitions
 		return out, nil
 	}
 	return Tool{
 		Name:        "agentflow.list_workflows",
-		Description: "List workflow definitions and (optionally) recent workflow runs.",
+		Description: "List available workflow definitions in the active project. Use this for questions like 'which workflows can I run?'. This never returns workflow runs or execution history; use agentflow.list_runs for that.",
 		Parameters: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"include_runs": map[string]any{"type": "boolean"},
-			},
+			"type":                 "object",
+			"properties":           map[string]any{},
+			"additionalProperties": false,
+		},
+		Invoke: invoke,
+	}
+}
+
+type listRunsOutput struct {
+	Runs []daemon.WorkflowRun `json:"runs"`
+}
+
+func newListRunsTool(env *ToolEnvironment) Tool {
+	invoke := func(ctx context.Context, raw json.RawMessage) (any, error) {
+		var in struct{}
+		if err := decodeToolInput(raw, &in); err != nil {
+			return nil, err
+		}
+		if env.Runs == nil {
+			return nil, errors.New("workflow run client is not configured")
+		}
+		resp, err := env.Runs.ListWorkflows(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("list workflow runs: %w", err)
+		}
+		return listRunsOutput{Runs: resp.Runs}, nil
+	}
+	return Tool{
+		Name:        "agentflow.list_runs",
+		Description: "List recent workflow runs and execution history for the active project. Use this for questions about runs, previous executions, history, or status, not for available workflow definitions.",
+		Parameters: map[string]any{
+			"type":                 "object",
+			"properties":           map[string]any{},
 			"additionalProperties": false,
 		},
 		Invoke: invoke,

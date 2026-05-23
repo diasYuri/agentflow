@@ -102,6 +102,9 @@ func TestSubmitUserMessagePersistsAssistantReply(t *testing.T) {
 	if agent.req.ProjectPath != "/p" || agent.req.UserMessage != "hello" {
 		t.Fatalf("agent request was not channel-neutral: %+v", agent.req)
 	}
+	if agent.req.ToolEnvironment == nil || agent.req.ToolEnvironment.Projects == nil {
+		t.Fatalf("agent request missing project-listing tool dependency: %+v", agent.req.ToolEnvironment)
+	}
 }
 
 func TestSubmitUserMessageWithoutProjectRequestsSelection(t *testing.T) {

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/diasYuri/agentflow/internal/app"
 	"github.com/diasYuri/agentflow/internal/core/ports"
 	"github.com/diasYuri/agentflow/internal/core/workflow"
 	"github.com/diasYuri/agentflow/internal/daemon"
@@ -77,6 +78,15 @@ func (f *fakeRuns) WorkflowArtifacts(_ context.Context, runID string) (daemon.Wo
 	return f.artifactsResp, nil
 }
 
+type fakeProjects struct {
+	projects []app.Project
+	err      error
+}
+
+func (f *fakeProjects) List() ([]app.Project, error) {
+	return f.projects, f.err
+}
+
 type fakeProvider struct {
 	received ports.AgentRequest
 	result   ports.AgentResult
@@ -129,14 +139,14 @@ func findTool(t *testing.T, tools []Tool, name string) Tool {
 
 func TestBuildToolsListsFiveTools(t *testing.T) {
 	tools := BuildTools(&ToolEnvironment{})
-	if len(tools) != 6 {
-		t.Fatalf("expected 6 tools, got %d", len(tools))
+	if len(tools) != 8 {
+		t.Fatalf("expected 8 tools, got %d", len(tools))
 	}
 	names := map[string]bool{}
 	for _, tool := range tools {
 		names[tool.Name] = true
 	}
-	want := []string{"agentflow.list_workflows", "agentflow.describe_workflow", "agentflow.run_workflow", "agentflow.inspect_workflow", "agentflow.read_project", "agentflow.ask_environment"}
+	want := []string{"agentflow.list_projects", "agentflow.list_workflows", "agentflow.list_runs", "agentflow.describe_workflow", "agentflow.run_workflow", "agentflow.inspect_workflow", "agentflow.read_project", "agentflow.ask_environment"}
 	for _, n := range want {
 		if !names[n] {
 			t.Fatalf("missing tool %q", n)
@@ -144,7 +154,20 @@ func TestBuildToolsListsFiveTools(t *testing.T) {
 	}
 }
 
-func TestListWorkflowsAggregatesDefinitionsAndRuns(t *testing.T) {
+func TestListProjectsReturnsConfiguredProjects(t *testing.T) {
+	env := &ToolEnvironment{Projects: &fakeProjects{projects: []app.Project{{Name: "agentflow", Path: "/repo"}}}}
+	tool := findTool(t, BuildTools(env), "agentflow.list_projects")
+	result, err := tool.Invoke(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("invoke: %v", err)
+	}
+	out := result.(listProjectsOutput)
+	if len(out.Projects) != 1 || out.Projects[0].Name != "agentflow" {
+		t.Fatalf("projects: %+v", out.Projects)
+	}
+}
+
+func TestListWorkflowsDefaultsToDefinitionsOnly(t *testing.T) {
 	defs := &fakeDefinitions{resp: daemon.WorkflowDefinitionsResponse{Definitions: []daemon.WorkflowDefinitionSummary{{ID: "wf1", Name: "Build"}}}}
 	runs := &fakeRuns{listResp: daemon.ListWorkflowsResponse{Runs: []daemon.WorkflowRun{{ID: "r1"}}}}
 	env := &ToolEnvironment{Definitions: defs, Runs: runs}
@@ -157,23 +180,53 @@ func TestListWorkflowsAggregatesDefinitionsAndRuns(t *testing.T) {
 	if len(out.Definitions) != 1 || out.Definitions[0].ID != "wf1" {
 		t.Fatalf("definitions: %+v", out.Definitions)
 	}
+}
+
+func TestListWorkflowsRejectsRunParameters(t *testing.T) {
+	defs := &fakeDefinitions{resp: daemon.WorkflowDefinitionsResponse{Definitions: []daemon.WorkflowDefinitionSummary{{ID: "wf1"}}}}
+	runs := &fakeRuns{listResp: daemon.ListWorkflowsResponse{Runs: []daemon.WorkflowRun{{ID: "r1"}}}}
+	env := &ToolEnvironment{Definitions: defs, Runs: runs}
+	tool := findTool(t, BuildTools(env), "agentflow.list_workflows")
+	result, err := tool.Invoke(context.Background(), json.RawMessage(`{"include_runs":true}`))
+	if err == nil {
+		t.Fatalf("expected include_runs to be rejected, got result %+v", result)
+	}
+}
+
+func TestListRunsReturnsRuns(t *testing.T) {
+	runs := &fakeRuns{listResp: daemon.ListWorkflowsResponse{Runs: []daemon.WorkflowRun{{ID: "r1"}}}}
+	env := &ToolEnvironment{Runs: runs}
+	tool := findTool(t, BuildTools(env), "agentflow.list_runs")
+	result, err := tool.Invoke(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("invoke: %v", err)
+	}
+	out := result.(listRunsOutput)
 	if len(out.Runs) != 1 || out.Runs[0].ID != "r1" {
 		t.Fatalf("runs: %+v", out.Runs)
 	}
 }
 
-func TestListWorkflowsOmitsRunsWhenIncludeRunsFalse(t *testing.T) {
-	defs := &fakeDefinitions{resp: daemon.WorkflowDefinitionsResponse{Definitions: []daemon.WorkflowDefinitionSummary{{ID: "wf1"}}}}
-	runs := &fakeRuns{listResp: daemon.ListWorkflowsResponse{Runs: []daemon.WorkflowRun{{ID: "r1"}}}}
-	env := &ToolEnvironment{Definitions: defs, Runs: runs}
-	tool := findTool(t, BuildTools(env), "agentflow.list_workflows")
-	result, err := tool.Invoke(context.Background(), json.RawMessage(`{"include_runs":false}`))
-	if err != nil {
-		t.Fatalf("invoke: %v", err)
+func TestToolDescriptionsSeparateProjectsDefinitionsAndRuns(t *testing.T) {
+	tools := BuildTools(&ToolEnvironment{})
+	listProjects := findTool(t, tools, "agentflow.list_projects")
+	if !strings.Contains(listProjects.Description, "projects") || strings.Contains(listProjects.Description, "workflow runs") {
+		t.Fatalf("project description is ambiguous: %q", listProjects.Description)
 	}
-	out := result.(listWorkflowsOutput)
-	if len(out.Runs) != 0 {
-		t.Fatalf("expected zero runs, got %d", len(out.Runs))
+	listWorkflows := findTool(t, tools, "agentflow.list_workflows")
+	for _, want := range []string{"workflow definitions", "which workflows can I run", "never returns workflow runs"} {
+		if !strings.Contains(listWorkflows.Description, want) {
+			t.Fatalf("workflow description missing %q: %q", want, listWorkflows.Description)
+		}
+	}
+	if properties := listWorkflows.Parameters["properties"].(map[string]any); len(properties) != 0 {
+		t.Fatalf("list_workflows should not accept run parameters: %+v", properties)
+	}
+	listRuns := findTool(t, tools, "agentflow.list_runs")
+	for _, want := range []string{"workflow runs", "execution history", "not for available workflow definitions"} {
+		if !strings.Contains(listRuns.Description, want) {
+			t.Fatalf("run description missing %q: %q", want, listRuns.Description)
+		}
 	}
 }
 

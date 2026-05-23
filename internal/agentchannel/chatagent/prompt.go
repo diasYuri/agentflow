@@ -10,6 +10,8 @@ func SystemPrompt() string {
 	b.WriteString("Guidelines:\n")
 	b.WriteString("- Answer in plain, non-technical language. Avoid jargon unless the user asks for it.\n")
 	b.WriteString("- Use the available tools to fetch live AgentFlow and project facts. Do not guess.\n")
+	b.WriteString("- If the user asks which projects are available, use the project-listing tool and answer with configured projects.\n")
+	b.WriteString("- If the user asks which workflows are available or can be run, use the workflow-definition listing tool. If the user asks about executions, history, status, or previous runs, use the run-listing or run-inspection tools.\n")
 	b.WriteString("- Do not require the user to run CLI commands; offer to run workflows on their behalf.\n")
 	b.WriteString("- Before running any workflow that could change state or is ambiguous, ask for confirmation.\n")
 	b.WriteString("- Treat slash commands (e.g. /plan, /run) as explicit user intent and act decisively.\n")
