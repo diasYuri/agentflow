@@ -40,6 +40,7 @@ type fakeRuns struct {
 	timelineResp   daemon.WorkflowTimelineResponse
 	nodesResp      daemon.WorkflowNodesResponse
 	summaryResp    daemon.WorkflowSummaryResponse
+	summaryErr     error
 	artifactsResp  daemon.WorkflowArtifactsResponse
 	recordedRunIDs []string
 }
@@ -73,6 +74,9 @@ func (f *fakeRuns) WorkflowNodes(_ context.Context, runID string) (daemon.Workfl
 }
 
 func (f *fakeRuns) WorkflowSummary(_ context.Context, runID string) (daemon.WorkflowSummaryResponse, error) {
+	if f.summaryErr != nil {
+		return daemon.WorkflowSummaryResponse{}, f.summaryErr
+	}
 	return f.summaryResp, nil
 }
 
@@ -216,14 +220,14 @@ func findTool(t *testing.T, tools []Tool, name string) Tool {
 
 func TestBuildToolsListsExpectedTools(t *testing.T) {
 	tools := BuildTools(&ToolEnvironment{})
-	if len(tools) != 12 {
-		t.Fatalf("expected 12 tools, got %d", len(tools))
+	if len(tools) != 13 {
+		t.Fatalf("expected 13 tools, got %d", len(tools))
 	}
 	names := map[string]bool{}
 	for _, tool := range tools {
 		names[tool.Name] = true
 	}
-	want := []string{"agentflow.list_projects", "agentflow.list_workflows", "agentflow.list_runs", "agentflow.schedule_list", "agentflow.schedule_add", "agentflow.schedule_remove", "agentflow.schedule_tick", "agentflow.describe_workflow", "agentflow.run_workflow", "agentflow.inspect_workflow", "agentflow.read_project", "agentflow.ask_environment"}
+	want := []string{"agentflow.list_projects", "agentflow.list_workflows", "agentflow.list_runs", "agentflow.schedule_list", "agentflow.schedule_add", "agentflow.schedule_remove", "agentflow.schedule_tick", "agentflow.describe_workflow", "agentflow.run_workflow", "agentflow.workflow_status", "agentflow.inspect_workflow", "agentflow.read_project", "agentflow.ask_environment"}
 	for _, n := range want {
 		if !names[n] {
 			t.Fatalf("missing tool %q", n)
@@ -440,6 +444,19 @@ func TestDescribeWorkflowReturnsInputsOutputsAndGraph(t *testing.T) {
 	}
 }
 
+func TestWorkflowStatusReturnsRunSnapshot(t *testing.T) {
+	runs := &fakeRuns{runResp: daemon.RunWorkflowResponse{Run: daemon.WorkflowRun{ID: "r1", Status: "running", Workflow: "build"}}}
+	tool := findTool(t, BuildTools(&ToolEnvironment{Runs: runs}), "agentflow.workflow_status")
+	result, err := tool.Invoke(context.Background(), json.RawMessage(`{"run_id":"r1"}`))
+	if err != nil {
+		t.Fatalf("invoke: %v", err)
+	}
+	out := result.(workflowStatusOutput)
+	if out.Run.ID != "r1" || out.Run.Status != "running" {
+		t.Fatalf("unexpected status output: %+v", out.Run)
+	}
+}
+
 func TestDescribeWorkflowResolvesLocalProjectWorkflowByName(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, ".agentflow", "workflows"), 0o755); err != nil {
@@ -535,6 +552,22 @@ func TestInspectWorkflowAggregatesIncludes(t *testing.T) {
 	out := result.(inspectWorkflowOutput)
 	if out.Inspect.RunID != "r1" || out.Timeline == nil || out.Nodes == nil || out.Summary == nil || out.Artifacts == nil {
 		t.Fatalf("missing aggregated parts: %+v", out)
+	}
+}
+
+func TestInspectWorkflowIgnoresMissingSummary(t *testing.T) {
+	runs := &fakeRuns{
+		inspectResp: daemon.WorkflowInspectResponse{RunID: "r1", Workflow: "build"},
+		summaryErr:  os.ErrNotExist,
+	}
+	tool := findTool(t, BuildTools(&ToolEnvironment{Runs: runs}), "agentflow.inspect_workflow")
+	result, err := tool.Invoke(context.Background(), json.RawMessage(`{"run_id":"r1","include_summary":true}`))
+	if err != nil {
+		t.Fatalf("invoke: %v", err)
+	}
+	out := result.(inspectWorkflowOutput)
+	if out.Summary != nil {
+		t.Fatalf("expected summary to be omitted when missing, got %+v", out.Summary)
 	}
 }
 

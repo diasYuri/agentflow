@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/diasYuri/agentflow/internal/app"
@@ -84,6 +85,7 @@ func BuildTools(env *ToolEnvironment) []Tool {
 		newScheduleTickTool(env),
 		newDescribeWorkflowTool(env),
 		newRunWorkflowTool(env),
+		newWorkflowStatusTool(env),
 		newInspectWorkflowTool(env),
 		newReadProjectTool(env),
 		newAskEnvironmentTool(env),
@@ -401,9 +403,12 @@ func newInspectWorkflowTool(env *ToolEnvironment) Tool {
 		if in.IncludeSummary {
 			summary, err := env.Runs.WorkflowSummary(ctx, runID)
 			if err != nil {
-				return nil, fmt.Errorf("summary %s: %w", runID, err)
+				if !errors.Is(err, os.ErrNotExist) && !strings.Contains(strings.ToLower(err.Error()), "summary.json") {
+					return nil, fmt.Errorf("summary %s: %w", runID, err)
+				}
+			} else {
+				out.Summary = &summary
 			}
-			out.Summary = &summary
 		}
 		if in.IncludeArtifacts {
 			arts, err := env.Runs.WorkflowArtifacts(ctx, runID)
