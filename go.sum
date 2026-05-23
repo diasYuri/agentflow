@@ -34,8 +34,8 @@ github.com/cpuguy83/go-md2man/v2 v2.0.6/go.mod h1:oOW0eioCTA6cOiMLiUPZOpcVxMig6N
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
-github.com/diasYuri/go-codex-sdk v1.0.0 h1:nKrDTiSWnsB29Wbitd6ahQzHM4RVYdaab30WLnZUwaQ=
-github.com/diasYuri/go-codex-sdk v1.0.0/go.mod h1:qKPhucvjIJW00MwU7RQ+IkrbpyIdRRtxBP64G/tJLg4=
+github.com/diasYuri/go-codex-sdk v1.0.1 h1:VxQBq8po7Sm56zl5hB95Nrv6eOrrY3R+NRV6LHuFU8g=
+github.com/diasYuri/go-codex-sdk v1.0.1/go.mod h1:qKPhucvjIJW00MwU7RQ+IkrbpyIdRRtxBP64G/tJLg4=
 github.com/dustin/go-humanize v1.0.1 h1:GzkhY7T5VNhEkwH0PVJgjz+fX1rhBrR7pRT3mDkpeCY=
 github.com/dustin/go-humanize v1.0.1/go.mod h1:Mu1zIs6XwVuF/gI1OepvI0qD18qycQx+mFykh5fBlto=
 github.com/erikgeiser/coninput v0.0.0-20211004153227-1c3628e74d0f h1:Y/CXytFA4m6baUTXGLOoWe4PQhGxaX0KpnayAqC48p4=
