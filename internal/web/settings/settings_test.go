@@ -280,6 +280,47 @@ func TestLoadParsesChatAgentSettings(t *testing.T) {
 	}
 }
 
+func TestLoadParsesSlackSettings(t *testing.T) {
+	tmp := t.TempDir()
+	body := []byte("[slack]\napp_token = \"xapp-1\"\nbot_token = \"xoxb-1\"\nproject = \"demo\"\n")
+	if err := os.WriteFile(filepath.Join(tmp, SettingsFileName), body, 0o600); err != nil {
+		t.Fatalf("write toml: %v", err)
+	}
+	cfg, err := Load(tmp, MapEnv{}, Overrides{})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Slack.AppToken != "xapp-1" {
+		t.Fatalf("app_token=%s", cfg.Slack.AppToken)
+	}
+	if cfg.Slack.BotToken != "xoxb-1" {
+		t.Fatalf("bot_token=%s", cfg.Slack.BotToken)
+	}
+	if cfg.Slack.Project != "demo" {
+		t.Fatalf("project=%s", cfg.Slack.Project)
+	}
+}
+
+func TestLoadSlackEnvOverridesTOML(t *testing.T) {
+	tmp := t.TempDir()
+	body := []byte("[slack]\napp_token = \"xapp-1\"\nbot_token = \"xoxb-1\"\nproject = \"demo\"\n")
+	if err := os.WriteFile(filepath.Join(tmp, SettingsFileName), body, 0o600); err != nil {
+		t.Fatalf("write toml: %v", err)
+	}
+	env := MapEnv{
+		SlackEnvPrefix + "APP_TOKEN": "xapp-2",
+		SlackEnvPrefix + "BOT_TOKEN": "xoxb-2",
+		SlackEnvPrefix + "PROJECT":   "ops",
+	}
+	cfg, err := Load(tmp, env, Overrides{})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Slack.AppToken != "xapp-2" || cfg.Slack.BotToken != "xoxb-2" || cfg.Slack.Project != "ops" {
+		t.Fatalf("slack=%+v", cfg.Slack)
+	}
+}
+
 func TestLoadChatAgentEnvOverridesTOML(t *testing.T) {
 	tmp := t.TempDir()
 	body := []byte("[chat_agent]\nprovider = \"openai\"\nmodel = \"gpt-4\"\n")
@@ -317,4 +358,3 @@ func TestDefaultsIncludeChatAgentDefaults(t *testing.T) {
 		t.Fatal("providers map is nil")
 	}
 }
-

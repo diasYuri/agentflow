@@ -14,6 +14,8 @@ slack -> agentchannel -> agentflow
   calls, diagnostics, assistant execution, and workflow tools.
 - `internal/web` owns HTTP, local auth, assets, SSE, browser diagnostics, and
   request/response translation.
+- `internal/slack` owns Socket Mode, Slack auth, thread mapping, and message
+  formatting for the Slack adapter.
 - Future channel adapters, such as Slack, should own their transport details
   and call `agentchannel.Service` with neutral inputs.
 

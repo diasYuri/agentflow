@@ -16,6 +16,7 @@ const (
 	DefaultHost      = "127.0.0.1"
 	DefaultPort      = 38080
 	EnvPrefix        = "AGENTFLOW_WEB_"
+	SlackEnvPrefix   = "AGENTFLOW_SLACK_"
 
 	DaemonRequirementAuto     DaemonRequirement = "auto"
 	DaemonRequirementRequired DaemonRequirement = "required"
@@ -58,6 +59,12 @@ type ChatAgent struct {
 	Providers    map[string]ProviderConfig `toml:"-"`
 }
 
+type Slack struct {
+	AppToken string `toml:"app_token"`
+	BotToken string `toml:"bot_token"`
+	Project  string `toml:"project"`
+}
+
 // ProviderConfig holds the connection and generation settings for one
 // OpenAI-compatible backend.
 type ProviderConfig struct {
@@ -75,6 +82,7 @@ type Settings struct {
 	Auth      Auth      `toml:"web_auth"`
 	Paths     Paths     `toml:"paths"`
 	ChatAgent ChatAgent `toml:"chat_agent"`
+	Slack     Slack     `toml:"slack"`
 }
 
 func Defaults() Settings {
@@ -92,6 +100,7 @@ func Defaults() Settings {
 			HistoryLimit: 40,
 			Providers:    map[string]ProviderConfig{},
 		},
+		Slack: Slack{},
 	}
 }
 

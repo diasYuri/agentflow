@@ -95,6 +95,7 @@ func NewRootCommand() *cobra.Command {
 		newWorkflowCommand(opts),
 		newTUICommand(),
 		newWebCommand(),
+		newSlackCommand(),
 		newVersionCommand(),
 		newCompletionCommand(cmd),
 		newDoctorCommand(),

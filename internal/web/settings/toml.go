@@ -85,6 +85,17 @@ func applyTOML(cfg *Settings, values map[string]map[string]string) error {
 			}
 		}
 	}
+	if slack, ok := values["slack"]; ok {
+		if v, ok := slack["app_token"]; ok {
+			cfg.Slack.AppToken = v
+		}
+		if v, ok := slack["bot_token"]; ok {
+			cfg.Slack.BotToken = v
+		}
+		if v, ok := slack["project"]; ok {
+			cfg.Slack.Project = v
+		}
+	}
 	// Parse provider configs from sections like [chat_agent.providers.openai]
 	for section, kv := range values {
 		if !strings.HasPrefix(section, "chat_agent.providers.") {

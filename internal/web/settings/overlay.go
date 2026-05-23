@@ -40,6 +40,15 @@ func applyEnv(cfg *Settings, env Env) {
 	if v, ok := lookupNonEmpty(env, EnvPrefix+"CHAT_AGENT_MODEL"); ok {
 		cfg.ChatAgent.Model = v
 	}
+	if v, ok := lookupNonEmpty(env, SlackEnvPrefix+"APP_TOKEN"); ok {
+		cfg.Slack.AppToken = v
+	}
+	if v, ok := lookupNonEmpty(env, SlackEnvPrefix+"BOT_TOKEN"); ok {
+		cfg.Slack.BotToken = v
+	}
+	if v, ok := lookupNonEmpty(env, SlackEnvPrefix+"PROJECT"); ok {
+		cfg.Slack.Project = v
+	}
 }
 
 // applyOverrides overlays the CLI flag values, which always win because
