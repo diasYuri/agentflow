@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/diasYuri/agentflow/internal/app"
 	"github.com/diasYuri/agentflow/internal/core/ports"
@@ -87,6 +89,81 @@ func (f *fakeProjects) List() ([]app.Project, error) {
 	return f.projects, f.err
 }
 
+type fakeSchedules struct {
+	schedules []app.Schedule
+	addErr    error
+	getErr    error
+	listErr   error
+	removeErr error
+	updateErr error
+}
+
+func (f *fakeSchedules) List() ([]app.Schedule, error) {
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	return append([]app.Schedule(nil), f.schedules...), nil
+}
+
+func (f *fakeSchedules) Add(schedule app.Schedule) (app.Schedule, error) {
+	if f.addErr != nil {
+		return app.Schedule{}, f.addErr
+	}
+	f.schedules = append(f.schedules, schedule)
+	return schedule, nil
+}
+
+func (f *fakeSchedules) Remove(id string) error {
+	if f.removeErr != nil {
+		return f.removeErr
+	}
+	for i, schedule := range f.schedules {
+		if schedule.ID == id {
+			f.schedules = append(f.schedules[:i], f.schedules[i+1:]...)
+			return nil
+		}
+	}
+	return errors.New("not found")
+}
+
+func (f *fakeSchedules) Get(id string) (app.Schedule, error) {
+	if f.getErr != nil {
+		return app.Schedule{}, f.getErr
+	}
+	for _, schedule := range f.schedules {
+		if schedule.ID == id {
+			return schedule, nil
+		}
+	}
+	return app.Schedule{}, errors.New("not found")
+}
+
+func (f *fakeSchedules) Update(schedule app.Schedule) error {
+	if f.updateErr != nil {
+		return f.updateErr
+	}
+	for i := range f.schedules {
+		if f.schedules[i].ID == schedule.ID {
+			f.schedules[i] = schedule
+			return nil
+		}
+	}
+	return errors.New("not found")
+}
+
+type fakeScheduleDispatcher struct {
+	dispatched []app.Schedule
+	err        error
+}
+
+func (f *fakeScheduleDispatcher) Dispatch(_ context.Context, schedule app.Schedule) error {
+	if f.err != nil {
+		return f.err
+	}
+	f.dispatched = append(f.dispatched, schedule)
+	return nil
+}
+
 type fakeProvider struct {
 	received ports.AgentRequest
 	result   ports.AgentResult
@@ -137,16 +214,16 @@ func findTool(t *testing.T, tools []Tool, name string) Tool {
 	return Tool{}
 }
 
-func TestBuildToolsListsFiveTools(t *testing.T) {
+func TestBuildToolsListsExpectedTools(t *testing.T) {
 	tools := BuildTools(&ToolEnvironment{})
-	if len(tools) != 8 {
-		t.Fatalf("expected 8 tools, got %d", len(tools))
+	if len(tools) != 12 {
+		t.Fatalf("expected 12 tools, got %d", len(tools))
 	}
 	names := map[string]bool{}
 	for _, tool := range tools {
 		names[tool.Name] = true
 	}
-	want := []string{"agentflow.list_projects", "agentflow.list_workflows", "agentflow.list_runs", "agentflow.describe_workflow", "agentflow.run_workflow", "agentflow.inspect_workflow", "agentflow.read_project", "agentflow.ask_environment"}
+	want := []string{"agentflow.list_projects", "agentflow.list_workflows", "agentflow.list_runs", "agentflow.schedule_list", "agentflow.schedule_add", "agentflow.schedule_remove", "agentflow.schedule_tick", "agentflow.describe_workflow", "agentflow.run_workflow", "agentflow.inspect_workflow", "agentflow.read_project", "agentflow.ask_environment"}
 	for _, n := range want {
 		if !names[n] {
 			t.Fatalf("missing tool %q", n)
@@ -167,29 +244,46 @@ func TestListProjectsReturnsConfiguredProjects(t *testing.T) {
 	}
 }
 
-func TestListWorkflowsDefaultsToDefinitionsOnly(t *testing.T) {
-	defs := &fakeDefinitions{resp: daemon.WorkflowDefinitionsResponse{Definitions: []daemon.WorkflowDefinitionSummary{{ID: "wf1", Name: "Build"}}}}
-	runs := &fakeRuns{listResp: daemon.ListWorkflowsResponse{Runs: []daemon.WorkflowRun{{ID: "r1"}}}}
-	env := &ToolEnvironment{Definitions: defs, Runs: runs}
+func TestListWorkflowsListsLocalProjectDefinitions(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".agentflow", "workflows"), 0o755); err != nil {
+		t.Fatalf("mkdir workflows: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "samples", "workflows"), 0o755); err != nil {
+		t.Fatalf("mkdir samples workflows: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".agentflow", "workflows", "build.yaml"), []byte("name: build\nversion: v1\ndescription: local build\nnodes: []\n"), 0o644); err != nil {
+		t.Fatalf("write build: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "samples", "workflows", "lint.yaml"), []byte("name: lint\nversion: v1\ndescription: sample lint\nnodes: []\n"), 0o644); err != nil {
+		t.Fatalf("write lint: %v", err)
+	}
+	env := &ToolEnvironment{ProjectPath: dir}
 	tool := findTool(t, BuildTools(env), "agentflow.list_workflows")
 	result, err := tool.Invoke(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("invoke: %v", err)
 	}
 	out := result.(listWorkflowsOutput)
-	if len(out.Definitions) != 1 || out.Definitions[0].ID != "wf1" {
+	if len(out.Definitions) != 2 {
 		t.Fatalf("definitions: %+v", out.Definitions)
+	}
+	if out.Definitions[0].Name != "build" || out.Definitions[1].Name != "lint" {
+		t.Fatalf("unexpected ordering: %+v", out.Definitions)
 	}
 }
 
-func TestListWorkflowsRejectsRunParameters(t *testing.T) {
-	defs := &fakeDefinitions{resp: daemon.WorkflowDefinitionsResponse{Definitions: []daemon.WorkflowDefinitionSummary{{ID: "wf1"}}}}
-	runs := &fakeRuns{listResp: daemon.ListWorkflowsResponse{Runs: []daemon.WorkflowRun{{ID: "r1"}}}}
-	env := &ToolEnvironment{Definitions: defs, Runs: runs}
+func TestListWorkflowsFallsBackToDaemonDefinitions(t *testing.T) {
+	defs := &fakeDefinitions{resp: daemon.WorkflowDefinitionsResponse{Definitions: []daemon.WorkflowDefinitionSummary{{ID: "wf1", Name: "Build"}}}}
+	env := &ToolEnvironment{Definitions: defs}
 	tool := findTool(t, BuildTools(env), "agentflow.list_workflows")
-	result, err := tool.Invoke(context.Background(), json.RawMessage(`{"include_runs":true}`))
-	if err == nil {
-		t.Fatalf("expected include_runs to be rejected, got result %+v", result)
+	result, err := tool.Invoke(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("invoke: %v", err)
+	}
+	out := result.(listWorkflowsOutput)
+	if len(out.Definitions) != 1 || out.Definitions[0].Name != "Build" {
+		t.Fatalf("definitions: %+v", out.Definitions)
 	}
 }
 
@@ -214,7 +308,7 @@ func TestToolDescriptionsSeparateProjectsDefinitionsAndRuns(t *testing.T) {
 		t.Fatalf("project description is ambiguous: %q", listProjects.Description)
 	}
 	listWorkflows := findTool(t, tools, "agentflow.list_workflows")
-	for _, want := range []string{"workflow definitions", "which workflows can I run", "never returns workflow runs"} {
+	for _, want := range []string{"workflow definitions", "which workflows can I run", "prefers local project files", "never returns workflow runs"} {
 		if !strings.Contains(listWorkflows.Description, want) {
 			t.Fatalf("workflow description missing %q: %q", want, listWorkflows.Description)
 		}
@@ -227,6 +321,96 @@ func TestToolDescriptionsSeparateProjectsDefinitionsAndRuns(t *testing.T) {
 		if !strings.Contains(listRuns.Description, want) {
 			t.Fatalf("run description missing %q: %q", want, listRuns.Description)
 		}
+	}
+	listSchedules := findTool(t, tools, "agentflow.schedule_list")
+	for _, want := range []string{"workflow schedules"} {
+		if !strings.Contains(listSchedules.Description, want) {
+			t.Fatalf("schedule description missing %q: %q", want, listSchedules.Description)
+		}
+	}
+}
+
+func TestScheduleToolsListAddRemoveAndTick(t *testing.T) {
+	ctx := context.Background()
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	if err := os.MkdirAll(filepath.Join(tmp, ".agentflow"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	registry := &fakeSchedules{}
+	toolEnv := &ToolEnvironment{
+		ProjectPath: "/abs/project",
+		Schedules:   registry,
+	}
+
+	wf := filepath.Join(tmp, "workflow.yaml")
+	if err := os.WriteFile(wf, []byte("name: demo\n"), 0o644); err != nil {
+		t.Fatalf("write workflow: %v", err)
+	}
+
+	addTool := findTool(t, BuildTools(toolEnv), "agentflow.schedule_add")
+	addInput := fmt.Sprintf(`{"workflow_ref":%q,"every":"15m","tag":"nightly"}`, wf)
+	addResult, err := addTool.Invoke(ctx, json.RawMessage(addInput))
+	if err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	added := addResult.(scheduleAddOutput).Schedule
+	if added.ScheduleType != "every" || added.Every != "15m0s" {
+		t.Fatalf("unexpected schedule: %+v", added)
+	}
+	if added.WorkingDir != "/abs/project" {
+		t.Fatalf("expected project working dir, got %q", added.WorkingDir)
+	}
+
+	listTool := findTool(t, BuildTools(toolEnv), "agentflow.schedule_list")
+	listResult, err := listTool.Invoke(ctx, nil)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if got := listResult.(scheduleListOutput).Schedules; len(got) != 1 || got[0].ID != added.ID {
+		t.Fatalf("unexpected schedules: %+v", got)
+	}
+
+	removeTool := findTool(t, BuildTools(toolEnv), "agentflow.schedule_remove")
+	removeInput := fmt.Sprintf(`{"id":%q}`, added.ID)
+	removeResult, err := removeTool.Invoke(ctx, json.RawMessage(removeInput))
+	if err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	if removeResult.(scheduleRemoveOutput).Schedule.ID != added.ID {
+		t.Fatalf("unexpected removed schedule: %+v", removeResult)
+	}
+	if got := len(registry.schedules); got != 0 {
+		t.Fatalf("expected empty registry after remove, got %d", got)
+	}
+
+	registry.schedules = []app.Schedule{{
+		ID:           "schedule-1",
+		WorkflowRef:  wf,
+		ScheduleType: "every",
+		Every:        "1m0s",
+		CreatedAt:    time.Now().UTC().Add(-2 * time.Minute),
+		UpdatedAt:    time.Now().UTC().Add(-2 * time.Minute),
+		Enabled:      true,
+		NextRunAt:    time.Now().UTC().Add(-1 * time.Minute),
+		WorkingDir:   "/abs/project",
+	}}
+	dispatcher := &fakeScheduleDispatcher{}
+	oldDispatcher := newScheduleDispatcher
+	newScheduleDispatcher = func() scheduleDispatcher { return dispatcher }
+	t.Cleanup(func() { newScheduleDispatcher = oldDispatcher })
+
+	tickTool := findTool(t, BuildTools(toolEnv), "agentflow.schedule_tick")
+	tickResult, err := tickTool.Invoke(ctx, nil)
+	if err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	out := tickResult.(scheduleTickOutput)
+	if len(out.Dispatched) != 1 || out.Dispatched[0].ID != "schedule-1" {
+		t.Fatalf("unexpected tick output: %+v", out)
+	}
+	if len(dispatcher.dispatched) != 1 || dispatcher.dispatched[0].ID != "schedule-1" {
+		t.Fatalf("dispatcher not called: %+v", dispatcher.dispatched)
 	}
 }
 
@@ -256,6 +440,32 @@ func TestDescribeWorkflowReturnsInputsOutputsAndGraph(t *testing.T) {
 	}
 }
 
+func TestDescribeWorkflowResolvesLocalProjectWorkflowByName(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".agentflow", "workflows"), 0o755); err != nil {
+		t.Fatalf("mkdir workflows: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".agentflow", "workflows", "feat-v2.yaml"), []byte("name: feat-v2\nversion: v2\ndescription: local feat\nnodes: []\n"), 0o644); err != nil {
+		t.Fatalf("write workflow: %v", err)
+	}
+
+	tool := findTool(t, BuildTools(&ToolEnvironment{ProjectPath: dir}), "agentflow.describe_workflow")
+	result, err := tool.Invoke(context.Background(), json.RawMessage(`{"workflow":"feat-v2"}`))
+	if err != nil {
+		t.Fatalf("invoke: %v", err)
+	}
+	out := result.(describeWorkflowOutput)
+	if out.Definition.Name != "feat-v2" {
+		t.Fatalf("unexpected workflow name: %+v", out.Definition)
+	}
+	if out.Definition.ID != filepath.Join(dir, ".agentflow", "workflows", "feat-v2.yaml") {
+		t.Fatalf("unexpected workflow path: %q", out.Definition.ID)
+	}
+	if !strings.Contains(out.Definition.Graph, "graph TD") {
+		t.Fatalf("missing graph: %q", out.Definition.Graph)
+	}
+}
+
 func TestRunWorkflowPassesWorkingDirFromProjectPath(t *testing.T) {
 	runs := &fakeRuns{runResp: daemon.RunWorkflowResponse{Run: daemon.WorkflowRun{ID: "r99"}}}
 	env := &ToolEnvironment{Runs: runs, ProjectPath: "/abs/project"}
@@ -276,6 +486,27 @@ func TestRunWorkflowPassesWorkingDirFromProjectPath(t *testing.T) {
 	}
 	if result.(runWorkflowOutput).Run.ID != "r99" {
 		t.Fatalf("unexpected run id")
+	}
+}
+
+func TestRunWorkflowRejectsMissingRequiredInputsWhenDefinitionAvailable(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".agentflow", "workflows"), 0o755); err != nil {
+		t.Fatalf("mkdir workflows: %v", err)
+	}
+	spec := []byte("version: \"1\"\nname: feat-v2\ndescription: local feat\ninputs:\n  feature:\n    type: string\n    required: true\nnodes:\n  - id: start\n    kind: noop\n")
+	if err := os.WriteFile(filepath.Join(dir, ".agentflow", "workflows", "feat-v2.yaml"), spec, 0o644); err != nil {
+		t.Fatalf("write workflow: %v", err)
+	}
+
+	runs := &fakeRuns{}
+	tool := findTool(t, BuildTools(&ToolEnvironment{Runs: runs, ProjectPath: dir}), "agentflow.run_workflow")
+	_, err := tool.Invoke(context.Background(), json.RawMessage(`{"workflow_ref":"feat-v2"}`))
+	if err == nil || !strings.Contains(err.Error(), `input "feature" is required`) {
+		t.Fatalf("expected required input error, got %v", err)
+	}
+	if runs.runReq.WorkflowRef != "" {
+		t.Fatalf("run should not have been queued: %+v", runs.runReq)
 	}
 }
 

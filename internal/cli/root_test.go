@@ -430,7 +430,7 @@ func TestWorkflowListFitsNarrowTerminal(t *testing.T) {
 	}
 }
 
-func TestWorkflowListKeepsFullIDInNarrowTerminal(t *testing.T) {
+func TestWorkflowListCapsIDColumnInNarrowTerminal(t *testing.T) {
 	t.Setenv("COLUMNS", "60")
 	longID := "run-1234567890abcdef1234567890abcdef"
 	run := daemon.WorkflowRun{
@@ -447,11 +447,14 @@ func TestWorkflowListKeepsFullIDInNarrowTerminal(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := out.String()
-	if !strings.Contains(got, longID) {
-		t.Fatalf("expected full id in output, got %q", got)
+	if strings.Contains(got, longID) {
+		t.Fatalf("expected id to be capped in output, got %q", got)
 	}
-	if strings.Contains(got, longID[:12]+"…") {
-		t.Fatalf("expected id not to be truncated, got %q", got)
+	if !strings.Contains(got, "run-1…") {
+		t.Fatalf("expected id to fit 6 columns, got %q", got)
+	}
+	if !strings.Contains(got, "build") || !strings.Contains(got, "running") {
+		t.Fatalf("expected other columns to remain visible, got %q", got)
 	}
 }
 

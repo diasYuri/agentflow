@@ -428,6 +428,8 @@ func TestSystemPromptIncludesExpectedInstructions(t *testing.T) {
 		"which projects are available",
 		"workflow-definition listing tool",
 		"run-listing or run-inspection tools",
+		"workflow schedules",
+		"Never call the run tool until every required input is present",
 	}
 	for _, want := range checks {
 		if !strings.Contains(p, want) {

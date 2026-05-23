@@ -1220,15 +1220,7 @@ func renderWorkflowList(w io.Writer, runs []daemon.WorkflowRun, format string, n
 	}
 	cols := []string{"ID", "TAG", "WORKFLOW", "STATUS", "STEP", "DONE", "TOTAL", "ELAPSED", "RUN DIR"}
 	widths := []int{6, 10, 16, 10, 10, 4, 5, 7, 12}
-	minWidths := []int{4, 6, 10, 7, 8, 4, 4, 6, 8}
-	maxIDWidth := lipgloss.Width("ID")
-	for _, row := range rows {
-		if w := lipgloss.Width(row.ID); w > maxIDWidth {
-			maxIDWidth = w
-		}
-	}
-	widths[0] = maxIDWidth
-	minWidths[0] = maxIDWidth
+	minWidths := []int{6, 6, 10, 7, 8, 4, 4, 6, 8}
 	maxWidth := terminalWidth(w)
 	if !interactive {
 		maxWidth = 0

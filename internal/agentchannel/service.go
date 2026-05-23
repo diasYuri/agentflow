@@ -19,6 +19,7 @@ import (
 	"github.com/diasYuri/agentflow/internal/agentchannel/events"
 	"github.com/diasYuri/agentflow/internal/agentchannel/persistence"
 	"github.com/diasYuri/agentflow/internal/agentchannel/session"
+	"github.com/diasYuri/agentflow/internal/app"
 )
 
 const (
@@ -42,6 +43,7 @@ type EventSink interface {
 type Options struct {
 	Sessions              *session.Sessions
 	Projects              session.ProjectResolver
+	Schedules             chatagent.ScheduleRegistry
 	Diagnostics           *diagnostics.Recorder
 	Events                EventSink
 	WorkflowDefinitions   chatagent.WorkflowDefinitionClient
@@ -56,6 +58,7 @@ type Options struct {
 type Service struct {
 	Sessions              *session.Sessions
 	Projects              session.ProjectResolver
+	Schedules             chatagent.ScheduleRegistry
 	Diagnostics           *diagnostics.Recorder
 	Events                EventSink
 	WorkflowDefinitions   chatagent.WorkflowDefinitionClient
@@ -108,9 +111,13 @@ func NewService(opts Options) (*Service, error) {
 	if opts.Logger == nil {
 		opts.Logger = slog.Default()
 	}
+	if opts.Schedules == nil {
+		opts.Schedules = app.NewScheduleRegistry(nil)
+	}
 	return &Service{
 		Sessions:              opts.Sessions,
 		Projects:              opts.Projects,
+		Schedules:             opts.Schedules,
 		Diagnostics:           opts.Diagnostics,
 		Events:                opts.Events,
 		WorkflowDefinitions:   opts.WorkflowDefinitions,
@@ -332,6 +339,7 @@ func (s *Service) HandleUserMessage(ctx context.Context, sessionID string, userM
 			ProjectPath:   sess.ProjectPath,
 			ProjectName:   sess.ProjectName,
 			Projects:      s.Projects,
+			Schedules:     s.Schedules,
 			Definitions:   s.WorkflowDefinitions,
 			Runs:          s.WorkflowRuns,
 			ProjectReader: chatagent.NewProjectReader(sess.ProjectPath),

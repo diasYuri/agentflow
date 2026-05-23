@@ -105,6 +105,9 @@ func TestSubmitUserMessagePersistsAssistantReply(t *testing.T) {
 	if agent.req.ToolEnvironment == nil || agent.req.ToolEnvironment.Projects == nil {
 		t.Fatalf("agent request missing project-listing tool dependency: %+v", agent.req.ToolEnvironment)
 	}
+	if agent.req.ToolEnvironment.Schedules == nil {
+		t.Fatalf("agent request missing schedule tool dependency: %+v", agent.req.ToolEnvironment)
+	}
 }
 
 func TestSubmitUserMessageWithoutProjectRequestsSelection(t *testing.T) {

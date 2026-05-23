@@ -9,6 +9,7 @@ import (
 
 	"github.com/diasYuri/agentflow/internal/app"
 	"github.com/diasYuri/agentflow/internal/core/ports"
+	"github.com/diasYuri/agentflow/internal/core/runtime/handlers"
 	"github.com/diasYuri/agentflow/internal/core/workflow"
 	"github.com/diasYuri/agentflow/internal/daemon"
 )
@@ -51,6 +52,7 @@ type ToolEnvironment struct {
 	ProjectPath      string
 	ProjectName      string
 	Projects         ProjectClient
+	Schedules        ScheduleRegistry
 	Definitions      WorkflowDefinitionClient
 	Runs             WorkflowRunClient
 	ProjectReader    *ProjectReader
@@ -76,6 +78,10 @@ func BuildTools(env *ToolEnvironment) []Tool {
 		newListProjectsTool(env),
 		newListWorkflowsTool(env),
 		newListRunsTool(env),
+		newScheduleListTool(env),
+		newScheduleAddTool(env),
+		newScheduleRemoveTool(env),
+		newScheduleTickTool(env),
 		newDescribeWorkflowTool(env),
 		newRunWorkflowTool(env),
 		newInspectWorkflowTool(env),
@@ -140,30 +146,29 @@ func newListProjectsTool(env *ToolEnvironment) Tool {
 	}
 }
 
-type listWorkflowsOutput struct {
-	Definitions []daemon.WorkflowDefinitionSummary `json:"definitions"`
-}
-
 func newListWorkflowsTool(env *ToolEnvironment) Tool {
 	invoke := func(ctx context.Context, raw json.RawMessage) (any, error) {
 		var in struct{}
 		if err := decodeToolInput(raw, &in); err != nil {
 			return nil, err
 		}
-		if env.Definitions == nil {
-			return nil, errors.New("workflow definition client is not configured")
+		if localDefinitions, err := listProjectWorkflows(env.ProjectPath); err != nil {
+			return nil, err
+		} else if len(localDefinitions) > 0 {
+			return listWorkflowsOutput{Definitions: localDefinitions}, nil
 		}
-		out := listWorkflowsOutput{}
-		resp, err := env.Definitions.ListWorkflowDefinitions(ctx)
+		daemonDefinitions, err := listDaemonWorkflows(ctx, env)
 		if err != nil {
-			return nil, fmt.Errorf("list workflow definitions: %w", err)
+			return nil, err
 		}
-		out.Definitions = resp.Definitions
-		return out, nil
+		if len(daemonDefinitions) == 0 {
+			return listWorkflowsOutput{Definitions: []projectWorkflowSummary{}}, nil
+		}
+		return listWorkflowsOutput{Definitions: daemonDefinitions}, nil
 	}
 	return Tool{
 		Name:        "agentflow.list_workflows",
-		Description: "List available workflow definitions in the active project. Use this for questions like 'which workflows can I run?'. This never returns workflow runs or execution history; use agentflow.list_runs for that.",
+		Description: "List available workflow definitions in the active project. Use this for questions like 'which workflows can I run?'. This prefers local project files and falls back to daemon-defined workflows when needed. This never returns workflow runs or execution history; use agentflow.list_runs for that.",
 		Parameters: map[string]any{
 			"type":                 "object",
 			"properties":           map[string]any{},
@@ -209,14 +214,12 @@ type describeWorkflowInput struct {
 }
 
 type describeWorkflowOutput struct {
-	Definition daemon.WorkflowDefinition `json:"definition"`
+	Definition     daemon.WorkflowDefinition `json:"definition"`
+	RequiredInputs []string                  `json:"required_inputs,omitempty"`
 }
 
 func newDescribeWorkflowTool(env *ToolEnvironment) Tool {
 	invoke := func(ctx context.Context, raw json.RawMessage) (any, error) {
-		if env.Definitions == nil {
-			return nil, errors.New("workflow definition client is not configured")
-		}
 		var in describeWorkflowInput
 		if err := decodeToolInput(raw, &in); err != nil {
 			return nil, err
@@ -225,15 +228,26 @@ func newDescribeWorkflowTool(env *ToolEnvironment) Tool {
 		if ref == "" {
 			return nil, errors.New("workflow is required")
 		}
+		if detail, ok, err := describeLocalWorkflowDefinition(ctx, env, ref); err != nil {
+			return nil, err
+		} else if ok {
+			return detail, nil
+		}
+		if env.Definitions == nil {
+			return nil, errors.New("workflow definition client is not configured")
+		}
 		resp, err := env.Definitions.WorkflowDefinition(ctx, ref)
 		if err != nil {
 			return nil, fmt.Errorf("describe workflow %s: %w", ref, err)
 		}
-		return describeWorkflowOutput{Definition: resp.WorkflowDefinition}, nil
+		return describeWorkflowOutput{
+			Definition:     resp.WorkflowDefinition,
+			RequiredInputs: requiredWorkflowInputs(resp.WorkflowDefinition.Inputs),
+		}, nil
 	}
 	return Tool{
 		Name:        "agentflow.describe_workflow",
-		Description: "Get a workflow definition by id or name, including declared inputs, outputs, graph, execution order, and raw spec.",
+		Description: "Get a workflow definition by id or name, preferring the active project's local files before falling back to the daemon. Includes declared inputs, required inputs, outputs, graph, execution order, and raw spec.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -271,9 +285,21 @@ func newRunWorkflowTool(env *ToolEnvironment) Tool {
 		if ref == "" {
 			return nil, errors.New("workflow_ref is required")
 		}
+		resolvedInputs := in.Inputs
+		if def, ok, err := loadWorkflowDefinitionForTool(ctx, env, ref); err != nil {
+			return nil, err
+		} else if ok {
+			resolvedInputs, err = handlers.ResolveInputs(def.Spec, in.Inputs)
+			if err != nil {
+				return nil, fmt.Errorf("run workflow %s: %w", ref, err)
+			}
+			if err := workflow.ValidateInputValues(def.Spec, resolvedInputs); err != nil {
+				return nil, fmt.Errorf("run workflow %s: %w", ref, err)
+			}
+		}
 		req := daemon.RunWorkflowRequest{
 			WorkflowRef: ref,
-			Inputs:      in.Inputs,
+			Inputs:      resolvedInputs,
 			Vars:        in.Vars,
 			Tag:         in.Tag,
 			DryRun:      in.DryRun,
@@ -287,15 +313,30 @@ func newRunWorkflowTool(env *ToolEnvironment) Tool {
 	}
 	return Tool{
 		Name:        "agentflow.run_workflow",
-		Description: "Run an AgentFlow workflow by reference using the active project as the working directory.",
+		Description: "Run an AgentFlow workflow by reference using the active project as the working directory. Provide inputs that satisfy the workflow schema; if the workflow has required inputs, fetch its definition first and include them before calling this tool.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"workflow_ref": map[string]any{"type": "string"},
-				"inputs":       map[string]any{"type": "object"},
-				"vars":         map[string]any{"type": "object"},
-				"tag":          map[string]any{"type": "string"},
-				"dry_run":      map[string]any{"type": "boolean"},
+				"workflow_ref": map[string]any{
+					"type":        "string",
+					"description": "Workflow name or path to run.",
+				},
+				"inputs": map[string]any{
+					"type":        "object",
+					"description": "Workflow inputs keyed by input name. Include every required input declared by the workflow definition before running it.",
+				},
+				"vars": map[string]any{
+					"type":        "object",
+					"description": "Optional workflow variables.",
+				},
+				"tag": map[string]any{
+					"type":        "string",
+					"description": "Optional friendly label for the run.",
+				},
+				"dry_run": map[string]any{
+					"type":        "boolean",
+					"description": "Validate and plan without executing.",
+				},
 			},
 			"required":             []string{"workflow_ref"},
 			"additionalProperties": false,
