@@ -89,7 +89,7 @@ func TestCLI_RunDryRunDoesNotPersistDaemonState(t *testing.T) {
 		t.Fatalf("expected dry-run plan output, got:\n%s", res.Stdout)
 	}
 
-	list := h.Run("workflow", "list", "--no-color")
+	list := h.Run("workflow", "runs", "--no-color")
 	list.AssertSuccess(t)
 	if !strings.Contains(list.Stdout, "No workflow runs") {
 		t.Fatalf("expected daemon run list to remain empty, got:\n%s", list.Stdout)

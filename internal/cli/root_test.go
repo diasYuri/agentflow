@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -108,14 +109,14 @@ nodes:
 	}
 }
 
-func TestWorkflowListReportsDaemonUnavailable(t *testing.T) {
+func TestWorkflowRunsReportsDaemonUnavailable(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	cmd := NewRootCommand()
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
-	cmd.SetArgs([]string{"workflow", "list"})
+	cmd.SetArgs([]string{"workflow", "runs"})
 
 	err := cmd.Execute()
 	if err == nil {
@@ -126,7 +127,7 @@ func TestWorkflowListReportsDaemonUnavailable(t *testing.T) {
 	}
 }
 
-func TestWorkflowListRendersTableAndJson(t *testing.T) {
+func TestWorkflowRunsRendersTableAndJson(t *testing.T) {
 	oldClient := newDaemonClient
 	newDaemonClient = func(socketPath string) workflowDaemonClient {
 		return workflowDaemonClientFunc{
@@ -141,7 +142,7 @@ func TestWorkflowListRendersTableAndJson(t *testing.T) {
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
-	cmd.SetArgs([]string{"workflow", "list", "--no-color"})
+	cmd.SetArgs([]string{"workflow", "runs", "--no-color"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
@@ -157,12 +158,167 @@ func TestWorkflowListRendersTableAndJson(t *testing.T) {
 	cmd = NewRootCommand()
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
-	cmd.SetArgs([]string{"workflow", "list", "--output", "json"})
+	cmd.SetArgs([]string{"workflow", "runs", "--output", "json"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), `"id":"run-1"`) || !strings.Contains(out.String(), `"tag":"smoke-test"`) {
 		t.Fatalf("unexpected json output: %q", out.String())
+	}
+}
+
+func TestWorkflowListLocalDefinitions(t *testing.T) {
+	dir := setupWorkflowDefinitionsWorkspace(t)
+	writeWorkflowDefinition(t, filepath.Join(dir, ".agentflow", "workflows", "build.yaml"), `
+version: "1"
+name: build
+description: Local build workflow
+nodes:
+  - id: ok
+    kind: noop
+`)
+
+	cmd := NewRootCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"workflow", "list", "--no-color"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	for _, want := range []string{"NAME", "build", "Local build workflow", "local"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected %q in output:\n%s", want, got)
+		}
+	}
+}
+
+func TestWorkflowListDefinitionsJSON(t *testing.T) {
+	dir := setupWorkflowDefinitionsWorkspace(t)
+	writeWorkflowDefinition(t, filepath.Join(dir, ".agentflow", "workflows", "build.yaml"), `
+version: "1"
+name: build
+nodes:
+  - id: ok
+    kind: noop
+`)
+
+	cmd := NewRootCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"workflow", "list", "--output", "json"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	var definitions []workflowDefinitionSummary
+	if err := json.Unmarshal(bytes.TrimSpace(out.Bytes()), &definitions); err != nil {
+		t.Fatalf("invalid json: %v\n%s", err, out.String())
+	}
+	if len(definitions) != 1 {
+		t.Fatalf("expected one definition, got %#v", definitions)
+	}
+	if definitions[0].Name != "build" || definitions[0].NodeCount != 1 || definitions[0].Source != "local" {
+		t.Fatalf("unexpected definition: %#v", definitions[0])
+	}
+}
+
+func TestWorkflowDefinitionsShowDetail(t *testing.T) {
+	dir := setupWorkflowDefinitionsWorkspace(t)
+	writeWorkflowDefinition(t, filepath.Join(dir, ".agentflow", "workflows", "build.yaml"), `
+version: "2"
+name: build
+description: Build and ship
+inputs:
+  target:
+    type: string
+    required: true
+outputs:
+  artifact:
+    type: string
+    value: "${nodes.ship.output}"
+nodes:
+  - id: plan
+    kind: noop
+  - id: ship
+    kind: noop
+    depends_on: [plan]
+`)
+
+	cmd := NewRootCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"workflow", "definitions", "build", "--no-color"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	for _, want := range []string{"Workflow definition", "name: build", "Inputs", "target: type=string required=true", "Outputs", "artifact: type=string", "graph TD", "plan --> ship"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected %q in output:\n%s", want, got)
+		}
+	}
+}
+
+func TestWorkflowDefinitionsShowDetailByPathJSON(t *testing.T) {
+	dir := setupWorkflowDefinitionsWorkspace(t)
+	workflowPath := filepath.Join(dir, "custom.yaml")
+	writeWorkflowDefinition(t, workflowPath, `
+version: "1"
+name: custom
+nodes:
+  - id: ok
+    kind: noop
+`)
+
+	cmd := NewRootCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"workflow", "definitions", workflowPath, "--output", "json"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	var detail workflowDefinitionDetail
+	if err := json.Unmarshal(bytes.TrimSpace(out.Bytes()), &detail); err != nil {
+		t.Fatalf("invalid json: %v\n%s", err, out.String())
+	}
+	if detail.Workflow.Name != "custom" || !strings.Contains(detail.Graph, "graph TD") {
+		t.Fatalf("unexpected detail: %#v", detail)
+	}
+}
+
+func TestWorkflowDefinitionsProjectResolution(t *testing.T) {
+	dir := setupWorkflowDefinitionsWorkspace(t)
+	projectDir := filepath.Join(dir, "demo")
+	writeWorkflowDefinition(t, filepath.Join(projectDir, ".agentflow", "workflows", "deploy.yaml"), `
+version: "1"
+name: deploy
+nodes:
+  - id: ok
+    kind: noop
+`)
+	writeProjectsFile(t, filepath.Join(dir, "home", ".agentflow", "projects.json"), []map[string]string{
+		{"name": "demo", "path": projectDir},
+	})
+
+	cmd := NewRootCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"workflow", "definitions", "deploy", "--project", "demo", "--no-color"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "name: deploy") || !strings.Contains(out.String(), filepath.Join(projectDir, ".agentflow", "workflows", "deploy.yaml")) {
+		t.Fatalf("unexpected output:\n%s", out.String())
 	}
 }
 
@@ -753,6 +909,50 @@ nodes:
 		t.Fatal(err)
 	}
 	return absPath
+}
+
+func setupWorkflowDefinitionsWorkspace(t *testing.T) string {
+	t.Helper()
+
+	dir := t.TempDir()
+	t.Setenv("HOME", filepath.Join(dir, "home"))
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(oldwd)
+	})
+	return dir
+}
+
+func writeWorkflowDefinition(t *testing.T, path string, content string) {
+	t.Helper()
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeProjectsFile(t *testing.T, path string, projects []map[string]string) {
+	t.Helper()
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(projects)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestDaemonProviderEnvIncludesPiPath(t *testing.T) {

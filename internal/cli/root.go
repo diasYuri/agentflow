@@ -229,7 +229,9 @@ func newWorkflowCommand(opts *options) *cobra.Command {
 	}
 	cmd.AddCommand(
 		newWorkflowRunCommand(opts),
-		newWorkflowListCommand(),
+		newWorkflowListCommand(opts),
+		newWorkflowRunsCommand(),
+		newWorkflowDefinitionsCommand(opts),
 		newWorkflowStatusCommand(),
 		newWorkflowWatchCommand(),
 		newWorkflowLogsCommand(),
@@ -377,11 +379,11 @@ func newWorkflowRunCommand(opts *options) *cobra.Command {
 	return cmd
 }
 
-func newWorkflowListCommand() *cobra.Command {
+func newWorkflowRunsCommand() *cobra.Command {
 	var outputFormat string
 	var noColor bool
 	cmd := &cobra.Command{
-		Use:   "list",
+		Use:   "runs",
 		Short: "List workflow runs",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {

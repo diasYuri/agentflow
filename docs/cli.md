@@ -8,7 +8,8 @@ Esta feature expõe a interface de linha de comando do `agentflow` para validar,
 2. gerar o grafo de execução;
 3. montar um plano sem executar;
 4. iniciar workflows em background no `agentflowd`;
-5. listar, inspecionar, acompanhar logs e cancelar runs.
+5. listar workflows disponíveis;
+6. listar, inspecionar, acompanhar logs e cancelar runs.
 
 Além do workflow em si, a CLI permite sobrescrever entradas, variáveis e parâmetros de execução por flags, sem precisar alterar o YAML original.
 
@@ -22,7 +23,9 @@ Em [`internal/cli/root.go`](/Users/yuri/git/diasYuri/agentflow/internal/cli/root
 - `graph <workflow>`: valida o workflow e imprime o grafo em Mermaid.
 - `dry-run <workflow>`: resolve entradas, monta o plano e imprime um JSON com `workflow`, `inputs`, `order` e `nodes`.
 - `workflow run <workflow>`: resolve o workflow no CLI, envia o caminho absoluto ao daemon e imprime `run_id`, `run_dir` e `status`.
-- `workflow list`: lista runs conhecidos pelo daemon.
+- `workflow list`: lista definições locais de workflows disponíveis para execução.
+- `workflow definitions <workflow>`: detalha uma definição de workflow, incluindo inputs, outputs e grafo Mermaid.
+- `workflow runs`: lista runs conhecidos pelo daemon.
 - `workflow status <id>`: mostra o estado de um run. Aceita `--watch` para acompanhar até o run alcançar um estado terminal (`success`, `failed`, `cancelled`, `timeout` ou `paused`).
 - `workflow watch <id>`: forma curta do `status --watch`.
 - `workflow logs <id>`: imprime o `events.jsonl` do run.
@@ -61,7 +64,7 @@ As entradas são combinadas nesta ordem:
 6. `--codex-path` aponta para o binário `codex` usado pelo provider `codex`.
 7. `--claude-path` aponta para o binário `claude` usado pelo provider `claude`.
 8. `--pi-path` aponta para o binário `pi` usado pelo provider `pi`.
-9. `--tag <name>` atribui um nome amigável opcional ao run. A tag é exibida em `workflow list`, `workflow status` e preservada nos artefatos do run.
+9. `--tag <name>` atribui um nome amigável opcional ao run. A tag é exibida em `workflow runs`, `workflow status` e preservada nos artefatos do run.
 
 Quando a execução vai para o daemon, esses caminhos são enviados na requisição do run. Ao iniciar o `agentflowd`, a CLI também propaga `--codex-path` como `AGENTFLOW_CODEX_PATH`, `--claude-path` como `AGENTFLOW_CLAUDE_PATH` e `--pi-path` como `AGENTFLOW_PI_PATH`. Se o caminho do Claude ou do Pi não for informado, os adapters ainda podem resolver `CLAUDE_PATH`, `PI_PATH` ou o binário correspondente no `PATH`.
 
@@ -75,6 +78,7 @@ Os workflows são resolvidos por nome/ref, seguindo a convenção documentada em
 
 - [`cmd/agentflow/main.go`](/Users/yuri/git/diasYuri/agentflow/cmd/agentflow/main.go): ponto de entrada do binário e integração com sinais do sistema.
 - [`internal/cli/root.go`](/Users/yuri/git/diasYuri/agentflow/internal/cli/root.go): definição dos comandos `validate`, `graph`, `dry-run` e `run`, além do parsing de flags e inputs.
+- [`internal/cli/workflow_definitions.go`](/Users/yuri/git/diasYuri/agentflow/internal/cli/workflow_definitions.go): listagem e inspeção local de definições de workflow.
 - [`cmd/agentflowd/main.go`](/Users/yuri/git/diasYuri/agentflow/cmd/agentflowd/main.go): ponto de entrada do daemon.
 - [`internal/daemon`](/Users/yuri/git/diasYuri/agentflow/internal/daemon): RPC local, supervisão e gerenciamento de workflows em background.
 - [`internal/cli/root_test.go`](/Users/yuri/git/diasYuri/agentflow/internal/cli/root_test.go): cobertura dos comportamentos visíveis do CLI, incluindo grafo Mermaid, flags suportadas e comando `tui`.

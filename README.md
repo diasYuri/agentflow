@@ -88,7 +88,9 @@ After installing, run `agentflow doctor` to validate your environment.
 ### `workflow` Namespace
 
 - `agentflow workflow run <workflow>`: start a run in the daemon.
-- `agentflow workflow list`: list known runs.
+- `agentflow workflow list`: list local workflow definitions.
+- `agentflow workflow definitions <workflow>`: inspect a workflow definition, including inputs, outputs, and graph.
+- `agentflow workflow runs`: list known runs.
 - `agentflow workflow status <id>`: show a run status.
 - `agentflow workflow watch <id>`: follow a run until it finishes.
 - `agentflow workflow logs <id>`: print run events.
@@ -233,7 +235,7 @@ Example:
 ```bash
 agentflow daemon start
 agentflow workflow run review-changed-files --input-json samples/inputs/review-files.json
-agentflow workflow list
+agentflow workflow runs
 agentflow workflow logs <run_id>
 ```
 

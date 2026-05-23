@@ -27,7 +27,7 @@ A RPC v1 usa HTTP sobre Unix domain socket:
 - Índice SQLite: `~/.agentflow/agentflowd.sqlite`
 - Runs: `~/.agentflow/runs`
 
-O daemon usa SQLite como índice persistente de runs. Os metadados de `workflow list`
+O daemon usa SQLite como índice persistente de runs. Os metadados de `workflow runs`
 e `workflow status` sobrevivem a restart do processo, enquanto os payloads auditáveis
 continuam no filesystem em `~/.agentflow/runs`. Se o daemon reiniciar com runs que
 estavam `created` ou `running`, eles são reidratados como `cancelled`, pois não há
