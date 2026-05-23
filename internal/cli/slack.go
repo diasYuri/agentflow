@@ -44,7 +44,7 @@ func newSlackCommand() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&flags.appToken, "app-token", "", "Slack app-level token (xapp-...)")
 	cmd.Flags().StringVar(&flags.botToken, "bot-token", "", "Slack bot token (xoxb-...)")
-	cmd.Flags().StringVar(&flags.project, "project", "", "project name used for Slack sessions")
+	cmd.Flags().StringVar(&flags.project, "project", "", "default project name used for Slack sessions")
 	cmd.Flags().StringVar(&flags.root, "root", "", "override the AgentFlow root directory (default ~/.agentflow)")
 	cmd.Flags().StringVar(&flags.daemon, "daemon", string(settings.DaemonRequirementAuto), "agentflowd requirement: auto, required, or off")
 	cmd.Flags().StringVar(&flags.daemonSocket, "daemon-socket", "", "override the agentflowd unix socket")
@@ -89,9 +89,6 @@ func runSlackCommand(cmd *cobra.Command, flags *slackFlags) error {
 	}
 	if strings.TrimSpace(botToken) == "" {
 		return fmt.Errorf("slack bot token is required; set --bot-token or AGENTFLOW_SLACK_BOT_TOKEN")
-	}
-	if strings.TrimSpace(project) == "" {
-		return fmt.Errorf("slack project is required; set --project or AGENTFLOW_SLACK_PROJECT")
 	}
 	var logOutput io.Writer = os.Stderr
 	if flags.logToStdout {

@@ -7,8 +7,8 @@ package persistence
 const schemaSQL = `
 CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY,
-    project_name TEXT NOT NULL,
-    project_path TEXT NOT NULL,
+    project_name TEXT,
+    project_path TEXT,
     title TEXT,
     status TEXT NOT NULL DEFAULT 'open',
     provider TEXT,

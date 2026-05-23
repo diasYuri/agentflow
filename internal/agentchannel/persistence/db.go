@@ -92,10 +92,103 @@ func (db *DB) applySchemaUpgrades(ctx context.Context) error {
 			return fmt.Errorf("add sessions.%s: %w", name, err)
 		}
 	}
+	if err := db.ensureNullableSessionProject(ctx); err != nil {
+		return err
+	}
 	if _, err := db.sql.ExecContext(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_external_key ON sessions(external_key) WHERE external_key IS NOT NULL`); err != nil {
 		return fmt.Errorf("create sessions external key index: %w", err)
 	}
 	return nil
+}
+
+func (db *DB) ensureNullableSessionProject(ctx context.Context) error {
+	needsRebuild, err := db.sessionProjectColumnsNeedRebuild(ctx)
+	if err != nil {
+		return err
+	}
+	if !needsRebuild {
+		return nil
+	}
+	if _, err := db.sql.ExecContext(ctx, `PRAGMA foreign_keys = OFF`); err != nil {
+		return fmt.Errorf("disable foreign keys for sessions rebuild: %w", err)
+	}
+	defer db.sql.ExecContext(ctx, `PRAGMA foreign_keys = ON`)
+	tx, err := db.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `CREATE TABLE sessions_new (
+    id TEXT PRIMARY KEY,
+    project_name TEXT,
+    project_path TEXT,
+    title TEXT,
+    status TEXT NOT NULL DEFAULT 'open',
+    provider TEXT,
+    model TEXT,
+    source TEXT NOT NULL DEFAULT 'web',
+    external_key TEXT,
+    external_workspace_id TEXT,
+    external_channel_id TEXT,
+    external_thread_id TEXT,
+    external_user_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    last_message_at TEXT,
+    metadata TEXT
+)`); err != nil {
+		return fmt.Errorf("create nullable sessions table: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO sessions_new (
+    id, project_name, project_path, title, status, provider, model,
+    source, external_key, external_workspace_id, external_channel_id, external_thread_id, external_user_id,
+    created_at, updated_at, last_message_at, metadata
+)
+SELECT
+    id, project_name, project_path, title, status, provider, model,
+    source, external_key, external_workspace_id, external_channel_id, external_thread_id, external_user_id,
+    created_at, updated_at, last_message_at, metadata
+FROM sessions`); err != nil {
+		return fmt.Errorf("copy sessions: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DROP TABLE sessions`); err != nil {
+		return fmt.Errorf("drop old sessions table: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `ALTER TABLE sessions_new RENAME TO sessions`); err != nil {
+		return fmt.Errorf("rename sessions table: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_name, created_at DESC)`); err != nil {
+		return fmt.Errorf("recreate sessions project index: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status)`); err != nil {
+		return fmt.Errorf("recreate sessions status index: %w", err)
+	}
+	return tx.Commit()
+}
+
+func (db *DB) sessionProjectColumnsNeedRebuild(ctx context.Context) (bool, error) {
+	rows, err := db.sql.QueryContext(ctx, "PRAGMA table_info(sessions)")
+	if err != nil {
+		return false, fmt.Errorf("inspect sessions schema: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			cid        int
+			name       string
+			columnType string
+			notNull    int
+			defaultVal any
+			pk         int
+		)
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultVal, &pk); err != nil {
+			return false, err
+		}
+		if (name == "project_name" || name == "project_path") && notNull != 0 {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 func (db *DB) columnExists(ctx context.Context, table, column string) (bool, error) {

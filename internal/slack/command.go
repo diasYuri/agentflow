@@ -63,14 +63,13 @@ func (c *Command) Run(ctx context.Context) error {
 	if strings.TrimSpace(c.BotToken) == "" {
 		return errors.New("slack bot token is required")
 	}
-	if strings.TrimSpace(c.ProjectName) == "" {
-		return errors.New("slack project is required")
-	}
 	if c.Projects == nil {
 		c.Projects = app.NewProjectRegistry(nil)
 	}
-	if _, err := c.Projects.Resolve(c.ProjectName); err != nil {
-		return fmt.Errorf("resolve project %q: %w", c.ProjectName, err)
+	if strings.TrimSpace(c.ProjectName) != "" {
+		if _, err := c.Projects.Resolve(c.ProjectName); err != nil {
+			return fmt.Errorf("resolve project %q: %w", c.ProjectName, err)
+		}
 	}
 	if c.Daemon == nil {
 		c.Daemon = NewDefaultDaemonChecker(c.Settings.Paths.DaemonSocket)
@@ -96,7 +95,11 @@ func (c *Command) Run(ctx context.Context) error {
 
 	fmt.Fprintln(c.Stdout, "AgentFlow Slack ready")
 	fmt.Fprintf(c.Stdout, "  team: %s\n", c.teamID)
-	fmt.Fprintf(c.Stdout, "  project: %s\n", c.ProjectName)
+	if strings.TrimSpace(c.ProjectName) == "" {
+		fmt.Fprintln(c.Stdout, "  project: select in conversation")
+	} else {
+		fmt.Fprintf(c.Stdout, "  project: %s\n", c.ProjectName)
+	}
 	fmt.Fprintf(c.Stdout, "  bot: %s\n", c.botUserID)
 
 	responder := newResponder(c.sessions, c.broker, client, c.Logger)
@@ -157,6 +160,7 @@ func (c *Command) openCore(ctx context.Context) error {
 	}
 	channelSvc, err := agentchannel.NewService(agentchannel.Options{
 		Sessions:              sessions,
+		Projects:              projects,
 		Diagnostics:           recorder,
 		Events:                broker,
 		WorkflowDefinitions:   daemon.NewClient(c.Settings.Paths.DaemonSocket),

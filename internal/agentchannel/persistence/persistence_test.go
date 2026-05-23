@@ -51,6 +51,32 @@ CREATE TABLE sessions (
 	if err != nil {
 		t.Fatalf("create legacy schema: %v", err)
 	}
+	_, err = legacy.ExecContext(ctx, `
+CREATE TABLE messages (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    sequence INTEGER NOT NULL,
+    role TEXT NOT NULL,
+    content TEXT,
+    payload_ref TEXT,
+    correlation_id TEXT,
+    created_at TEXT NOT NULL,
+    metadata TEXT,
+    UNIQUE (session_id, sequence)
+)`)
+	if err != nil {
+		t.Fatalf("create legacy messages schema: %v", err)
+	}
+	_, err = legacy.ExecContext(ctx, `INSERT INTO sessions (id, project_name, project_path, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		"legacy-session", "demo", "/p", "open", time.Now().UTC().Format(time.RFC3339Nano), time.Now().UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		t.Fatalf("insert legacy session: %v", err)
+	}
+	_, err = legacy.ExecContext(ctx, `INSERT INTO messages (id, session_id, sequence, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		"legacy-message", "legacy-session", 1, "user", "hello", time.Now().UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		t.Fatalf("insert legacy message: %v", err)
+	}
 	if err := legacy.Close(); err != nil {
 		t.Fatalf("close legacy db: %v", err)
 	}
@@ -64,8 +90,6 @@ CREATE TABLE sessions (
 	repo := persistence.NewSessionRepository(db)
 	created, err := repo.Create(ctx, persistence.Session{
 		ID:          "slack-session",
-		ProjectName: "demo",
-		ProjectPath: "/p",
 		Source:      "slack",
 		ExternalKey: "slack:T1:C1:thread",
 	})
@@ -78,6 +102,16 @@ CREATE TABLE sessions (
 	}
 	if got.ID != created.ID || got.Source != "slack" {
 		t.Fatalf("unexpected upgraded session: %+v", got)
+	}
+	if got.ProjectName != "" || got.ProjectPath != "" {
+		t.Fatalf("expected nullable project columns, got %+v", got)
+	}
+	messages, err := persistence.NewMessageRepository(db).ListBySession(ctx, "legacy-session", 0)
+	if err != nil {
+		t.Fatalf("list legacy messages: %v", err)
+	}
+	if len(messages) != 1 || messages[0].Content != "hello" {
+		t.Fatalf("legacy messages were not preserved: %+v", messages)
 	}
 }
 
@@ -131,6 +165,44 @@ func TestSessionLifecycle(t *testing.T) {
 	}
 	if err := repo.Delete(ctx, created.ID); !errors.Is(err, persistence.ErrSessionNotFound) {
 		t.Fatalf("expected ErrSessionNotFound on second delete, got %v", err)
+	}
+}
+
+func TestPendingSessionLifecycle(t *testing.T) {
+	db := openTestDB(t)
+	repo := persistence.NewSessionRepository(db)
+	ctx := context.Background()
+	created, err := repo.Create(ctx, persistence.Session{
+		ID:          "pending",
+		Source:      "slack",
+		ExternalKey: "slack:T1:C1:thread",
+	})
+	if err != nil {
+		t.Fatalf("create pending: %v", err)
+	}
+	if created.ProjectName != "" || created.ProjectPath != "" {
+		t.Fatalf("expected pending project: %+v", created)
+	}
+	global, err := repo.ListByProject(ctx, "")
+	if err != nil || len(global) != 1 {
+		t.Fatalf("global list: err=%v list=%+v", err, global)
+	}
+	byProject, err := repo.ListByProject(ctx, "demo")
+	if err != nil {
+		t.Fatalf("project list: %v", err)
+	}
+	if len(byProject) != 0 {
+		t.Fatalf("pending session should not be listed by project: %+v", byProject)
+	}
+	if err := repo.SetProject(ctx, created.ID, "demo", "/projects/demo"); err != nil {
+		t.Fatalf("set project: %v", err)
+	}
+	got, err := repo.Get(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.ProjectName != "demo" || got.ProjectPath != "/projects/demo" {
+		t.Fatalf("project not bound: %+v", got)
 	}
 }
 

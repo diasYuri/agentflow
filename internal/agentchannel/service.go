@@ -9,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -39,6 +41,7 @@ type EventSink interface {
 // Options bundles dependencies for Service.
 type Options struct {
 	Sessions              *session.Sessions
+	Projects              session.ProjectResolver
 	Diagnostics           *diagnostics.Recorder
 	Events                EventSink
 	WorkflowDefinitions   chatagent.WorkflowDefinitionClient
@@ -52,6 +55,7 @@ type Options struct {
 // Service owns the channel-neutral message-to-agent orchestration.
 type Service struct {
 	Sessions              *session.Sessions
+	Projects              session.ProjectResolver
 	Diagnostics           *diagnostics.Recorder
 	Events                EventSink
 	WorkflowDefinitions   chatagent.WorkflowDefinitionClient
@@ -106,6 +110,7 @@ func NewService(opts Options) (*Service, error) {
 	}
 	return &Service{
 		Sessions:              opts.Sessions,
+		Projects:              opts.Projects,
 		Diagnostics:           opts.Diagnostics,
 		Events:                opts.Events,
 		WorkflowDefinitions:   opts.WorkflowDefinitions,
@@ -161,12 +166,97 @@ func (s *Service) SubmitUserMessage(ctx context.Context, input UserMessageInput)
 		return UserMessageResult{}, err
 	}
 	s.PublishMessage(stored)
+	if strings.TrimSpace(sess.ProjectName) == "" {
+		sess, err = s.handlePendingProjectSelection(ctx, sess, stored, input.Content)
+		if err != nil {
+			return UserMessageResult{}, err
+		}
+		return UserMessageResult{Session: sess, Message: stored}, nil
+	}
 	if input.Async {
 		s.ScheduleUserMessage(sess.ID, stored)
 	} else {
 		s.HandleUserMessage(ctx, sess.ID, stored)
 	}
 	return UserMessageResult{Session: sess, Message: stored}, nil
+}
+
+func (s *Service) handlePendingProjectSelection(ctx context.Context, sess persistence.Session, userMessage persistence.Message, content string) (persistence.Session, error) {
+	projects, err := s.listProjects()
+	if err != nil {
+		return persistence.Session{}, err
+	}
+	var reply string
+	if len(projects) == 0 {
+		reply = "Nenhum project cadastrado. Cadastre um project antes de continuar esta conversa."
+	} else if selected, ok := selectProject(projects, content); ok {
+		bound, err := s.Sessions.BindProject(ctx, sess.ID, selected.Name)
+		if err != nil {
+			return persistence.Session{}, err
+		}
+		reply = fmt.Sprintf("Project `%s` vinculado a esta conversa.", bound.ProjectName)
+		sess = bound
+	} else {
+		reply = "Escolha um project para esta conversa: " + projectNames(projects)
+	}
+	assistant, err := s.Sessions.AppendMessage(ctx, sess.ID, session.AppendInput{
+		Role:          persistence.MessageRoleAssistant,
+		Content:       reply,
+		CorrelationID: userMessage.CorrelationID,
+	})
+	if err != nil {
+		return persistence.Session{}, err
+	}
+	s.PublishMessage(assistant)
+	return sess, nil
+}
+
+func (s *Service) listProjects() ([]projectChoice, error) {
+	if s == nil || s.Projects == nil {
+		return nil, errors.New("agentchannel: Projects is required for project selection")
+	}
+	projects, err := s.Projects.List()
+	if err != nil {
+		return nil, fmt.Errorf("list projects: %w", err)
+	}
+	choices := make([]projectChoice, 0, len(projects))
+	for _, project := range projects {
+		if strings.TrimSpace(project.Name) == "" {
+			continue
+		}
+		choices = append(choices, projectChoice{Name: project.Name})
+	}
+	sort.Slice(choices, func(i, j int) bool {
+		return choices[i].Name < choices[j].Name
+	})
+	return choices, nil
+}
+
+type projectChoice struct {
+	Name string
+}
+
+func selectProject(projects []projectChoice, content string) (projectChoice, bool) {
+	selection := strings.TrimSpace(content)
+	for _, project := range projects {
+		if project.Name == selection {
+			return project, true
+		}
+	}
+	for _, project := range projects {
+		if strings.EqualFold(project.Name, selection) {
+			return project, true
+		}
+	}
+	return projectChoice{}, false
+}
+
+func projectNames(projects []projectChoice) string {
+	names := make([]string, 0, len(projects))
+	for _, project := range projects {
+		names = append(names, project.Name)
+	}
+	return strings.Join(names, ", ")
 }
 
 // PublishMessage emits a persisted message to interested channel adapters.

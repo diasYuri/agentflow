@@ -105,6 +105,74 @@ func TestResolveOrCreateByExternalKeyReusesChannelSession(t *testing.T) {
 	}
 }
 
+func TestResolveOrCreateByExternalKeyAllowsPendingProject(t *testing.T) {
+	projects := newStubProjects(app.Project{Name: "demo", Path: "/projects/demo"})
+	svc := openSessions(t, projects)
+	created, err := svc.ResolveOrCreateByExternalKey(context.Background(), session.CreateInput{
+		Title:       "slack thread",
+		Source:      "slack",
+		ExternalKey: "slack:T1:C1:1700000000.000100",
+	})
+	if err != nil {
+		t.Fatalf("create pending: %v", err)
+	}
+	if created.ProjectName != "" || created.ProjectPath != "" {
+		t.Fatalf("expected pending project, got %+v", created)
+	}
+}
+
+func TestCreateRejectsMissingProjectWithoutExternalKey(t *testing.T) {
+	projects := newStubProjects(app.Project{Name: "demo", Path: "/projects/demo"})
+	svc := openSessions(t, projects)
+	_, err := svc.Create(context.Background(), session.CreateInput{Title: "web"})
+	if err == nil || !strings.Contains(err.Error(), "project is required") {
+		t.Fatalf("expected project requirement, got %v", err)
+	}
+}
+
+func TestBindProjectSnapshotsProjectRoot(t *testing.T) {
+	projects := newStubProjects(app.Project{Name: "demo", Path: "/projects/demo"})
+	svc := openSessions(t, projects)
+	created, err := svc.ResolveOrCreateByExternalKey(context.Background(), session.CreateInput{
+		Source:      "slack",
+		ExternalKey: "slack:T1:C1:thread",
+	})
+	if err != nil {
+		t.Fatalf("create pending: %v", err)
+	}
+	bound, err := svc.BindProject(context.Background(), created.ID, "demo")
+	if err != nil {
+		t.Fatalf("bind: %v", err)
+	}
+	if bound.ProjectName != "demo" || bound.ProjectPath != "/projects/demo" {
+		t.Fatalf("unexpected bound session: %+v", bound)
+	}
+	projects.byName["demo"] = app.Project{Name: "demo", Path: "/projects/renamed"}
+	got, err := svc.Get(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.ProjectPath != "/projects/demo" {
+		t.Fatalf("snapshot drifted: %q", got.ProjectPath)
+	}
+}
+
+func TestBindProjectRejectsSwitch(t *testing.T) {
+	projects := newStubProjects(
+		app.Project{Name: "demo", Path: "/p"},
+		app.Project{Name: "other", Path: "/other"},
+	)
+	svc := openSessions(t, projects)
+	created, err := svc.Create(context.Background(), session.CreateInput{ProjectName: "demo"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	_, err = svc.BindProject(context.Background(), created.ID, "other")
+	if !errors.Is(err, session.ErrProjectSwitch) {
+		t.Fatalf("expected ErrProjectSwitch, got %v", err)
+	}
+}
+
 func TestAssertProjectMatchesBlocksSwitch(t *testing.T) {
 	projects := newStubProjects(app.Project{Name: "demo", Path: "/p"})
 	svc := openSessions(t, projects)

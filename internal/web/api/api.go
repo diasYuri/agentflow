@@ -129,6 +129,7 @@ func NewService(opts Options) (*Service, error) {
 	}
 	channelSvc, err := agentchannel.NewService(agentchannel.Options{
 		Sessions:              sessions,
+		Projects:              opts.Projects,
 		Diagnostics:           rec,
 		Events:                opts.Broker,
 		WorkflowDefinitions:   opts.WorkflowDefinitions,

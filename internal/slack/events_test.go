@@ -62,6 +62,24 @@ func TestSlackDirectMessageBuildsUserMessageInput(t *testing.T) {
 	}
 }
 
+func TestSlackMessageInputAllowsEmptyProject(t *testing.T) {
+	ev := slackEvent{
+		Type:        "message",
+		User:        "U1",
+		Text:        "demo",
+		Channel:     "D1",
+		ChannelType: "im",
+		TS:          "1700000000.000200",
+	}
+	input, ok := ev.toUserMessageInput("", "T1", "UBOT", "env-2")
+	if !ok {
+		t.Fatal("expected DM to be accepted")
+	}
+	if input.Conversation.ProjectName != "" {
+		t.Fatalf("project should be optional, got %+v", input.Conversation)
+	}
+}
+
 func TestSlackRejectsBotAndUnsupportedMessages(t *testing.T) {
 	cases := []slackEvent{
 		{Type: "message", ChannelType: "im", Text: "hi", Channel: "D1", BotID: "B1"},
@@ -145,4 +163,10 @@ func (s stubProjects) Resolve(name string) (app.Project, error) {
 	return app.Project{}, fmt.Errorf("project %q not found", name)
 }
 
-func (s stubProjects) List() ([]app.Project, error) { return nil, nil }
+func (s stubProjects) List() ([]app.Project, error) {
+	out := make([]app.Project, 0, len(s.byName))
+	for _, p := range s.byName {
+		out = append(out, p)
+	}
+	return out, nil
+}

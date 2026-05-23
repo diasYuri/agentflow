@@ -90,15 +90,25 @@ type CreateInput struct {
 // Create snapshots the resolved project root and persists a new
 // session.
 func (s *Sessions) Create(ctx context.Context, input CreateInput) (persistence.Session, error) {
-	project, err := s.projects.Resolve(input.ProjectName)
-	if err != nil {
-		return persistence.Session{}, fmt.Errorf("resolve project: %w", err)
+	projectName := strings.TrimSpace(input.ProjectName)
+	projectPath := ""
+	if projectName == "" {
+		if strings.TrimSpace(input.ExternalKey) == "" {
+			return persistence.Session{}, errors.New("session: project is required")
+		}
+	} else {
+		project, err := s.projects.Resolve(projectName)
+		if err != nil {
+			return persistence.Session{}, fmt.Errorf("resolve project: %w", err)
+		}
+		projectName = project.Name
+		projectPath = project.Path
 	}
 	now := s.now().UTC()
 	session := persistence.Session{
 		ID:                  uuid.NewString(),
-		ProjectName:         project.Name,
-		ProjectPath:         project.Path,
+		ProjectName:         projectName,
+		ProjectPath:         projectPath,
 		Title:               strings.TrimSpace(input.Title),
 		Status:              persistence.SessionStatusOpen,
 		Provider:            strings.TrimSpace(input.Provider),
@@ -137,6 +147,29 @@ func (s *Sessions) ResolveOrCreateByExternalKey(ctx context.Context, input Creat
 	return s.Create(ctx, input)
 }
 
+// BindProject snapshots a project root into a pending external session. A
+// session that already belongs to a project cannot be rebound here.
+func (s *Sessions) BindProject(ctx context.Context, sessionID, projectName string) (persistence.Session, error) {
+	session, err := s.sessions.Get(ctx, sessionID)
+	if err != nil {
+		return persistence.Session{}, err
+	}
+	if strings.TrimSpace(session.ProjectName) != "" {
+		if session.ProjectName == strings.TrimSpace(projectName) {
+			return session, nil
+		}
+		return persistence.Session{}, fmt.Errorf("%w: session %q belongs to %q", ErrProjectSwitch, sessionID, session.ProjectName)
+	}
+	project, err := s.projects.Resolve(strings.TrimSpace(projectName))
+	if err != nil {
+		return persistence.Session{}, fmt.Errorf("resolve project: %w", err)
+	}
+	if err := s.sessions.SetProject(ctx, sessionID, project.Name, project.Path); err != nil {
+		return persistence.Session{}, err
+	}
+	return s.sessions.Get(ctx, sessionID)
+}
+
 // Get returns a session by id.
 func (s *Sessions) Get(ctx context.Context, id string) (persistence.Session, error) {
 	return s.sessions.Get(ctx, id)
@@ -168,6 +201,9 @@ func (s *Sessions) AssertProjectMatches(ctx context.Context, sessionID, projectN
 	}
 	if strings.TrimSpace(projectName) == "" {
 		return session, nil
+	}
+	if strings.TrimSpace(session.ProjectName) == "" {
+		return persistence.Session{}, fmt.Errorf("%w: session %q is awaiting project selection", ErrProjectSwitch, sessionID)
 	}
 	if session.ProjectName != projectName {
 		return persistence.Session{}, fmt.Errorf("%w: session %q belongs to %q", ErrProjectSwitch, sessionID, session.ProjectName)

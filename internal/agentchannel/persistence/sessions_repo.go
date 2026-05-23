@@ -30,12 +30,6 @@ func (r *SessionRepository) Create(ctx context.Context, session Session) (Sessio
 	if strings.TrimSpace(session.ID) == "" {
 		return Session{}, errors.New("persistence: session id is required")
 	}
-	if strings.TrimSpace(session.ProjectName) == "" {
-		return Session{}, errors.New("persistence: project_name is required")
-	}
-	if strings.TrimSpace(session.ProjectPath) == "" {
-		return Session{}, errors.New("persistence: project_path is required")
-	}
 	now := time.Now().UTC()
 	if session.CreatedAt.IsZero() {
 		session.CreatedAt = now
@@ -119,7 +113,7 @@ ORDER BY COALESCE(last_message_at, updated_at) DESC, created_at DESC`)
 	} else {
 		rows, err = r.db.QueryContext(ctx, `
 SELECT `+sessionColumns+`
-FROM sessions WHERE project_name = ?
+FROM sessions WHERE project_name = ? AND project_name IS NOT NULL AND project_name <> ''
 ORDER BY COALESCE(last_message_at, updated_at) DESC, created_at DESC`, projectName)
 	}
 	if err != nil {
@@ -135,6 +129,32 @@ ORDER BY COALESCE(last_message_at, updated_at) DESC, created_at DESC`, projectNa
 		sessions = append(sessions, session)
 	}
 	return sessions, rows.Err()
+}
+
+// SetProject binds a previously pending session to a concrete project.
+func (r *SessionRepository) SetProject(ctx context.Context, id, projectName, projectPath string) error {
+	if strings.TrimSpace(id) == "" {
+		return errors.New("persistence: session id is required")
+	}
+	if strings.TrimSpace(projectName) == "" {
+		return errors.New("persistence: project_name is required")
+	}
+	if strings.TrimSpace(projectPath) == "" {
+		return errors.New("persistence: project_path is required")
+	}
+	res, err := r.db.ExecContext(ctx, `UPDATE sessions SET project_name = ?, project_path = ?, updated_at = ? WHERE id = ?`,
+		projectName, projectPath, time.Now().UTC().Format(time.RFC3339Nano), id)
+	if err != nil {
+		return err
+	}
+	count, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if count == 0 {
+		return ErrSessionNotFound
+	}
+	return nil
 }
 
 // UpdateLastMessageAt records when the most recent message landed.
@@ -177,15 +197,15 @@ func (r *SessionRepository) Delete(ctx context.Context, id string) error {
 func scanSession(scanner rowScanner) (Session, error) {
 	var (
 		session Session
-		title, provider, model, source, externalKey,
+		projectName, projectPath, title, provider, model, source, externalKey,
 		externalWorkspaceID, externalChannelID, externalThreadID, externalUserID,
 		lastMessageAt, metaStr sql.NullString
 		createdAt, updatedAt string
 	)
 	if err := scanner.Scan(
 		&session.ID,
-		&session.ProjectName,
-		&session.ProjectPath,
+		&projectName,
+		&projectPath,
 		&title,
 		&session.Status,
 		&provider,
@@ -205,6 +225,12 @@ func scanSession(scanner rowScanner) (Session, error) {
 			return Session{}, ErrSessionNotFound
 		}
 		return Session{}, err
+	}
+	if projectName.Valid {
+		session.ProjectName = projectName.String
+	}
+	if projectPath.Valid {
+		session.ProjectPath = projectPath.String
 	}
 	if title.Valid {
 		session.Title = title.String
