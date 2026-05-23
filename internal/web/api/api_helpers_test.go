@@ -12,10 +12,11 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/diasYuri/agentflow/internal/agentchannel"
+	"github.com/diasYuri/agentflow/internal/agentchannel/events"
+	"github.com/diasYuri/agentflow/internal/agentchannel/persistence"
 	"github.com/diasYuri/agentflow/internal/app"
 	"github.com/diasYuri/agentflow/internal/web/api"
-	"github.com/diasYuri/agentflow/internal/web/events"
-	"github.com/diasYuri/agentflow/internal/web/persistence"
 )
 
 type stubProjects struct {
@@ -57,7 +58,7 @@ func newTestService(t *testing.T) (*api.Service, *http.ServeMux, *events.Broker)
 	return newTestServiceWithAgent(t, nil)
 }
 
-func newTestServiceWithAgent(t *testing.T, agent api.ChatAgent) (*api.Service, *http.ServeMux, *events.Broker) {
+func newTestServiceWithAgent(t *testing.T, agent agentchannel.ChatAgent) (*api.Service, *http.ServeMux, *events.Broker) {
 	t.Helper()
 	dir := t.TempDir()
 	db, err := persistence.Open(context.Background(), filepath.Join(dir, "web.sqlite"))

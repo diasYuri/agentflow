@@ -101,7 +101,7 @@ FROM approvals WHERE session_id = ? ORDER BY created_at ASC`, sessionID)
 
 func scanApproval(scanner rowScanner) (Approval, error) {
 	var (
-		approval                            Approval
+		approval                             Approval
 		toolCall, reason, decidedBy, decided sql.NullString
 		createdAt                            string
 	)

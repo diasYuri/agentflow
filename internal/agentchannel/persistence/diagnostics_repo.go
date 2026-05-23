@@ -117,10 +117,10 @@ LIMIT ?`, limit)
 
 func scanDiagnostic(scanner rowScanner) (Diagnostic, error) {
 	var (
-		diag                    Diagnostic
-		sessionID               sql.NullString
-		code, corr, ctxStr      sql.NullString
-		createdAt               string
+		diag               Diagnostic
+		sessionID          sql.NullString
+		code, corr, ctxStr sql.NullString
+		createdAt          string
 	)
 	if err := scanner.Scan(
 		&diag.ID,

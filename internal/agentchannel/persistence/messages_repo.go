@@ -132,9 +132,9 @@ ORDER BY sequence ASC`, sessionID, sequence)
 
 func scanMessage(scanner rowScanner) (Message, error) {
 	var (
-		msg                                  Message
-		content, payloadRef, corr, metaStr  sql.NullString
-		createdAt                           string
+		msg                                Message
+		content, payloadRef, corr, metaStr sql.NullString
+		createdAt                          string
 	)
 	if err := scanner.Scan(
 		&msg.ID,

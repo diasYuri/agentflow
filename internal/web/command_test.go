@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/diasYuri/agentflow/internal/web/chatagent"
+	"github.com/diasYuri/agentflow/internal/agentchannel/chatagent"
 	"github.com/diasYuri/agentflow/internal/web/settings"
 )
 

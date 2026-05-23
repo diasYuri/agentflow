@@ -12,8 +12,8 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/diasYuri/agentflow/internal/agentchannel/persistence"
 	"github.com/diasYuri/agentflow/internal/app"
-	"github.com/diasYuri/agentflow/internal/web/persistence"
 )
 
 // ProjectResolver is the slice of app.ProjectRegistry that this
@@ -74,11 +74,17 @@ var ErrEmptyContent = errors.New("session: message content is required")
 
 // CreateInput holds the fields needed to create a session.
 type CreateInput struct {
-	ProjectName string
-	Title       string
-	Provider    string
-	Model       string
-	Metadata    map[string]any
+	ProjectName         string
+	Title               string
+	Provider            string
+	Model               string
+	Source              string
+	ExternalKey         string
+	ExternalWorkspaceID string
+	ExternalChannelID   string
+	ExternalThreadID    string
+	ExternalUserID      string
+	Metadata            map[string]any
 }
 
 // Create snapshots the resolved project root and persists a new
@@ -90,18 +96,45 @@ func (s *Sessions) Create(ctx context.Context, input CreateInput) (persistence.S
 	}
 	now := s.now().UTC()
 	session := persistence.Session{
-		ID:          uuid.NewString(),
-		ProjectName: project.Name,
-		ProjectPath: project.Path,
-		Title:       strings.TrimSpace(input.Title),
-		Status:      persistence.SessionStatusOpen,
-		Provider:    strings.TrimSpace(input.Provider),
-		Model:       strings.TrimSpace(input.Model),
-		CreatedAt:   now,
-		UpdatedAt:   now,
-		Metadata:    input.Metadata,
+		ID:                  uuid.NewString(),
+		ProjectName:         project.Name,
+		ProjectPath:         project.Path,
+		Title:               strings.TrimSpace(input.Title),
+		Status:              persistence.SessionStatusOpen,
+		Provider:            strings.TrimSpace(input.Provider),
+		Model:               strings.TrimSpace(input.Model),
+		Source:              sourceOrDefault(input.Source),
+		ExternalKey:         strings.TrimSpace(input.ExternalKey),
+		ExternalWorkspaceID: strings.TrimSpace(input.ExternalWorkspaceID),
+		ExternalChannelID:   strings.TrimSpace(input.ExternalChannelID),
+		ExternalThreadID:    strings.TrimSpace(input.ExternalThreadID),
+		ExternalUserID:      strings.TrimSpace(input.ExternalUserID),
+		CreatedAt:           now,
+		UpdatedAt:           now,
+		Metadata:            input.Metadata,
 	}
 	return s.sessions.Create(ctx, session)
+}
+
+// GetByExternalKey returns a session previously associated with a channel
+// adapter identity, such as a Slack workspace/channel/thread tuple.
+func (s *Sessions) GetByExternalKey(ctx context.Context, externalKey string) (persistence.Session, error) {
+	return s.sessions.GetByExternalKey(ctx, externalKey)
+}
+
+// ResolveOrCreateByExternalKey reuses a channel-mapped session when it exists
+// and creates one otherwise. The external key remains opaque to this package.
+func (s *Sessions) ResolveOrCreateByExternalKey(ctx context.Context, input CreateInput) (persistence.Session, error) {
+	if strings.TrimSpace(input.ExternalKey) != "" {
+		found, err := s.GetByExternalKey(ctx, input.ExternalKey)
+		if err == nil {
+			return found, nil
+		}
+		if !errors.Is(err, persistence.ErrSessionNotFound) {
+			return persistence.Session{}, err
+		}
+	}
+	return s.Create(ctx, input)
 }
 
 // Get returns a session by id.
@@ -254,4 +287,12 @@ func (s *Sessions) SetStatus(ctx context.Context, id string, status persistence.
 // Delete removes a session and the cascade of dependent rows.
 func (s *Sessions) Delete(ctx context.Context, id string) error {
 	return s.sessions.Delete(ctx, id)
+}
+
+func sourceOrDefault(source string) string {
+	source = strings.TrimSpace(source)
+	if source == "" {
+		return "web"
+	}
+	return source
 }

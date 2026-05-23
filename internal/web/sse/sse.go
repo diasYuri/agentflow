@@ -1,4 +1,4 @@
-package events
+package sse
 
 import (
 	"context"
@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"net/http"
 	"time"
+
+	"github.com/diasYuri/agentflow/internal/agentchannel/events"
 )
 
 // Stream writes Events from sub to w in the SSE wire format, until
 // the request context is cancelled or the subscription closes. A
 // periodic heartbeat keeps proxies from closing the connection.
-func Stream(ctx context.Context, w http.ResponseWriter, sub *Subscription, heartbeat time.Duration) error {
+func Stream(ctx context.Context, w http.ResponseWriter, sub *events.Subscription, heartbeat time.Duration) error {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		return fmt.Errorf("events: response writer does not support streaming")
@@ -50,7 +52,7 @@ func Stream(ctx context.Context, w http.ResponseWriter, sub *Subscription, heart
 	}
 }
 
-func writeEvent(w http.ResponseWriter, ev Event) error {
+func writeEvent(w http.ResponseWriter, ev events.Event) error {
 	payload, err := json.Marshal(ev)
 	if err != nil {
 		return fmt.Errorf("encode event: %w", err)
@@ -69,6 +71,6 @@ func writeEvent(w http.ResponseWriter, ev Event) error {
 
 // WriteEvent writes a single SSE frame for ev. The caller is
 // responsible for flushing the writer.
-func WriteEvent(w http.ResponseWriter, ev Event) error {
+func WriteEvent(w http.ResponseWriter, ev events.Event) error {
 	return writeEvent(w, ev)
 }

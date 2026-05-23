@@ -12,13 +12,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/diasYuri/agentflow/internal/agentchannel/chatagent"
+	"github.com/diasYuri/agentflow/internal/agentchannel/events"
+	"github.com/diasYuri/agentflow/internal/agentchannel/persistence"
+	"github.com/diasYuri/agentflow/internal/agentchannel/session"
 	"github.com/diasYuri/agentflow/internal/app"
 	"github.com/diasYuri/agentflow/internal/daemon"
 	"github.com/diasYuri/agentflow/internal/web/api"
-	"github.com/diasYuri/agentflow/internal/web/chatagent"
-	"github.com/diasYuri/agentflow/internal/web/events"
-	"github.com/diasYuri/agentflow/internal/web/persistence"
-	"github.com/diasYuri/agentflow/internal/web/session"
 	"github.com/diasYuri/agentflow/internal/web/settings"
 )
 

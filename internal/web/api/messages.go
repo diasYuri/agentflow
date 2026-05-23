@@ -5,9 +5,10 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/diasYuri/agentflow/internal/web/events"
-	"github.com/diasYuri/agentflow/internal/web/persistence"
-	"github.com/diasYuri/agentflow/internal/web/session"
+	"github.com/diasYuri/agentflow/internal/agentchannel"
+	"github.com/diasYuri/agentflow/internal/agentchannel/events"
+	"github.com/diasYuri/agentflow/internal/agentchannel/persistence"
+	"github.com/diasYuri/agentflow/internal/agentchannel/session"
 )
 
 // appendMessageRequest is the body shape for POST messages.
@@ -59,6 +60,21 @@ func (s *Service) handleAppendMessage(w http.ResponseWriter, r *http.Request, se
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if persistence.MessageRole(req.Role) == persistence.MessageRoleUser && s.Channel != nil {
+		result, err := s.Channel.SubmitUserMessage(r.Context(), agentchannel.UserMessageInput{
+			SessionID:     sessionID,
+			Content:       req.Content,
+			CorrelationID: req.CorrelationID,
+			Metadata:      req.Metadata,
+			Async:         true,
+		})
+		if err != nil {
+			writeAppendMessageError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, result.Message)
+		return
+	}
 	stored, err := s.Sessions.AppendMessage(r.Context(), sessionID, session.AppendInput{
 		Role:          persistence.MessageRole(req.Role),
 		Content:       req.Content,
@@ -66,20 +82,25 @@ func (s *Service) handleAppendMessage(w http.ResponseWriter, r *http.Request, se
 		Metadata:      req.Metadata,
 	})
 	if err != nil {
-		if errors.Is(err, persistence.ErrSessionNotFound) {
-			writeError(w, http.StatusNotFound, err.Error())
-			return
-		}
-		if errors.Is(err, session.ErrEmptyContent) {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
+		writeAppendMessageError(w, err)
+		return
+	}
+	if s.Channel != nil {
+		s.Channel.PublishMessage(stored)
+	} else {
+		s.Broker.Publish(sessionID, events.KindMessage, stored, stored.CorrelationID)
+	}
+	writeJSON(w, http.StatusCreated, stored)
+}
+
+func writeAppendMessageError(w http.ResponseWriter, err error) {
+	if errors.Is(err, persistence.ErrSessionNotFound) {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	if errors.Is(err, session.ErrEmptyContent) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	s.Broker.Publish(sessionID, events.KindMessage, stored, stored.CorrelationID)
-	writeJSON(w, http.StatusCreated, stored)
-	if stored.Role == persistence.MessageRoleUser {
-		s.scheduleChatAgent(sessionID, stored)
-	}
+	writeError(w, http.StatusBadRequest, err.Error())
 }

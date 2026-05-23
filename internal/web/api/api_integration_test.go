@@ -1,16 +1,16 @@
 package api_test
 
 import (
-	`bytes`
-	`context`
-	`encoding/json`
-	`net/http`
-	`net/http/httptest`
-	`testing`
-	`time`
+	"bytes"
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
 
-	`github.com/diasYuri/agentflow/internal/web/events`
-	`github.com/diasYuri/agentflow/internal/web/persistence`
+	"github.com/diasYuri/agentflow/internal/agentchannel/events"
+	"github.com/diasYuri/agentflow/internal/agentchannel/persistence"
 )
 
 func TestToolCallLifecycleEndpoints(t *testing.T) {

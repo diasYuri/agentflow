@@ -46,13 +46,20 @@ func (r *SessionRepository) Create(ctx context.Context, session Session) (Sessio
 	if session.Status == "" {
 		session.Status = SessionStatusOpen
 	}
+	if strings.TrimSpace(session.Source) == "" {
+		session.Source = "web"
+	}
 	metaJSON, err := encodeMetadata(session.Metadata)
 	if err != nil {
 		return Session{}, err
 	}
 	_, err = r.db.ExecContext(ctx, `
-INSERT INTO sessions (id, project_name, project_path, title, status, provider, model, created_at, updated_at, last_message_at, metadata)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+INSERT INTO sessions (
+    id, project_name, project_path, title, status, provider, model,
+    source, external_key, external_workspace_id, external_channel_id, external_thread_id, external_user_id,
+    created_at, updated_at, last_message_at, metadata
+)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		session.ID,
 		session.ProjectName,
 		session.ProjectPath,
@@ -60,6 +67,12 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		string(session.Status),
 		nullableString(session.Provider),
 		nullableString(session.Model),
+		session.Source,
+		nullableString(session.ExternalKey),
+		nullableString(session.ExternalWorkspaceID),
+		nullableString(session.ExternalChannelID),
+		nullableString(session.ExternalThreadID),
+		nullableString(session.ExternalUserID),
 		session.CreatedAt.Format(time.RFC3339Nano),
 		session.UpdatedAt.Format(time.RFC3339Nano),
 		nullableTime(session.LastMessageAt),
@@ -74,8 +87,19 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 // Get returns the session with id.
 func (r *SessionRepository) Get(ctx context.Context, id string) (Session, error) {
 	row := r.db.QueryRowContext(ctx, `
-SELECT id, project_name, project_path, title, status, provider, model, created_at, updated_at, last_message_at, metadata
+SELECT `+sessionColumns+`
 FROM sessions WHERE id = ?`, id)
+	return scanSession(row)
+}
+
+// GetByExternalKey returns the session associated with a channel adapter key.
+func (r *SessionRepository) GetByExternalKey(ctx context.Context, externalKey string) (Session, error) {
+	if strings.TrimSpace(externalKey) == "" {
+		return Session{}, ErrSessionNotFound
+	}
+	row := r.db.QueryRowContext(ctx, `
+SELECT `+sessionColumns+`
+FROM sessions WHERE external_key = ?`, externalKey)
 	return scanSession(row)
 }
 
@@ -89,12 +113,12 @@ func (r *SessionRepository) ListByProject(ctx context.Context, projectName strin
 	)
 	if strings.TrimSpace(projectName) == "" {
 		rows, err = r.db.QueryContext(ctx, `
-SELECT id, project_name, project_path, title, status, provider, model, created_at, updated_at, last_message_at, metadata
+SELECT `+sessionColumns+`
 FROM sessions
 ORDER BY COALESCE(last_message_at, updated_at) DESC, created_at DESC`)
 	} else {
 		rows, err = r.db.QueryContext(ctx, `
-SELECT id, project_name, project_path, title, status, provider, model, created_at, updated_at, last_message_at, metadata
+SELECT `+sessionColumns+`
 FROM sessions WHERE project_name = ?
 ORDER BY COALESCE(last_message_at, updated_at) DESC, created_at DESC`, projectName)
 	}
@@ -152,9 +176,11 @@ func (r *SessionRepository) Delete(ctx context.Context, id string) error {
 
 func scanSession(scanner rowScanner) (Session, error) {
 	var (
-		session                                         Session
-		title, provider, model, lastMessageAt, metaStr sql.NullString
-		createdAt, updatedAt                            string
+		session Session
+		title, provider, model, source, externalKey,
+		externalWorkspaceID, externalChannelID, externalThreadID, externalUserID,
+		lastMessageAt, metaStr sql.NullString
+		createdAt, updatedAt string
 	)
 	if err := scanner.Scan(
 		&session.ID,
@@ -164,6 +190,12 @@ func scanSession(scanner rowScanner) (Session, error) {
 		&session.Status,
 		&provider,
 		&model,
+		&source,
+		&externalKey,
+		&externalWorkspaceID,
+		&externalChannelID,
+		&externalThreadID,
+		&externalUserID,
 		&createdAt,
 		&updatedAt,
 		&lastMessageAt,
@@ -182,6 +214,27 @@ func scanSession(scanner rowScanner) (Session, error) {
 	}
 	if model.Valid {
 		session.Model = model.String
+	}
+	if source.Valid {
+		session.Source = source.String
+	}
+	if session.Source == "" {
+		session.Source = "web"
+	}
+	if externalKey.Valid {
+		session.ExternalKey = externalKey.String
+	}
+	if externalWorkspaceID.Valid {
+		session.ExternalWorkspaceID = externalWorkspaceID.String
+	}
+	if externalChannelID.Valid {
+		session.ExternalChannelID = externalChannelID.String
+	}
+	if externalThreadID.Valid {
+		session.ExternalThreadID = externalThreadID.String
+	}
+	if externalUserID.Valid {
+		session.ExternalUserID = externalUserID.String
 	}
 	t, err := time.Parse(time.RFC3339Nano, createdAt)
 	if err != nil {
@@ -213,6 +266,11 @@ func scanSession(scanner rowScanner) (Session, error) {
 type rowScanner interface {
 	Scan(dest ...any) error
 }
+
+const sessionColumns = `
+id, project_name, project_path, title, status, provider, model,
+source, external_key, external_workspace_id, external_channel_id, external_thread_id, external_user_id,
+created_at, updated_at, last_message_at, metadata`
 
 func encodeMetadata(meta map[string]any) (any, error) {
 	if len(meta) == 0 {

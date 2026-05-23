@@ -4,6 +4,11 @@
 
 `agentflow web` starts a local-first HTTP server that hosts the conversation studio. The web UI provides a project rail, session rail, workflow execution dashboard, conversation timeline with streaming updates, tool-call and approval cards, workflow YAML/graph editors, diagnostics panels, and settings -- all backed by the local API and SSE stream.
 
+The web server is a delivery adapter over the shared `internal/agentchannel`
+core. HTTP, auth, assets, browser diagnostics, and SSE stay in `internal/web`;
+conversation orchestration, assistant execution, tool calls, and workflow
+control live in the channel-neutral layer described in `docs/channels.md`.
+
 ## Quick start
 
 ```bash

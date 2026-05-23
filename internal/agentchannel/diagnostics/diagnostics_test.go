@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/diasYuri/agentflow/internal/web/diagnostics"
-	"github.com/diasYuri/agentflow/internal/web/persistence"
+	"github.com/diasYuri/agentflow/internal/agentchannel/diagnostics"
+	"github.com/diasYuri/agentflow/internal/agentchannel/persistence"
 )
 
 func TestDefaultPolicyMasksSecrets(t *testing.T) {

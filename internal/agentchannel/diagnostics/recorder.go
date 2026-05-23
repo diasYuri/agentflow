@@ -9,7 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/diasYuri/agentflow/internal/web/persistence"
+	"github.com/diasYuri/agentflow/internal/agentchannel/persistence"
 )
 
 // Recorder writes diagnostics through the redaction policy before

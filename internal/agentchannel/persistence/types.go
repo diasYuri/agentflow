@@ -62,17 +62,23 @@ const (
 // captures the project root at session creation time so the chat
 // history stays valid even if the registry entry is renamed later.
 type Session struct {
-	ID            string         `json:"id"`
-	ProjectName   string         `json:"project_name"`
-	ProjectPath   string         `json:"project_path"`
-	Title         string         `json:"title,omitempty"`
-	Status        SessionStatus  `json:"status"`
-	Provider      string         `json:"provider,omitempty"`
-	Model         string         `json:"model,omitempty"`
-	CreatedAt     time.Time      `json:"created_at"`
-	UpdatedAt     time.Time      `json:"updated_at"`
-	LastMessageAt time.Time      `json:"last_message_at,omitempty"`
-	Metadata      map[string]any `json:"metadata,omitempty"`
+	ID                  string         `json:"id"`
+	ProjectName         string         `json:"project_name"`
+	ProjectPath         string         `json:"project_path"`
+	Title               string         `json:"title,omitempty"`
+	Status              SessionStatus  `json:"status"`
+	Provider            string         `json:"provider,omitempty"`
+	Model               string         `json:"model,omitempty"`
+	Source              string         `json:"source,omitempty"`
+	ExternalKey         string         `json:"external_key,omitempty"`
+	ExternalWorkspaceID string         `json:"external_workspace_id,omitempty"`
+	ExternalChannelID   string         `json:"external_channel_id,omitempty"`
+	ExternalThreadID    string         `json:"external_thread_id,omitempty"`
+	ExternalUserID      string         `json:"external_user_id,omitempty"`
+	CreatedAt           time.Time      `json:"created_at"`
+	UpdatedAt           time.Time      `json:"updated_at"`
+	LastMessageAt       time.Time      `json:"last_message_at,omitempty"`
+	Metadata            map[string]any `json:"metadata,omitempty"`
 }
 
 // Message is an immutable history row. PayloadRef points at the

@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/diasYuri/agentflow/internal/agentchannel/persistence"
+	"github.com/diasYuri/agentflow/internal/agentchannel/session"
 	"github.com/diasYuri/agentflow/internal/app"
-	"github.com/diasYuri/agentflow/internal/web/persistence"
-	"github.com/diasYuri/agentflow/internal/web/session"
 )
 
 type stubProjects struct {
@@ -73,6 +73,35 @@ func TestCreateSessionSnapshotsProjectRoot(t *testing.T) {
 	}
 	if got.ProjectPath != "/projects/demo" {
 		t.Fatalf("snapshot drifted: %q", got.ProjectPath)
+	}
+}
+
+func TestResolveOrCreateByExternalKeyReusesChannelSession(t *testing.T) {
+	projects := newStubProjects(app.Project{Name: "demo", Path: "/projects/demo"})
+	svc := openSessions(t, projects)
+	input := session.CreateInput{
+		ProjectName:         "demo",
+		Title:               "slack thread",
+		Source:              "slack",
+		ExternalKey:         "slack:T1:C1:1700000000.000100",
+		ExternalWorkspaceID: "T1",
+		ExternalChannelID:   "C1",
+		ExternalThreadID:    "1700000000.000100",
+		ExternalUserID:      "U1",
+	}
+	first, err := svc.ResolveOrCreateByExternalKey(context.Background(), input)
+	if err != nil {
+		t.Fatalf("first resolve: %v", err)
+	}
+	second, err := svc.ResolveOrCreateByExternalKey(context.Background(), input)
+	if err != nil {
+		t.Fatalf("second resolve: %v", err)
+	}
+	if second.ID != first.ID {
+		t.Fatalf("expected session reuse, first=%s second=%s", first.ID, second.ID)
+	}
+	if second.Source != "slack" || second.ExternalWorkspaceID != "T1" || second.ExternalChannelID != "C1" {
+		t.Fatalf("external identity was not persisted: %+v", second)
 	}
 }
 

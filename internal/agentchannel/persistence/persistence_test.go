@@ -2,13 +2,14 @@ package persistence_test
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/diasYuri/agentflow/internal/web/persistence"
+	"github.com/diasYuri/agentflow/internal/agentchannel/persistence"
 )
 
 func openTestDB(t *testing.T) *persistence.DB {
@@ -24,6 +25,60 @@ func openTestDB(t *testing.T) *persistence.DB {
 		}
 	})
 	return db
+}
+
+func TestOpenUpgradesPreChannelSessionSchema(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "web.sqlite")
+	legacy, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("open legacy db: %v", err)
+	}
+	_, err = legacy.ExecContext(ctx, `
+CREATE TABLE sessions (
+    id TEXT PRIMARY KEY,
+    project_name TEXT NOT NULL,
+    project_path TEXT NOT NULL,
+    title TEXT,
+    status TEXT NOT NULL DEFAULT 'open',
+    provider TEXT,
+    model TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    last_message_at TEXT,
+    metadata TEXT
+)`)
+	if err != nil {
+		t.Fatalf("create legacy schema: %v", err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatalf("close legacy db: %v", err)
+	}
+
+	db, err := persistence.Open(ctx, path)
+	if err != nil {
+		t.Fatalf("open upgraded db: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	repo := persistence.NewSessionRepository(db)
+	created, err := repo.Create(ctx, persistence.Session{
+		ID:          "slack-session",
+		ProjectName: "demo",
+		ProjectPath: "/p",
+		Source:      "slack",
+		ExternalKey: "slack:T1:C1:thread",
+	})
+	if err != nil {
+		t.Fatalf("create upgraded session: %v", err)
+	}
+	got, err := repo.GetByExternalKey(ctx, created.ExternalKey)
+	if err != nil {
+		t.Fatalf("get by external key: %v", err)
+	}
+	if got.ID != created.ID || got.Source != "slack" {
+		t.Fatalf("unexpected upgraded session: %+v", got)
+	}
 }
 
 func TestSessionLifecycle(t *testing.T) {
@@ -188,10 +243,10 @@ func TestDiagnosticsAndFrontendEvents(t *testing.T) {
 	evRepo := persistence.NewFrontendEventRepository(db)
 	ctx := context.Background()
 	if _, err := diagRepo.Insert(ctx, persistence.Diagnostic{
-		Level:   persistence.DiagnosticLevelError,
-		Source:  "server",
-		Message: "boom",
-		Context: map[string]any{"k": "v"},
+		Level:     persistence.DiagnosticLevelError,
+		Source:    "server",
+		Message:   "boom",
+		Context:   map[string]any{"k": "v"},
 		CreatedAt: time.Now().Add(-1 * time.Hour),
 	}); err != nil {
 		t.Fatalf("insert diag: %v", err)

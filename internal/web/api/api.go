@@ -14,14 +14,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/diasYuri/agentflow/internal/agentchannel"
+	"github.com/diasYuri/agentflow/internal/agentchannel/diagnostics"
+	"github.com/diasYuri/agentflow/internal/agentchannel/events"
+	"github.com/diasYuri/agentflow/internal/agentchannel/persistence"
+	"github.com/diasYuri/agentflow/internal/agentchannel/session"
 	"github.com/diasYuri/agentflow/internal/app"
 	"github.com/diasYuri/agentflow/internal/core/workflow"
 	"github.com/diasYuri/agentflow/internal/daemon"
-	"github.com/diasYuri/agentflow/internal/web/chatagent"
-	"github.com/diasYuri/agentflow/internal/web/diagnostics"
-	"github.com/diasYuri/agentflow/internal/web/events"
-	"github.com/diasYuri/agentflow/internal/web/persistence"
-	"github.com/diasYuri/agentflow/internal/web/session"
 )
 
 // Service exposes session, message, tool-call, approval, diagnostic,
@@ -37,7 +37,8 @@ type Service struct {
 	logger                *slog.Logger
 	DB                    *persistence.DB
 	Bundler               *diagnostics.BundleExporter
-	ChatAgent             ChatAgent
+	Channel               *agentchannel.Service
+	ChatAgent             agentchannel.ChatAgent
 	ChatAgentTimeout      time.Duration
 	ChatAgentHistoryLimit int
 }
@@ -52,15 +53,9 @@ type Options struct {
 	WorkflowDefinitions   WorkflowDefinitionClient
 	WorkflowRuns          WorkflowRunClient
 	Logger                *slog.Logger
-	ChatAgent             ChatAgent
+	ChatAgent             agentchannel.ChatAgent
 	ChatAgentTimeout      time.Duration
 	ChatAgentHistoryLimit int
-}
-
-// ChatAgent is the narrow interface the API uses to schedule assistant
-// responses.  Nil means chat is not configured.
-type ChatAgent interface {
-	Run(ctx context.Context, req chatagent.RunRequest) (chatagent.RunResponse, error)
 }
 
 type projectAdder interface {
@@ -132,6 +127,20 @@ func NewService(opts Options) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
+	channelSvc, err := agentchannel.NewService(agentchannel.Options{
+		Sessions:              sessions,
+		Diagnostics:           rec,
+		Events:                opts.Broker,
+		WorkflowDefinitions:   opts.WorkflowDefinitions,
+		WorkflowRuns:          opts.WorkflowRuns,
+		ChatAgent:             opts.ChatAgent,
+		ChatAgentTimeout:      opts.ChatAgentTimeout,
+		ChatAgentHistoryLimit: opts.ChatAgentHistoryLimit,
+		Logger:                opts.Logger,
+	})
+	if err != nil {
+		return nil, err
+	}
 	bundler := diagnostics.NewBundleExporter(diagnostics.BundleSources{
 		Sessions:    persistence.NewSessionRepository(opts.DB),
 		Messages:    persistence.NewMessageRepository(opts.DB),
@@ -152,6 +161,7 @@ func NewService(opts Options) (*Service, error) {
 		logger:                opts.Logger,
 		DB:                    opts.DB,
 		Bundler:               bundler,
+		Channel:               channelSvc,
 		ChatAgent:             opts.ChatAgent,
 		ChatAgentTimeout:      opts.ChatAgentTimeout,
 		ChatAgentHistoryLimit: opts.ChatAgentHistoryLimit,

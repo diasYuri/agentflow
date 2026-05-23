@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/diasYuri/agentflow/internal/web/events"
-	"github.com/diasYuri/agentflow/internal/web/persistence"
+	"github.com/diasYuri/agentflow/internal/agentchannel/events"
+	"github.com/diasYuri/agentflow/internal/agentchannel/persistence"
 )
 
 // toolCallRequest is the body shape for POST tool-calls.

@@ -11,13 +11,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/diasYuri/agentflow/internal/agentchannel/chatagent"
+	"github.com/diasYuri/agentflow/internal/agentchannel/events"
+	"github.com/diasYuri/agentflow/internal/agentchannel/persistence"
 	corerun "github.com/diasYuri/agentflow/internal/core/run"
 	"github.com/diasYuri/agentflow/internal/core/workflow"
 	"github.com/diasYuri/agentflow/internal/daemon"
 	"github.com/diasYuri/agentflow/internal/web/api"
-	"github.com/diasYuri/agentflow/internal/web/chatagent"
-	"github.com/diasYuri/agentflow/internal/web/events"
-	"github.com/diasYuri/agentflow/internal/web/persistence"
 )
 
 func TestProjectsListEndpoint(t *testing.T) {

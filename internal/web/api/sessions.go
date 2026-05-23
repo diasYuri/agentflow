@@ -6,9 +6,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/diasYuri/agentflow/internal/web/events"
-	"github.com/diasYuri/agentflow/internal/web/persistence"
-	"github.com/diasYuri/agentflow/internal/web/session"
+	"github.com/diasYuri/agentflow/internal/agentchannel/events"
+	"github.com/diasYuri/agentflow/internal/agentchannel/persistence"
+	"github.com/diasYuri/agentflow/internal/agentchannel/session"
 )
 
 // createSessionRequest is the body shape for POSTing a new session.

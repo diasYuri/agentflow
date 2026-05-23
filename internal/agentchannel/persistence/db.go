@@ -65,5 +65,60 @@ func (db *DB) migrate(ctx context.Context) error {
 	if _, err := db.sql.ExecContext(ctx, schemaSQL); err != nil {
 		return fmt.Errorf("apply schema: %w", err)
 	}
+	if err := db.applySchemaUpgrades(ctx); err != nil {
+		return err
+	}
 	return nil
+}
+
+func (db *DB) applySchemaUpgrades(ctx context.Context) error {
+	columns := map[string]string{
+		"source":                "TEXT NOT NULL DEFAULT 'web'",
+		"external_key":          "TEXT",
+		"external_workspace_id": "TEXT",
+		"external_channel_id":   "TEXT",
+		"external_thread_id":    "TEXT",
+		"external_user_id":      "TEXT",
+	}
+	for name, spec := range columns {
+		exists, err := db.columnExists(ctx, "sessions", name)
+		if err != nil {
+			return err
+		}
+		if exists {
+			continue
+		}
+		if _, err := db.sql.ExecContext(ctx, fmt.Sprintf("ALTER TABLE sessions ADD COLUMN %s %s", name, spec)); err != nil {
+			return fmt.Errorf("add sessions.%s: %w", name, err)
+		}
+	}
+	if _, err := db.sql.ExecContext(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_external_key ON sessions(external_key) WHERE external_key IS NOT NULL`); err != nil {
+		return fmt.Errorf("create sessions external key index: %w", err)
+	}
+	return nil
+}
+
+func (db *DB) columnExists(ctx context.Context, table, column string) (bool, error) {
+	rows, err := db.sql.QueryContext(ctx, "PRAGMA table_info("+table+")")
+	if err != nil {
+		return false, fmt.Errorf("inspect %s schema: %w", table, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			cid        int
+			name       string
+			columnType string
+			notNull    int
+			defaultVal any
+			pk         int
+		)
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultVal, &pk); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }

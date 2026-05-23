@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/diasYuri/agentflow/internal/web/diagnostics"
-	"github.com/diasYuri/agentflow/internal/web/persistence"
+	"github.com/diasYuri/agentflow/internal/agentchannel/diagnostics"
+	"github.com/diasYuri/agentflow/internal/agentchannel/persistence"
 )
 
 // handleDebugBundle streams a zip archive containing redacted

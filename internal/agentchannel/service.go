@@ -1,17 +1,22 @@
-package api
+// Package agentchannel coordinates channel-neutral conversations with the
+// AgentFlow assistant. Delivery adapters such as web or Slack translate their
+// transport-specific requests into this package and keep channel details out of
+// the core flow.
+package agentchannel
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
-	"github.com/diasYuri/agentflow/internal/web/chatagent"
-	"github.com/diasYuri/agentflow/internal/web/diagnostics"
-	"github.com/diasYuri/agentflow/internal/web/events"
-	"github.com/diasYuri/agentflow/internal/web/persistence"
-	"github.com/diasYuri/agentflow/internal/web/session"
+	"github.com/diasYuri/agentflow/internal/agentchannel/chatagent"
+	"github.com/diasYuri/agentflow/internal/agentchannel/diagnostics"
+	"github.com/diasYuri/agentflow/internal/agentchannel/events"
+	"github.com/diasYuri/agentflow/internal/agentchannel/persistence"
+	"github.com/diasYuri/agentflow/internal/agentchannel/session"
 )
 
 const (
@@ -19,16 +24,171 @@ const (
 	defaultChatAgentHistoryLen = 40
 )
 
-func (s *Service) scheduleChatAgent(sessionID string, userMessage persistence.Message) {
+// ChatAgent is the narrow interface the channel service uses to produce
+// assistant responses. Nil means chat is not configured.
+type ChatAgent interface {
+	Run(ctx context.Context, req chatagent.RunRequest) (chatagent.RunResponse, error)
+}
+
+// EventSink receives channel-neutral conversation events. Web adapts this to
+// SSE; other channels can map the same events to their own delivery mechanism.
+type EventSink interface {
+	Publish(sessionID string, kind events.Kind, payload any, correlationID string) events.Event
+}
+
+// Options bundles dependencies for Service.
+type Options struct {
+	Sessions              *session.Sessions
+	Diagnostics           *diagnostics.Recorder
+	Events                EventSink
+	WorkflowDefinitions   chatagent.WorkflowDefinitionClient
+	WorkflowRuns          chatagent.WorkflowRunClient
+	ChatAgent             ChatAgent
+	ChatAgentTimeout      time.Duration
+	ChatAgentHistoryLimit int
+	Logger                *slog.Logger
+}
+
+// Service owns the channel-neutral message-to-agent orchestration.
+type Service struct {
+	Sessions              *session.Sessions
+	Diagnostics           *diagnostics.Recorder
+	Events                EventSink
+	WorkflowDefinitions   chatagent.WorkflowDefinitionClient
+	WorkflowRuns          chatagent.WorkflowRunClient
+	ChatAgent             ChatAgent
+	ChatAgentTimeout      time.Duration
+	ChatAgentHistoryLimit int
+	logger                *slog.Logger
+}
+
+// ConversationInput identifies a channel-neutral conversation. Channel
+// adapters own the meaning of the external fields and pass only opaque values
+// into this layer.
+type ConversationInput struct {
+	ProjectName         string
+	Title               string
+	Provider            string
+	Model               string
+	Source              string
+	ExternalKey         string
+	ExternalWorkspaceID string
+	ExternalChannelID   string
+	ExternalThreadID    string
+	ExternalUserID      string
+	Metadata            map[string]any
+}
+
+// UserMessageInput is the command adapters use to send a user turn into the
+// shared agent channel.
+type UserMessageInput struct {
+	SessionID     string
+	Conversation  ConversationInput
+	Content       string
+	CorrelationID string
+	Metadata      map[string]any
+	Async         bool
+}
+
+// UserMessageResult is the durable result of accepting a user message.
+type UserMessageResult struct {
+	Session persistence.Session
+	Message persistence.Message
+}
+
+// NewService wires a channel-neutral service.
+func NewService(opts Options) (*Service, error) {
+	if opts.Sessions == nil {
+		return nil, errors.New("agentchannel: Sessions is required")
+	}
+	if opts.Logger == nil {
+		opts.Logger = slog.Default()
+	}
+	return &Service{
+		Sessions:              opts.Sessions,
+		Diagnostics:           opts.Diagnostics,
+		Events:                opts.Events,
+		WorkflowDefinitions:   opts.WorkflowDefinitions,
+		WorkflowRuns:          opts.WorkflowRuns,
+		ChatAgent:             opts.ChatAgent,
+		ChatAgentTimeout:      opts.ChatAgentTimeout,
+		ChatAgentHistoryLimit: opts.ChatAgentHistoryLimit,
+		logger:                opts.Logger,
+	}, nil
+}
+
+// ResolveConversation returns an existing external conversation or creates a
+// new session for it. Web callers may skip this and use explicit session IDs.
+func (s *Service) ResolveConversation(ctx context.Context, input ConversationInput) (persistence.Session, error) {
+	return s.Sessions.ResolveOrCreateByExternalKey(ctx, session.CreateInput{
+		ProjectName:         input.ProjectName,
+		Title:               input.Title,
+		Provider:            input.Provider,
+		Model:               input.Model,
+		Source:              input.Source,
+		ExternalKey:         input.ExternalKey,
+		ExternalWorkspaceID: input.ExternalWorkspaceID,
+		ExternalChannelID:   input.ExternalChannelID,
+		ExternalThreadID:    input.ExternalThreadID,
+		ExternalUserID:      input.ExternalUserID,
+		Metadata:            input.Metadata,
+	})
+}
+
+// SubmitUserMessage persists a user message, publishes it, and optionally
+// starts assistant processing. It is the preferred entrypoint for non-web
+// adapters such as Slack.
+func (s *Service) SubmitUserMessage(ctx context.Context, input UserMessageInput) (UserMessageResult, error) {
+	var (
+		sess persistence.Session
+		err  error
+	)
+	if input.SessionID != "" {
+		sess, err = s.Sessions.Get(ctx, input.SessionID)
+	} else {
+		sess, err = s.ResolveConversation(ctx, input.Conversation)
+	}
+	if err != nil {
+		return UserMessageResult{}, err
+	}
+	stored, err := s.Sessions.AppendMessage(ctx, sess.ID, session.AppendInput{
+		Role:          persistence.MessageRoleUser,
+		Content:       input.Content,
+		CorrelationID: input.CorrelationID,
+		Metadata:      input.Metadata,
+	})
+	if err != nil {
+		return UserMessageResult{}, err
+	}
+	s.PublishMessage(stored)
+	if input.Async {
+		s.ScheduleUserMessage(sess.ID, stored)
+	} else {
+		s.HandleUserMessage(ctx, sess.ID, stored)
+	}
+	return UserMessageResult{Session: sess, Message: stored}, nil
+}
+
+// PublishMessage emits a persisted message to interested channel adapters.
+func (s *Service) PublishMessage(message persistence.Message) {
+	if s != nil && s.Events != nil {
+		s.Events.Publish(message.SessionID, events.KindMessage, message, message.CorrelationID)
+	}
+}
+
+// ScheduleUserMessage starts assistant processing for a user message in the
+// background. Non-user messages and unconfigured agents are ignored.
+func (s *Service) ScheduleUserMessage(sessionID string, userMessage persistence.Message) {
 	if s == nil || s.ChatAgent == nil || userMessage.Role != persistence.MessageRoleUser {
 		return
 	}
-	go s.runChatAgent(sessionID, userMessage)
+	go s.HandleUserMessage(context.Background(), sessionID, userMessage)
 }
 
-func (s *Service) runChatAgent(sessionID string, userMessage persistence.Message) {
+// HandleUserMessage runs the assistant for a persisted user message.
+func (s *Service) HandleUserMessage(ctx context.Context, sessionID string, userMessage persistence.Message) {
 	timeout := s.chatAgentTimeout()
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	sess, err := s.Sessions.Get(ctx, sessionID)
@@ -38,7 +198,7 @@ func (s *Service) runChatAgent(sessionID string, userMessage persistence.Message
 		return
 	}
 
-	recorder := newSessionToolCallRecorder(s.Sessions, s.Broker, sessionID, userMessage.ID)
+	recorder := newSessionToolCallRecorder(s.Sessions, s.Events, sessionID, userMessage.ID)
 	mainCallID, err := recorder.Start(ctx, "agentflow.chat", map[string]any{
 		"session_id": sessionID,
 		"message_id": userMessage.ID,
@@ -113,7 +273,7 @@ func (s *Service) runChatAgent(sessionID string, userMessage persistence.Message
 		return
 	}
 	s.logChatAgentComplete(sessionID, userMessage.ID, assistant.ID, resp.Metadata)
-	s.Broker.Publish(sessionID, events.KindMessage, assistant, assistant.CorrelationID)
+	s.PublishMessage(assistant)
 }
 
 func (s *Service) resolveMessageText(ctx context.Context, msg persistence.Message) (string, error) {
@@ -246,17 +406,17 @@ func metadataString(metadata map[string]any, key string) string {
 
 type sessionToolCallRecorder struct {
 	sessions   *session.Sessions
-	broker     *events.Broker
+	events     EventSink
 	sessionID  string
 	messageID  string
 	mu         sync.Mutex
 	activeCall map[string]persistence.ToolCall
 }
 
-func newSessionToolCallRecorder(sessions *session.Sessions, broker *events.Broker, sessionID, messageID string) *sessionToolCallRecorder {
+func newSessionToolCallRecorder(sessions *session.Sessions, events EventSink, sessionID, messageID string) *sessionToolCallRecorder {
 	return &sessionToolCallRecorder{
 		sessions:   sessions,
-		broker:     broker,
+		events:     events,
 		sessionID:  sessionID,
 		messageID:  messageID,
 		activeCall: map[string]persistence.ToolCall{},
@@ -316,7 +476,7 @@ func (r *sessionToolCallRecorder) Finish(ctx context.Context, id string, status 
 }
 
 func (r *sessionToolCallRecorder) publish(call persistence.ToolCall) {
-	if r != nil && r.broker != nil {
-		r.broker.Publish(r.sessionID, events.KindToolCall, call, call.CorrelationID)
+	if r != nil && r.events != nil {
+		r.events.Publish(r.sessionID, events.KindToolCall, call, call.CorrelationID)
 	}
 }

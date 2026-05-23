@@ -6,8 +6,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/diasYuri/agentflow/internal/web/events"
-	"github.com/diasYuri/agentflow/internal/web/persistence"
+	"github.com/diasYuri/agentflow/internal/agentchannel/events"
+	"github.com/diasYuri/agentflow/internal/agentchannel/persistence"
+	"github.com/diasYuri/agentflow/internal/web/sse"
 )
 
 // handleSessionStream answers SSE requests for a single session and
@@ -38,7 +39,7 @@ func (s *Service) handleSessionStream(w http.ResponseWriter, r *http.Request, se
 			s.replayMessages(r, w, sessionID, seq)
 		}
 	}
-	if err := events.Stream(r.Context(), w, sub, 15*time.Second); err != nil {
+	if err := sse.Stream(r.Context(), w, sub, 15*time.Second); err != nil {
 		if errors.Is(err, http.ErrAbortHandler) {
 			panic(err)
 		}
@@ -53,7 +54,7 @@ func (s *Service) handleGlobalStream(w http.ResponseWriter, r *http.Request) {
 	}
 	sub := s.Broker.Subscribe("")
 	defer sub.Close()
-	if err := events.Stream(r.Context(), w, sub, 15*time.Second); err != nil {
+	if err := sse.Stream(r.Context(), w, sub, 15*time.Second); err != nil {
 		if errors.Is(err, http.ErrAbortHandler) {
 			panic(err)
 		}
@@ -78,7 +79,7 @@ func (s *Service) replayMessages(r *http.Request, w http.ResponseWriter, session
 			OccurredAt:    msg.CreatedAt,
 			Payload:       msg,
 		}
-		_ = events.WriteEvent(w, ev)
+		_ = sse.WriteEvent(w, ev)
 		flusher.Flush()
 	}
 }

@@ -4,8 +4,8 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/diasYuri/agentflow/internal/web/events"
-	"github.com/diasYuri/agentflow/internal/web/persistence"
+	"github.com/diasYuri/agentflow/internal/agentchannel/events"
+	"github.com/diasYuri/agentflow/internal/agentchannel/persistence"
 )
 
 // createApprovalRequest is the body shape for POST approvals.

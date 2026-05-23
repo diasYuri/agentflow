@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/diasYuri/agentflow/internal/web/persistence"
+	"github.com/diasYuri/agentflow/internal/agentchannel/persistence"
 )
 
 func (e *BundleExporter) writePayloads(ctx context.Context, zw *zip.Writer, messages []persistence.Message, maxBytes int64) error {

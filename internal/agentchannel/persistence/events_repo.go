@@ -83,9 +83,9 @@ FROM frontend_events WHERE session_id = ? ORDER BY created_at DESC`
 
 func scanFrontendEvent(scanner rowScanner) (FrontendEvent, error) {
 	var (
-		event                                            FrontendEvent
-		sessionID, content, payloadRef, corr, metaStr   sql.NullString
-		createdAt                                       string
+		event                                         FrontendEvent
+		sessionID, content, payloadRef, corr, metaStr sql.NullString
+		createdAt                                     string
 	)
 	if err := scanner.Scan(
 		&event.ID,

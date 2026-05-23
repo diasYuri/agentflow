@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/diasYuri/agentflow/internal/web/persistence"
+	"github.com/diasYuri/agentflow/internal/agentchannel/persistence"
 )
 
 // BundleOptions controls what a debug bundle includes.
